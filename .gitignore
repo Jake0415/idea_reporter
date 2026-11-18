@@ -1,0 +1,27 @@
+# Gradle / 빌드
+.gradle/
+build/
+**/build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.kotlin/
+
+# Android
+local.properties
+*.apk
+*.aab
+captures/
+
+# 비밀값
+.env
+*.keystore
+*.jks
+secrets.properties
+
+# OS
+.DS_Store
+Thumbs.db
