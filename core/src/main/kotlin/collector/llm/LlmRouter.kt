@@ -3,6 +3,13 @@ package collector.llm
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
+import kotlin.math.ceil
+
+internal fun estimateInputTokens(vararg texts: String): Int {
+    val ascii = texts.sumOf { text -> text.count { it.code < 128 } }
+    val nonAscii = texts.sumOf { it.codePointCount(0, it.length) } - ascii
+    return ceil(ascii / 4.0 + nonAscii / 1.5).toInt()
+}
 
 @Serializable
 data class StageModel(val provider: ProviderId, val model: String)
@@ -15,11 +22,13 @@ class LlmRouter(
     private val catalog: ModelCatalog = ModelCatalog.defaults,
     private val timeoutMillis: Long? = null,
     private val stageFallback: Map<String, Boolean> = emptyMap(),
-    private val stageTimeoutMillis: Map<String, Long> = emptyMap()
+    private val stageTimeoutMillis: Map<String, Long> = emptyMap(),
+    private val preflightBudget: Boolean = false
 ) {
     private val providers = providers.associateBy { it.id }
 
-    suspend fun complete(stage: String, request: LlmRequest, promptId: String, promptVersion: String): LlmResult {
+    suspend fun complete(stage: String, request: LlmRequest, promptId: String, promptVersion: String,
+                         promptVersions: Map<String, String> = emptyMap(), fallbackOnInvalidJson: Boolean = true): LlmResult {
         val defaultTier = when (stage) {
             "classify", "track" -> ModelTier.FAST
             "generate" -> ModelTier.STRONG
@@ -28,7 +37,7 @@ class LlmRouter(
         }
         val preferred = if (ProviderId.ANTHROPIC in providers) ProviderId.ANTHROPIC else ProviderId.OPENAI
         val primary = stageModels[stage] ?: checkNotNull(catalog.defaultModel(preferred, defaultTier))
-        val call = LlmCall(stage, primary.provider, primary.model, promptId, promptVersion)
+        val call = LlmCall(stage, primary.provider, primary.model, promptId, promptVersion, promptVersions = promptVersions)
         if (primary.provider !in providers) {
             costGuard.record(call.copy(error = "key_missing"))
             throw LlmKeyMissingException(primary.provider)
@@ -51,7 +60,8 @@ class LlmRouter(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            if (alternate == null) throw e
+            if (alternate == null || !fallbackOnInvalidJson && e is LlmServiceException &&
+                e.reason in setOf("invalid_json", "truncated")) throw e
             null
         }
         if (first != null && (!first.refused || alternate == null)) return first
@@ -65,7 +75,17 @@ class LlmRouter(
 
     private suspend fun attempt(request: LlmRequest, call: LlmCall): LlmResult {
         val timeout = stageTimeoutMillis[call.stage] ?: timeoutMillis ?: if (call.stage == "generate") 600_000 else 60_000
-        costGuard.checkBudget()
+        val projected = if (preflightBudget) {
+            val price = catalog.requirePrice(call.provider, call.model)
+            val input = estimateInputTokens(request.system, request.user, request.jsonSchema.toString()) + 1024
+            val long = price.longContext?.takeIf { input > it.thresholdInputTokens }
+            val inputRate = long?.input ?: price.inputUsd
+            val maxInputRate = if (call.provider == ProviderId.ANTHROPIC)
+                maxOf(inputRate, price.cacheWriteUsd ?: inputRate * 1.25) else inputRate
+            val outputRate = long?.output ?: price.outputUsd
+            (input * maxInputRate + request.maxOutputTokens * outputRate) / 1_000_000
+        } else 0.0
+        val reservation = costGuard.reserve(projected)
         val result = try {
             withTimeoutOrNull(timeout) {
                 providers.getValue(call.provider).complete(request.copy(model = call.model))
@@ -79,8 +99,7 @@ class LlmRouter(
             }
             val failure = e as? LlmServiceException
             val usage = failure?.usage
-            if (e !is LlmConfigException) {
-                costGuard.record(call.copy(
+            costGuard.record(call.copy(
                     model = failure?.model ?: call.model,
                     inputTokens = usage?.inputTokens ?: 0,
                     outputTokens = usage?.outputTokens ?: 0,
@@ -90,8 +109,7 @@ class LlmRouter(
                     error = error,
                     priceFallback = failure?.priceFallback ?: false,
                     priceUnverified = failure?.priceUnverified ?: false
-                ))
-            }
+                ), reservation, settled = usage != null || e is LlmAuthException || e is LlmConfigException)
             throw e
         }
         costGuard.record(call.copy(
@@ -104,7 +122,7 @@ class LlmRouter(
             error = if (result.refused) "refused" else null,
             priceFallback = result.priceFallback,
             priceUnverified = result.priceUnverified
-        ))
+        ), reservation)
         return result
     }
 }

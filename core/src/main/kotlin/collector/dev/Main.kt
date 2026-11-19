@@ -1,95 +1,253 @@
 package collector.dev
 
 import collector.config.ConfigLoader
-import collector.model.DroppedItem
+import collector.config.PipelineConfig
+import collector.llm.*
+import collector.model.DropReason
 import collector.model.Item
 import collector.model.RunReport
+import collector.pipeline.FullPipeline
 import collector.pipeline.Pipeline
+import collector.pipeline.PipelineResult
 import collector.profile.ProfileLoader
+import collector.prompt.FilePromptStore
+import collector.prompt.PromptResolver
+import collector.report.HtmlRenderer
 import collector.source.GitHubAdapter
 import collector.source.HackerNewsAdapter
 import collector.source.Http
+import collector.stage.IdeaGenerator
 import kotlinx.coroutines.runBlocking
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
+import kotlinx.serialization.encodeToString
 import java.io.File
 import java.io.FileDescriptor
 import java.io.FileOutputStream
 import java.io.PrintStream
+import java.nio.channels.FileChannel
+import java.nio.channels.OverlappingFileLockException
+import java.nio.file.StandardOpenOption
+import java.time.Instant
+import java.time.LocalDate
+import java.util.Locale
 import kotlin.system.exitProcess
 
-/**
- * PC 실행 진입점(1단계 확인용).
- *   gradlew :core:run                     실행하고 결과를 '이미 본 글'로 기록
- *   gradlew :core:run --args="--keep-unseen"   기록하지 않음(같은 결과를 반복 확인)
- * 사용자 설정: config/sources.local.json 이 있으면 기본값 대신 사용.
- * 결과: out/<날짜>.json, 이미 본 글: out/seen.json
- */
-fun main(args: Array<String>) = runBlocking {
+fun main(args: Array<String>) {
     System.setOut(PrintStream(FileOutputStream(FileDescriptor.out), true, "UTF-8"))
-    if ("--llm-smoke" in args) {
-        val secrets = DotEnv.secretProvider(DotEnv.load(File(".env")))
-        if (!llmSmoke(secrets)) exitProcess(1)
-        return@runBlocking
+    try {
+        runBlocking { runMain(args) }
+    } catch (e: Exception) {
+        println("실행 실패 · ${safeFailure(e)}")
+        when (e) {
+            is IllegalArgumentException -> println("사용법 · --keep-unseen --no-llm --budget <USD>")
+            is RunLockedException -> println("다른 실행이 진행 중입니다.")
+        }
+        exitProcess(1)
     }
-    val keepUnseen = "--keep-unseen" in args
-
-    val sources = ConfigLoader.load(File("config/sources.local.json"))
-    val profiles = ProfileLoader.loadDefaults()
-    ProfileLoader.validateRouting(sources, profiles).takeIf { it.isNotEmpty() }?.let {
-        println("출처 설정 오류:\n- " + it.joinToString("\n- "))
-        return@runBlocking
-    }
-    println("· 프로필: " + profiles.profiles.joinToString { "${it.config.name}(임계값 ${it.config.threshold})" })
-    val secrets = DotEnv.secretProvider(DotEnv.load(File(".env")))
-    val keyStatus = listOf("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GITHUB_TOKEN")
-        .joinToString { "$it ${if (secrets.get(it) != null) "있음" else "없음"}" }   // 값은 출력하지 않음
-    println("· 비밀값: $keyStatus")
-    val http = Http.client()
-    val seen = JsonFileSeenStore(File("out/seen.json"))
-    val pipeline = Pipeline(
-        adapters = listOf(HackerNewsAdapter(http), GitHubAdapter(http, secrets)),
-        seen = seen,
-        onStage = { println("· 단계: $it") }
-    )
-
-    val result = pipeline.run(sources)
-    printReport(result.report, result.items)
-
-    val outFile = File("out/${result.report.runDate}.json")
-    outFile.parentFile.mkdirs()
-    val json = Json { prettyPrint = true; encodeDefaults = true }
-    outFile.writeText(json.encodeToString(RunOutput.serializer(), RunOutput(result.report, result.items, result.dropped)), Charsets.UTF_8)
-    println("\n결과 저장: ${outFile.path}")
-
-    if (!keepUnseen) {
-        seen.markSeen(result.items)
-        println("이미 본 글로 기록: ${result.items.size}건 (out/seen.json)")
-    }
-    http.dispatcher.executorService.shutdown()
-    http.connectionPool.evictAll()
 }
 
-@Serializable
-private data class RunOutput(val report: RunReport, val items: List<Item>, val dropped: List<DroppedItem>)
+private suspend fun runMain(args: Array<String>) {
+    val secrets = DotEnv.secretProvider(DotEnv.load(File(".env")))
+    if (args.contentEquals(arrayOf("--llm-smoke"))) {
+        if (!llmSmoke(secrets)) exitProcess(1)
+        return
+    }
+    val defaults = PipelineConfig.defaults
+    var budget = defaults.dailyBudgetUsd
+    var keepUnseen = false
+    var noLlm = false
+    var index = 0
+    while (index < args.size) {
+        when (args[index++]) {
+            "--keep-unseen" -> keepUnseen = true
+            "--no-llm" -> noLlm = true
+            "--budget" -> budget = requireNotNull(args.getOrNull(index++)?.toDoubleOrNull())
+            else -> throw IllegalArgumentException("지원하지 않는 실행 옵션입니다.")
+        }
+    }
+    require(budget.isFinite() && budget >= 0.0)
+    val out = File("out").apply { mkdirs() }
+    withRunLock(out) {
+        val sources = ConfigLoader.load(File("config/sources.local.json"))
+        val profiles = ProfileLoader.loadDefaults()
+        val routingIssues = ProfileLoader.validateRouting(sources, profiles)
+        if (routingIssues.isNotEmpty()) {
+            println("출처 설정 오류:\n- " + routingIssues.joinToString("\n- "))
+            throw InvalidSourceRoutingException()
+        }
+        val prompts = PromptResolver(FilePromptStore(File("config/prompts").toPath()))
+        for (id in profiles.ids) {
+            prompts.resolve("profile.$id.match")
+            prompts.resolve("profile.$id.analysis")
+        }
+        val history = FileHistorySearch(out, defaults.historyDays)
+        val ledger = if (noLlm) null else FileCostLedger(out.resolve("cost-ledger")) { day ->
+            val prior = history.runs(day.plusDays(1), 1).firstOrNull()
+            history.archivedCost(day, day, reserved = true, skipStartedAt = prior?.report?.startedAt) +
+                (prior?.report?.llmCalls?.sumOf { maxOf(it.costUsd, it.reservedUsd) } ?: 0.0)
+        }
+        val costs = CostGuard(budget, ledger = ledger)
+        val http = Http.client()
+        val providers = mutableListOf<LlmProvider>()
+        try {
+            if (!noLlm) {
+                secrets.get("ANTHROPIC_API_KEY")?.let { providers += AnthropicProvider(it) }
+                secrets.get("OPENAI_API_KEY")?.let { providers += OpenAiProvider(it) }
+            }
+            val models = if (providers.any { it.id == ProviderId.ANTHROPIC } || providers.isEmpty()) {
+                mapOf("classify" to defaults.models.classify, "generate" to defaults.models.generate, "track" to defaults.models.classify)
+            } else emptyMap()
+            val router = LlmRouter(providers, costs, models, defaults.models.fallback, preflightBudget = true)
+            val tracked = JsonFileTrackedStore(out.resolve("tracked.json"))
+            val seen = JsonFileSeenStore(out.resolve("seen.json"))
+            val full = FullPipeline(defaults, profiles, prompts, router, costs, http, history, tracked, collectOnly = noLlm)
+            val startedAt = Instant.now()
+            val pipeline = Pipeline(listOf(HackerNewsAdapter(http), GitHubAdapter(http, secrets)), seen, clock = { startedAt },
+                onStage = { println("· 단계 \u00b7 ${HtmlRenderer.stageName(it)}") }, full = full)
+            val result = try {
+                pipeline.run(sources)
+            } catch (e: Exception) {
+                if (!noLlm) {
+                    val day = LocalDate.ofInstant(startedAt, java.time.ZoneId.systemDefault())
+                    val report = RunReport(day.toString(), startedAt.toString(), emptyList(), emptyList(),
+                        emptyMap(), java.time.Duration.between(startedAt, Instant.now()).toMillis(),
+                        llmCalls = costs.drainCalls(), issues = listOf(safeFailure(e)))
+                    val archived = archiveFailedRun(out, PipelineResult(emptyList(), emptyList(), report))
+                    println("실패 실행 보관 · out/runs/failed/${archived.name}")
+                    if (history.runs(day.plusDays(1), 1).firstOrNull()?.cards?.isNotEmpty() == true) {
+                        println("기존 카드 결과 유지 · out/$day.json")
+                    }
+                }
+                throw e
+            }
+            val day = LocalDate.parse(result.report.runDate)
+            if (noLlm) {
+                out.resolve("$day-collect.json").writeAtomically(outputJson.encodeToString(result))
+                if (!keepUnseen) seen.markSeen(result.items, day)
+                println("수집·정제 ${result.items.size}건 · out/$day-collect.json")
+                return@withRunLock
+            }
+            val renderer = HtmlRenderer(IdeaGenerator(defaults, prompts, router).categories)
+            val rendered = publishOrArchiveFailure(out, history, renderer, result, keepUnseen)
+            println("${rendered?.subject ?: "카드 0개"} · 추적 ${result.trackingUpdates.size}건 · " +
+                String.format(Locale.ROOT, "추정 USD %.6f", result.report.costUsd))
+            result.report.failedSources.forEach { println("출처 실패 · ${it.source} · ${it.error}") }
+            result.report.issues.forEach { println("· $it") }
+            if (rendered == null) println("기존 카드 결과 유지 · 새 실행은 out/runs/에 보관")
+            else println("결과 저장 · out/$day.json · out/$day.html · out/$day.txt")
+        } finally {
+            providers.filterIsInstance<AutoCloseable>().forEach { it.close() }
+            http.dispatcher.executorService.shutdown()
+            http.connectionPool.evictAll()
+        }
+    }
+}
 
-private fun printReport(report: RunReport, items: List<Item>) {
-    println("\n=== 실행 ${report.runDate} (${report.totalMillis}ms) ===")
-    println("출처별 수집:")
-    report.sources.forEach { s ->
-        val status = s.error?.let { "실패 — $it" } ?: "${s.fetched}건"
-        println("  ${s.source.padEnd(8)} $status (${s.millis}ms)")
+private class InvalidSourceRoutingException : RuntimeException()
+internal class RunLockedException : RuntimeException()
+
+private fun safeFailure(e: Exception): String {
+    val reason = when (e) {
+        is InvalidSourceRoutingException -> "invalid_source_routing"
+        is IllegalArgumentException -> "invalid_arguments_or_settings"
+        is RunLockedException -> "run_locked"
+        is java.io.IOException -> "io_error"
+        else -> "run_failed"
     }
-    val funnel = report.stages.joinToString(" → ") { "${it.stage} ${it.output}" }
-    println("깔때기: $funnel")
-    if (report.dropCounts.isNotEmpty()) {
-        println("탈락 이유: " + report.dropCounts.entries.joinToString(", ") { "${it.key} ${it.value}" })
+    return "${e.javaClass.simpleName} · $reason"
+}
+
+internal suspend fun <T> withRunLock(out: File, block: suspend () -> T): T =
+    FileChannel.open(out.resolve("run.lock").toPath(), StandardOpenOption.CREATE, StandardOpenOption.WRITE).use { channel ->
+        val lock = try {
+            channel.tryLock()
+        } catch (_: OverlappingFileLockException) {
+            null
+        } ?: throw RunLockedException()
+        lock.use { block() }
     }
-    println("\n상위 항목 (점수 · 출처 · 원점수 · 제목):")
-    items.take(30).forEachIndexed { i, it ->
-        val also = if (it.alsoSeenIn.isNotEmpty()) " [+${it.alsoSeenIn.joinToString(",")}]" else ""
-        println("%2d. %3d · %-6s · %5d · %s%s".format(i + 1, it.score, it.source, it.rawScore, it.title.take(80), also))
-        println("      ${it.url}")
+
+internal fun itemsToMarkSeen(result: PipelineResult): List<Item> {
+    val failedKeys = result.dropped.filter {
+        it.reason == DropReason.CLASSIFY_FAILED || it.reason == DropReason.BUDGET_EXCEEDED
+    }.mapTo(hashSetOf()) { it.item.key }
+    return result.items.filter { it.key !in result.trackingOnlyKeys && it.key !in failedKeys }
+}
+
+private fun archiveFile(out: File, report: RunReport): File =
+    out.resolve("runs/${report.runDate}-${report.startedAt.replace(':', '-')}.json")
+
+private fun archiveFailedRun(out: File, result: PipelineResult): File =
+    out.resolve("runs/failed").resolve(archiveFile(out, result.report).name).apply {
+        writeAtomically(outputJson.encodeToString(result))
     }
-    if (items.size > 30) println("  … 외 ${items.size - 30}건")
+
+internal fun publishOrArchiveFailure(
+    out: File, history: FileHistorySearch, renderer: HtmlRenderer, result: PipelineResult, keepUnseen: Boolean
+): HtmlRenderer.Rendered? = try {
+    publishRun(out, history, renderer, result, keepUnseen)
+} catch (e: Exception) {
+    val failed = result.copy(report = result.report.copy(issues = result.report.issues + safeFailure(e)))
+    try {
+        val archived = archiveFailedRun(out, failed)
+        println("결과 저장 실패 · out/runs/failed/${archived.name}")
+    } catch (archiveFailure: Exception) {
+        e.addSuppressed(archiveFailure)
+    }
+    throw e
+}
+
+internal fun publishRun(
+    out: File, history: FileHistorySearch, renderer: HtmlRenderer, result: PipelineResult, keepUnseen: Boolean = false
+): HtmlRenderer.Rendered? {
+    val day = LocalDate.parse(result.report.runDate)
+    val current = out.resolve("$day.json")
+    val prior = history.runs(day.plusDays(1), 1).firstOrNull()
+    val preserveCards = result.cards.isEmpty() && prior?.cards?.isNotEmpty() == true
+    val rendered = if (preserveCards) null else {
+        val archivedCost = history.archivedCost(day, day, skipStartedAt = prior?.report?.startedAt)
+        val todayCost = archivedCost + (prior?.report?.costUsd ?: 0.0) + result.report.costUsd
+        val monthCost = history.runs(day, day.dayOfMonth - 1).sumOf { it.report.costUsd } + todayCost +
+            history.archivedCost(day.withDayOfMonth(1), day.minusDays(1))
+        renderer.render(result, monthCost, todayCost)
+    }
+    val output = result.copy(metrics = emptyList(), trackClassified = emptyMap())
+    val files = buildMap {
+        if (rendered == null) {
+            put(archiveFile(out, result.report), outputJson.encodeToString(result.copy(trackClassified = emptyMap())))
+        } else {
+            if (current.isFile) put(archiveFile(out, prior?.report ?: result.report), current.readText())
+            put(out.resolve("$day.html"), rendered.html)
+            put(out.resolve("$day.txt"), rendered.text)
+            put(current, outputJson.encodeToString(output))
+        }
+        put(out.resolve("metrics.json"), history.metricsContent(result.metrics, Instant.parse(result.report.startedAt)))
+        put(out.resolve("tracked.json"), outputJson.encodeToString(result.tracked))
+        put(history.stateFile(day.toString()), outputJson.encodeToString(output.copy(
+            items = emptyList(), dropped = emptyList(), cards = emptyList()
+        )))
+        put(out.resolve("track-classified.json"), outputJson.encodeToString(result.trackClassified))
+        if (rendered != null && !keepUnseen) {
+            val seenFile = out.resolve("seen.json")
+            put(seenFile, JsonFileSeenStore(seenFile).markedContent(itemsToMarkSeen(result), day))
+        }
+    }
+    val replaced = mutableListOf<Pair<File, String?>>()
+    try {
+        for ((file, content) in files) {
+            val previous = if (file.isFile) file.readText() else null
+            file.writeAtomically(content)
+            replaced += file to previous
+        }
+    } catch (e: Exception) {
+        for ((file, previous) in replaced.asReversed()) {
+            try {
+                if (previous == null) java.nio.file.Files.delete(file.toPath())
+                else file.writeAtomically(previous)
+            } catch (restoreFailure: Exception) {
+                e.addSuppressed(restoreFailure)
+            }
+        }
+        throw e
+    }
+    return rendered
 }

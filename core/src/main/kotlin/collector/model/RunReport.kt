@@ -12,9 +12,13 @@ data class RunReport(
     val stages: List<StageResult>,
     val dropCounts: Map<DropReason, Int>,
     val totalMillis: Long,
-    val llmCalls: List<LlmCall> = emptyList()
+    val llmCalls: List<LlmCall> = emptyList(),
+    val cardCount: Int = 0,
+    val trackingUpdateCount: Int = 0,
+    val issues: List<String> = emptyList()
 ) {
-    val fetchedTotal: Int get() = sources.sumOf { it.fetched }
+    val costUsd: Double get() = llmCalls.sumOf { it.costUsd }
+    val fetchedTotal: Int get() = sources.sumOf { it.fetched + it.trackingFetched }
     val failedSources: List<SourceResult> get() = sources.filter { it.error != null }
 }
 
@@ -23,7 +27,8 @@ data class SourceResult(
     val source: String,
     val fetched: Int,
     val error: String? = null,   // 실패·시간 초과 이유. null이면 성공
-    val millis: Long
+    val millis: Long,
+    val trackingFetched: Int = 0
 )
 
 @Serializable

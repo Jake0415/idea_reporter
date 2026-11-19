@@ -1,5 +1,6 @@
 package collector.refine
 
+import collector.config.HnConfig
 import collector.config.SourceConfig
 import collector.model.DropReason
 import collector.model.DroppedItem
@@ -19,11 +20,14 @@ class RuleFilter(excludeKeywords: List<String>) {
         val dropped = mutableListOf<DroppedItem>()
         for (item in items) {
             val config = configs[item.source]
+            val override = (config as? HnConfig)?.overrideFor(item.extra["matchedQuery"])
+            val window = override?.window() ?: config?.window()
+            val minRawScore = override?.minRawScore ?: config?.minRawScore
             val reason = when {
-                config != null && item.publishedAt.isBefore(now.minus(config.window())) ->
+                window != null && item.publishedAt.isBefore(now.minus(window)) ->
                     DropReason.OUT_OF_WINDOW to "게시 ${item.publishedAt}"
-                config != null && item.rawScore < config.minRawScore ->
-                    DropReason.LOW_SOURCE_SCORE to "점수 ${item.rawScore} < ${config.minRawScore}"
+                minRawScore != null && item.rawScore < minRawScore ->
+                    DropReason.LOW_SOURCE_SCORE to "점수 ${item.rawScore} < $minRawScore"
                 else -> keywordPatterns.firstOrNull { (_, re) -> re.containsMatchIn(item.title) || re.containsMatchIn(item.snippet) }
                     ?.let { (word, _) -> DropReason.EXCLUDED_KEYWORD to "키워드: $word" }
             }

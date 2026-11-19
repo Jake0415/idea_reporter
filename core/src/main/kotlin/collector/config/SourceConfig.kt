@@ -32,10 +32,19 @@ data class HnConfig(
     override val minRawScore: Int = 20,
     override val maxItems: Int = 60,
     override val fetchPerQuery: Int = 50,
-    override val profile: List<String> = listOf("tech-signal", "demand-signal", "market-signal")
+    override val profile: List<String> = listOf("tech-signal", "demand-signal", "market-signal"),
+    val queryOverrides: List<HnQueryOverride> = listOf("Ask HN", "alternative to", "looking for a tool", "frustrated with")
+        .map { HnQueryOverride(it, 72, 5) }
 ) : SourceConfig() {
     override val sourceId: String get() = "hn"
     override fun window(): Duration = Duration.ofHours(windowHours.toLong())
+
+    fun overrideFor(query: String?): HnQueryOverride? = queryOverrides.firstOrNull { it.query == query }
+}
+
+@Serializable
+data class HnQueryOverride(val query: String, val windowHours: Int, val minRawScore: Int) {
+    fun window(): Duration = Duration.ofHours(windowHours.toLong())
 }
 
 @Serializable

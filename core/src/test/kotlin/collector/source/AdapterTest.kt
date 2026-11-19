@@ -45,8 +45,13 @@ class AdapterTest {
     fun `HN — 검색어가 여러 개면 겹치는 항목은 하나만`() = runTest {
         repeat(2) { server.enqueue(MockResponse().setBody(fixture("hn_search.json"))) }
         val items = HackerNewsAdapter(http, server.url("/").toString())
-            .fetch(HnConfig(queries = listOf("LLM", "AI agent"), maxItems = 10), NOW)
+            .fetch(HnConfig(queries = listOf("Ask HN", "LLM"), maxItems = 10), NOW)
         assertEquals(4, items.size)
+        assertTrue(items.all { it.extra["matchedQuery"] == "Ask HN" })
+        val demand = server.takeRequest().requestUrl!!
+        val regular = server.takeRequest().requestUrl!!
+        assertEquals("created_at_i>${NOW.epochSecond - 72 * 3600},points>=5", demand.queryParameter("numericFilters"))
+        assertEquals("created_at_i>${NOW.epochSecond - 24 * 3600},points>=20", regular.queryParameter("numericFilters"))
     }
 
     @Test

@@ -14,7 +14,7 @@ data class Item(
     val score: Int = 0,                          // Scorer가 출처 안 백분위로 0~100 통일
     @Serializable(with = InstantSerializer::class)
     val publishedAt: Instant,
-    val snippet: String = "",                    // 최대 300자, LLM 분류에는 이것만
+    val snippet: String = "",                    // 최대 300자, 수집한 본문 일부
     val author: String? = null,                  // 출처 줄 표시용
     val commentCount: Int = 0,
     val discussionUrl: String? = null,           // 토론 페이지가 따로 있는 출처만(HN·Reddit)
@@ -22,7 +22,8 @@ data class Item(
     val tags: List<String> = emptyList(),
     val alsoSeenIn: List<String> = emptyList(),  // 같은 URL·제목으로 다른 출처에도 등장
     val profileHint: List<String> = emptyList(), // 출처 설정의 명시 배정/후보 프로필
-    val comments: List<Comment> = emptyList(),   // ⑥ Enrich에서 최종 후보만 채움
+    val comments: List<Comment> = emptyList(),   // 수집한 댓글
+    val trackHint: List<String> = emptyList(),
     val mergedUrls: List<String> = emptyList()   // ⑤ 주제 합치기로 붙은 중복 항목 URL(근거 유지)
 ) {
     /** 출처 안에서 유일한 키 */

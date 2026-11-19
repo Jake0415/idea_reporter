@@ -1,0 +1,27 @@
+{
+  "models": {
+    "classify": { "provider": "ANTHROPIC", "model": "claude-haiku-5-5" },
+    "generate": { "provider": "ANTHROPIC", "model": "claude-opus-5-5" },
+    "fallback": true
+  },
+  "classifyBatchSize": 25,
+  "profiles": {
+    "tech-signal":   { "threshold": 6.0, "maxCandidates": 8 },
+    "demand-signal": { "threshold": 6.0, "maxCandidates": 8 },
+    "market-signal": { "threshold": 5.0, "maxCandidates": 4 }
+  },
+  "ideaCount": 5,
+  "maxCardsPerCategory": 2,
+  "maxCandidatesPerTag": 2,
+  "recentTopicDays": 14,
+  "recentCardDays": 7,
+  "badges": { "hnPointsPerHour": 10, "githubStarsPerDay": 100, "streakDays": 3, "streakMin": 2 },
+  "tracking": { "maxTracked": 10, "quietDays": 30, "queriesPerSource": 1, "minRawScoreFactor": 0.3,
+                "strengthWeights": { "demand-signal": 1.5, "market-signal": 1.0, "tech-signal": 1.0 },
+                "weeklyDeepDive": { "enabled": false, "maxUses": 3 } },
+  "commentsPerItem": 5,
+  "feedbackExamples": 10,
+  "historyDays": 90,
+  "supplementSearch": { "enabled": false, "maxUses": 3 },
+  "dailyBudgetUsd": 0.5
+}

@@ -3,7 +3,13 @@
     {
       "id": "hn",
       "enabled": true,
-      "queries": ["LLM", "AI agent", "Show HN AI", "GPT", "Claude", "open source model"],
+      "queries": ["LLM", "AI agent", "Show HN AI", "GPT", "Claude", "open source model", "Ask HN", "alternative to", "looking for a tool", "frustrated with"],
+      "queryOverrides": [
+        {"query": "Ask HN", "windowHours": 72, "minRawScore": 5},
+        {"query": "alternative to", "windowHours": 72, "minRawScore": 5},
+        {"query": "looking for a tool", "windowHours": 72, "minRawScore": 5},
+        {"query": "frustrated with", "windowHours": 72, "minRawScore": 5}
+      ],
       "windowHours": 24,
       "minRawScore": 20,
       "maxItems": 60,

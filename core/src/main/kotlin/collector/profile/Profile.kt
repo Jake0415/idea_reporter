@@ -28,12 +28,7 @@ enum class Sampling {
     @SerialName("head-middle-tail") HEAD_MIDDLE_TAIL  // 앞·중간·끝 발췌 (긴 글·토론)
 }
 
-/** 설정 + 프롬프트 조각(포함 기준, 평가표) */
-data class Profile(
-    val config: ProfileConfig,
-    val match: String,                // match.md
-    val analysis: String              // analysis.md
-) {
+data class Profile(val config: ProfileConfig) {
     val id: String get() = config.id
 }
 

@@ -59,6 +59,21 @@ class PipelineTest {
     }
 
     @Test
+    fun `이전에 본 대표가 새 글을 중복으로 탈락시키지 않는다`() = runTest {
+        val hn = FakeAdapter("hn") {
+            listOf(
+                item(id = "1", title = "New local inference runtime", rawScore = 300),
+                item(id = "2", title = "New local inference runtime", rawScore = 100)
+            )
+        }
+        val result = Pipeline(listOf(hn), MemorySeen(setOf("hn:1")), clock = { NOW }, zone = ZoneOffset.UTC)
+            .run(SourcesFile(listOf(HnConfig())))
+
+        assertEquals(listOf("hn:2"), result.items.map { it.key })
+        assertEquals(listOf(DropReason.ALREADY_SEEN), result.dropped.map { it.reason })
+    }
+
+    @Test
     fun `출처 하나가 실패하거나 느려도 나머지는 계속한다`() = runTest {
         val broken = FakeAdapter("hn") { error("boom") }
         val slow = FakeAdapter("github") { delay(10_000); emptyList() }

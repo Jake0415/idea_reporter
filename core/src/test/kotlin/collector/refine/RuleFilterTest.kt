@@ -8,6 +8,18 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 class RuleFilterTest {
+    @Test fun appliesMatchedQueryThresholds() {
+        val older = item(id = "older", rawScore = 5, publishedAt = NOW.minusSeconds(48 * 3600))
+        val items = listOf(
+            older.copy(extra = mapOf("matchedQuery" to "Ask HN")),
+            older.copy(externalId = "regular", extra = mapOf("matchedQuery" to "LLM")),
+            item(id = "low-demand", rawScore = 4).copy(extra = mapOf("matchedQuery" to "Ask HN"))
+        )
+        val result = RuleFilter(emptyList()).filter(items, configs, NOW)
+        assertEquals(listOf("older"), result.kept.map { it.externalId })
+        assertEquals(listOf(DropReason.OUT_OF_WINDOW, DropReason.LOW_SOURCE_SCORE), result.dropped.map { it.reason })
+    }
+
     private val configs = mapOf("hn" to HnConfig(windowHours = 24, minRawScore = 50))
 
     @Test

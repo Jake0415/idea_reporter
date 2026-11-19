@@ -91,6 +91,36 @@ class LlmRouterTest {
         assertTrue(guard.drainCalls().isEmpty())
     }
 
+    @Test fun pendingCallCountsAgainstBudgetBeforeTheProviderReturns() = runTest {
+        val started = CompletableDeferred<Unit>()
+        val finish = CompletableDeferred<Unit>()
+        val provider = Fake(ProviderId.OPENAI) {
+            started.complete(Unit)
+            finish.await()
+            result(ProviderId.OPENAI, it).copy(costUsd = 0.001)
+        }
+        val budget = CostGuard(0.07)
+        val router = LlmRouter(listOf(provider), budget, preflightBudget = true)
+        val largeOutput = request.copy(maxOutputTokens = 2_000)
+        val pending = async { router.complete("generate", largeOutput, "ideas", "default") }
+        started.await()
+        try {
+            assertFailsWith<BudgetExceededException> { router.complete("generate", largeOutput, "ideas", "default") }
+        } finally {
+            finish.complete(Unit)
+        }
+        pending.await()
+        router.complete("generate", largeOutput, "ideas", "default")
+        assertEquals(2, provider.requests)
+    }
+
+    @Test fun estimatesInputTokensByCharacterClassAndRoundsOnce() {
+        assertEquals(0, estimateInputTokens(""))
+        assertEquals(3, estimateInputTokens("abcd", "한글", "a"))
+        assertEquals(1, estimateInputTokens("😀"))
+        assertEquals(1, estimateInputTokens("a", "b"))
+    }
+
     @Test fun appliesFallbackSwitchesAndPropagatesLastFailure() = runTest {
         val first = IllegalStateException("첫 실패")
         val last = IllegalArgumentException("마지막 실패")

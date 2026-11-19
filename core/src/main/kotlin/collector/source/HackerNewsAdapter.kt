@@ -21,28 +21,28 @@ class HackerNewsAdapter(
 
     override suspend fun fetch(config: SourceConfig, now: Instant): List<Item> {
         require(config is HnConfig) { "HackerNewsAdapter에는 HnConfig가 필요합니다" }
-        val since = now.minus(config.window()).epochSecond
-        val hits = LinkedHashMap<String, Hit>()
+        val hits = LinkedHashMap<String, Item>()
         for (query in config.queries) {
+            val override = config.overrideFor(query)
+            val since = now.minus(override?.window() ?: config.window()).epochSecond
+            val minRawScore = override?.minRawScore ?: config.minRawScore
             val url = baseUrl.toHttpUrl().newBuilder()
                 .addPathSegments("api/v1/search_by_date")
                 .addQueryParameter("query", query)
                 .addQueryParameter("tags", "story")
-                .addQueryParameter("numericFilters", "created_at_i>$since,points>=${config.minRawScore}")
+                .addQueryParameter("numericFilters", "created_at_i>$since,points>=$minRawScore")
                 .addQueryParameter("hitsPerPage", config.fetchPerQuery.coerceIn(1, 100).toString())
                 .build()
             val body = Http.getText(http, Request.Builder().url(url).build())
             Http.json.decodeFromString(Response.serializer(), body).hits
                 .filter { !it.title.isNullOrBlank() }
-                .forEach { hits.putIfAbsent(it.objectID, it) }   // 검색어끼리 겹치면 하나만
+                .forEach { hits.putIfAbsent(it.objectID, it.toItem(query)) }   // 검색어끼리 겹치면 하나만
         }
         // 출처당 최대 건수(maxItems)는 거르고 난 뒤 파이프라인이 적용한다(SourceCap)
-        return hits.values
-            .sortedByDescending { it.points ?: 0 }
-            .map { it.toItem() }
+        return hits.values.sortedByDescending { it.rawScore }
     }
 
-    private fun Hit.toItem(): Item {
+    private fun Hit.toItem(query: String): Item {
         val discussion = "https://news.ycombinator.com/item?id=$objectID"
         return Item(
             source = id,
@@ -54,7 +54,8 @@ class HackerNewsAdapter(
             snippet = plainText(story_text),
             author = author,
             commentCount = num_comments ?: 0,
-            discussionUrl = discussion
+            discussionUrl = discussion,
+            extra = mapOf("matchedQuery" to query)
         )
     }
 

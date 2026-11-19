@@ -5,7 +5,7 @@ import kotlinx.serialization.json.Json
 
 /**
  * 리소스 profiles/ 아래 프로필을 읽고 검증한다.
- * 구조: profiles/index.json(목록·기본값) + profiles/<id>/{profile.json, match.md, analysis.md}
+ * 구조: profiles/index.json(목록·기본값) + profiles/<id>/profile.json
  */
 object ProfileLoader {
     private val json = Json { ignoreUnknownKeys = false }   // 오타 난 필드는 거부
@@ -28,9 +28,9 @@ object ProfileLoader {
     }
 
     private fun loadOne(id: String, read: (String) -> String?): Profile {
-        fun file(name: String) = read("profiles/$id/$name") ?: error("profiles/$id/$name 이 없습니다")
-        val config = json.decodeFromString(ProfileConfig.serializer(), file("profile.json"))
-        return Profile(config, match = file("match.md"), analysis = file("analysis.md"))
+        val path = "profiles/$id/profile.json"
+        val text = read(path) ?: error("$path 파일이 없습니다")
+        return Profile(json.decodeFromString(ProfileConfig.serializer(), text))
     }
 
     /** 문제 목록(비어 있으면 정상) */
@@ -47,8 +47,6 @@ object ProfileLoader {
             for ((name, v) in listOf("classifyMaxChars" to c.content.classifyMaxChars, "generateMaxChars" to c.content.generateMaxChars)) {
                 if (v !in 500..100_000) add("${c.id}: $name $v 는 500~100000 이어야 합니다")
             }
-            if (p.match.isBlank()) add("${c.id}: match.md 가 비어 있습니다")
-            if (p.analysis.isBlank()) add("${c.id}: analysis.md 가 비어 있습니다")
         }
     }
 
