@@ -24,7 +24,7 @@
 |---|---|---|
 | 프로필 | 프로필마다 `match.md`·`analysis.md`·`enrichment.md` + `profile.json` | 신호 종류별 프로필 3종(§5), 평가표 0~10을 파일로 분리 |
 | 프로필별 임계값 | `profile_settings.threshold` | 프로필별 임계값 + 출처별 최소 점수(규칙 필터) 병행 |
-| 주제 중복 제거 | 임계값 통과 후 프로필별 **별도 LLM 호출**로 같은 실제 사건을 합침. 점수 높은 항목이 대표, 중복 항목의 본문·댓글은 대표에 붙임 | **변형:** 1차 분류 호출 안에서 `topicKey`를 함께 받아 추가 호출 없이 합침. 기준은 차용: 같은 실제 사건만 같은 주제, 같은 제품의 다른 사건은 별개, 애매하면 분리. 합칠 때 중복 항목의 URL·댓글은 대표에 붙여 근거를 잃지 않음(`mergedUrls`) |
+| 주제 중복 제거 | 임계값 통과 후 프로필별 **별도 LLM 호출**로 같은 실제 사건을 합침(같은 제품의 다른 사건은 별개). 점수 높은 항목이 대표, 중복 항목의 본문·댓글은 대표에 붙임 | **변형:** 1차 분류 호출 안에서 `topicKey`를 함께 받아 추가 호출 없이 합침. 합치는 단위는 **대상**(제품·프로젝트·사건·문제)이고 최근 14일 키를 재사용해 날짜를 넘어 같은 주제를 알아본다(§7-1 ④). 카드 재료로는 같은 대상의 근거를 모으는 편이 낫기 때문. 합칠 때 중복 항목의 URL·댓글은 대표에 붙여 근거를 잃지 않음(`mergedUrls`) |
 | 분류별 상한 | `digest.category_groups`, `max_items` — 임계값·주제 합치기 뒤, 작성 전에 적용 | 카드 분류별 최대 개수, 프로필별 후보 상한. 같은 순서로 **작성(Opus) 호출 전에** 적용해 비용 절약 |
 | 태그 | 1차 분석 단계에서 구체적 주제 태그 3~5개 | 1차 분류(Haiku) 출력에 태그 3~5개 |
 | 댓글 수집 | HN·Reddit 상위 댓글 5개를 **모든 수집 항목**에 대해 수집 단계에서 가져옴. Reddit은 API 키 없이 HTML 스크레이핑 우선 | **변형:** 최종 후보만, 공식 API로 가져옴(HTML 스크레이핑은 따르지 않음) → 수요 신호의 핵심 근거 |
@@ -179,11 +179,78 @@ app/src/main/kotlin/collector/app/
 | ② Filter | 기간, 출처별 최소 점수, 제외 키워드, **스팸 묶음**(같은 출처에서 3개 이상 계정이 같은 이름·설명으로 찍어 낸 저장소), **출처 상한**(거른 뒤 출처당 `maxItems`) → 탈락 이유 기록. 어댑터는 스팸을 감안해 검색어당 `fetchPerQuery`건을 넉넉히 받아 온다 | → ~150 | 0 |
 | ③ Dedupe | URL 정규화, 제목 유사도, 이미 본 글, 여러 출처 합치기(`alsoSeenIn`), 점수 0~100 통일 | → ~80 | 0 |
 | ④ Classify | Haiku 5.5, 25건씩 묶어: 프로필 배정·0~10점·이유·한 줄 요약·태그 3~5개·`topicKey` | 80 | ~$0.01 |
-| ⑤ Select | 프로필별 임계값 → `topicKey`로 주제 합치기(중복 항목 URL·댓글은 대표에 붙임) → 프로필별·분류별 상한. **비싼 ⑦ 작성 전에** 후보를 줄여 비용 절약 | → 15~20 | 0 |
+| ⑤ Select | 무관(`none`) 제외 → 프로필별 임계값 → `topicKey`로 주제 합치기(중복 항목 URL·댓글은 대표에 붙임) → 프로필별 후보 상한 + 태그 다양성 상한. **비싼 ⑦ 작성 전에** 후보를 줄여 비용 절약. 카드 분류별 상한은 ⑦·⑧에서(§7-1) | → 15~20 | 0 |
 | ⑥ Enrich | 최종 후보 본문 샘플, HN·Reddit 상위 댓글 5개, 과거 기록 검색 / (선택) 보충 검색 | 15~20 | 0 (~$0.03) |
-| ⑦ Generate | Opus 5.5: 신호를 엮어 카드 5개, 최근 피드백을 선호 예시로 포함 | 5 | ~$0.1~0.2 |
-| ⑧ Validate | 인용 검증(수집 URL만), 카드 스키마 검증, 실패 시 1회 재시도 | — | (재시도 시) |
+| ⑦ Generate | 작성 모델: 신호를 엮어 카드 5개(분류는 고정 목록에서, 분류별 상한 지시), 최근 피드백·최근 카드 포함 | 5 | ~$0.1~0.2 |
+| ⑧ Validate | 인용 검증(수집 URL만), 카드 스키마·필수 블록 검증, 분류별 상한 초과분 제거, 배지 계산(코드), 실패 시 1회 재시도 | — | (재시도 시) |
 | ⑨ Deliver | HTML 메일, 저장(항목·카드·탈락 이유·출처 통계), SeenStore 갱신, 실행 기록 | — | 0 |
+
+## 7-1. 단계 세부 규칙 (2단계 전 확정)
+
+### ① 1차 분류 계약 (④ Classify)
+- 프롬프트: `prompts/classify.md`(고정 지시) + 프로필별 `match.md`·`analysis.md`(고정) → 시스템 메시지. 그날 데이터는 사용자 메시지.
+- 입력(25건씩 묶음): 항목마다 `itemId`(=`Item.key`), 출처, 제목, snippet(프로필 `classifyMaxChars` 이내), 원점수, `alsoSeenIn`, 후보 프로필(`profileHint`). 묶음 공통으로 `recentTopics`(최근 14일 주제 키·이름).
+- 출력: 항목마다 `ClassifiedItem` 1개(빠진 항목은 `CLASSIFY_FAILED`).
+- **무관 처리:** 후보 프로필 어디에도 맞지 않거나 AI와 무관하면 `profile = "none"` → 탈락 이유 `NOT_RELEVANT`.
+- 후보 프로필이 하나뿐인 출처(GitHub 등)는 그 프로필로 평가하되, 맞지 않으면 `none` 가능.
+
+### ② 카드 분류 목록 (고정)
+`core/src/main/resources/categories.json`. 카드 `category`는 이 id 중 하나.
+
+| id | 이름 |
+|---|---|
+| dev-tools | 개발 도구 |
+| workflow-automation | 업무 자동화 |
+| content-creation | 콘텐츠 제작 |
+| voice-conversation | 음성·대화 |
+| data-search | 데이터·검색 |
+| education | 교육·학습 |
+| commerce-marketing | 커머스·마케팅 |
+| personal-productivity | 개인 생산성 |
+| health-life | 건강·생활 |
+| other | 기타 |
+
+### ③ 상한 적용 위치
+- ⑤ Select(작성 전): 프로필별 후보 상한(`maxCandidates`) + **태그 다양성 상한**(같은 첫 번째 태그를 가진 후보는 `maxCandidatesPerTag`개까지, 넘치면 `OVER_QUOTA`).
+- ⑦ Generate: 프롬프트에 분류 목록과 `maxCardsPerCategory`를 주고 지키게 한다.
+- ⑧ Validate: 그래도 넘치면 작성 순서상 뒤의 카드를 버린다.
+
+### ④ 날짜를 넘는 주제 키
+- `topicKey` = **대상 단위**(제품·프로젝트·사건·문제), 영문 소문자 kebab-case(예: `gemini-4-neon`, `meeting-notes-pain`). `topicLabel` = 한국어 짧은 이름.
+- 분류 입력에 최근 14일(`recentTopicDays`)의 `topicKey`·`topicLabel` 목록을 주고, **같은 대상이면 기존 키를 그대로 쓰게** 한다. 새 대상이면 새 키.
+- 같은 날 같은 `topicKey`는 하나의 후보로 합치고 근거(URL·댓글)는 모두 대표에 붙인다. (Horizon은 같은 제품의 다른 사건을 나누지만, 우리는 카드 재료로 근거를 모으는 쪽이 낫다고 보고 대상 단위로 합친다 — §3 변형.)
+- 저장: `TopicHistory(topicKey, topicLabel, runDate, itemKeys)` → 반복 주제(SC-04), 연속 등장 배지, 최근 카드 중복 판단.
+
+### ⑤ 배지 (코드가 계산, LLM은 쓰지 않음)
+| 배지 | 규칙 |
+|---|---|
+| 여러 곳에서 화제 | 카드 근거 항목들의 출처(`source` + `alsoSeenIn`)가 서로 다른 2곳 이상 |
+| 연속 등장 | 카드 근거의 `topicKey` 중 하나가 최근 3일 중 2일 이상 `TopicHistory`에 있음 |
+| 급상승 | HN: 게시 후 시간당 점수 ≥ 10 · GitHub: 하루 스타 증가 ≥ 100(이전 실행의 `MetricSnapshot`과 비교, 이력이 없으면 생성 후 하루 평균 스타 ≥ 100) |
+- 수집할 때마다 `MetricSnapshot(itemKey, rawScore, at)`을 저장한다(급상승 계산용, 30일 보관).
+- 기준값은 `PipelineConfig.badges`로 조정 가능.
+
+### ⑥ 같은 날 다시 실행
+- 하루에 실행 결과는 하나: 같은 날 다시 실행하면 **오늘의 카드를 새 결과로 교체**한다. 이전 결과는 실행 기록(SC-10)에 남긴다.
+- 메일은 **하루 1회**(첫 성공 실행)만 보낸다. 다시 보내기는 앱의 수동 동작으로만.
+- 실행 중에는 잠금: 자동 실행과 "지금 실행"이 겹치지 않는다(앱=WorkManager 고유 작업, PC=잠금 파일).
+- **이미 본 글은 "이전 날짜"에 본 것만 뺀다.** `SeenStore`가 본 날짜를 함께 저장해서, 같은 날 재실행은 그날 수집분을 다시 쓸 수 있게 한다.
+
+### ⑦ 과거 기록 검색 (⑥ Enrich)
+- 대상: 최종 후보 15~20건만.
+- 검색어: 후보 제목의 핵심어(불용어 제외, 상위 3개) + 태그 → 코드가 만든다(AI 호출 없음).
+- 범위: 최근 90일(`historyDays`)의 수집 항목과 카드. 후보당 최대 3건(요약 300자).
+- 구현: 앱=Room FTS, PC=`out/*.json`의 항목·카드를 단어 일치 점수로 검색.
+- 작성 프롬프트 규칙: 직접 연결된 것만, 최대 2건 인용(ideas.md).
+
+### ⑧ 피드백 입력과 반영
+- 이유 목록(고정): `already-exists`(이미 있음), `too-big`(너무 큼), `not-my-field`(내 분야 아님), `weak-evidence`(근거 약함), `other`(기타 + 메모).
+- 앱: SC-01·02에서 입력. PC: `out/feedback.json`을 손으로 작성 — `[{"cardId": "...", "kind": "STAR|NOT_INTERESTED", "reason": "too-big", "memo": "..."}]`.
+- 작성 프롬프트에는 최근 10개(`feedbackExamples`)를 `제목 · 분류 · 반응 · 이유` 한 줄씩 넣는다. 최근 카드는 7일(`recentCardDays`) 제목 목록.
+
+### ⑨ 후보 정렬
+- 프로필 안: **AI 점수 내림차순 → 출처 점수(0~100) → 여러 곳 등장 수 → 원점수**.
+- 상한(프로필·태그)은 이 순서로 앞에서부터 채운다.
 
 ## 8. 핵심 타입
 
@@ -204,7 +271,7 @@ data class Item(
 )
 
 @Serializable
-enum class DropReason { OUT_OF_WINDOW, LOW_SOURCE_SCORE, EXCLUDED_KEYWORD, SUSPECTED_SPAM, DUPLICATE, ALREADY_SEEN,
+enum class DropReason { OUT_OF_WINDOW, LOW_SOURCE_SCORE, EXCLUDED_KEYWORD, SUSPECTED_SPAM, DUPLICATE, ALREADY_SEEN, NOT_RELEVANT,
     BELOW_PROFILE_THRESHOLD, SAME_TOPIC, OVER_QUOTA, CLASSIFY_FAILED, BUDGET_EXCEEDED }
 
 @Serializable
@@ -212,9 +279,16 @@ data class ClassifiedItem(
     val externalId: String, val profile: String,  // tech-signal | demand-signal | market-signal | none
     val score: Double?,                           // 0~10, 실패 시 null
     val reason: String, val summary: String,      // 한 줄 이유, 한 줄 요약(한국어)
-    val tags: List<String>,                       // 구체적 주제 태그 3~5개
-    val topicKey: String                          // 같은 실제 사건끼리 같은 키 (같은 제품의 다른 사건은 다른 키)
+    val tags: List<String>,                       // 구체적 주제 태그 3~5개 (첫 번째가 대표 태그 → 다양성 상한)
+    val topicKey: String,                         // 대상 단위 kebab-case, 최근 14일 키 재사용 (§7-1 ④)
+    val topicLabel: String                        // 한국어 짧은 주제 이름
 )
+
+@Serializable
+data class TopicHistory(val topicKey: String, val topicLabel: String, val runDate: LocalDate, val itemKeys: List<String>)
+
+@Serializable
+data class MetricSnapshot(val itemKey: String, val rawScore: Int, val at: Instant)   // 급상승 배지용, 30일 보관
 
 @Serializable
 data class IdeaCard(
@@ -232,7 +306,8 @@ data class IdeaCard(
     val biggestRisk: String,              // 가장 큰 위험 1개
     val validationPlan: String,           // 2주·소액으로 검증하는 방법
     val caveats: List<String>,            // 확인 필요: 단일 출처, 업체 주장, 커뮤니티 주장 등
-    val category: String, val badges: List<String>, // 급상승·여러 곳에서 화제·3일 연속 등
+    val category: String,                 // categories.json의 id (§7-1 ②)
+    val badges: List<String>,             // 코드가 계산: 여러 곳에서 화제·연속 등장·급상승 (§7-1 ⑤)
     val tags: List<String>
 )
 
@@ -279,6 +354,10 @@ data class SourceStats(val source: String, val days: Int, val fetched: Int, val 
   },
   "ideaCount": 5,
   "maxCardsPerCategory": 2,
+  "maxCandidatesPerTag": 2,
+  "recentTopicDays": 14,
+  "recentCardDays": 7,
+  "badges": { "hnPointsPerHour": 10, "githubStarsPerDay": 100, "streakDays": 3, "streakMin": 2 },
   "commentsPerItem": 5,
   "feedbackExamples": 10,
   "historyDays": 90,
@@ -293,7 +372,7 @@ data class SourceStats(val source: String, val days: Int, val fetched: Int, val 
 - CostGuard: 응답 토큰 사용량으로 비용 누적, 예산 초과 시 이후 LLM 단계 중단하고 그때까지 결과만 발송.
 - LLM 응답은 구조화된 출력(JSON 스키마)으로 받고, 파싱 실패 시 1회만 재시도, 그래도 실패하면 점수 null로 저장.
 - 인용 검증: 카드의 모든 URL이 이번 실행의 수집 항목에 있어야 함. 없으면 그 근거를 제거하고, 근거가 하나도 안 남는 카드는 버림.
-- 날짜별 실행 키로 같은 날 재실행 시 중복 카드·메일 방지.
+- 같은 날 재실행: 오늘 결과 교체, 메일 하루 1회, 실행 잠금, 이미 본 글은 이전 날짜분만 제외(§7-1 ⑥).
 - 비밀값(Anthropic·OpenAI·GitHub·Reddit·Product Hunt 키, Gmail 앱 비밀번호)은 SecretProvider로만 접근. 앱=Android Keystore, runner=환경 변수. 키 값은 로그·실행 기록·예외 메시지에 남기지 않는다.
 - 어댑터는 fixtures 기반 테스트, LLM 단계는 가짜 LlmClient로 테스트.
 - Claude Opus 5.5 호출에는 서버 측 거절 대비 fallback 설정을 기본으로 넣는다. 공급자를 넘는 대체는 LlmRouter가 맡는다(§5-1).

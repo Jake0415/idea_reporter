@@ -11,6 +11,7 @@ enum class DropReason {
     SUSPECTED_SPAM,          // ② 여러 계정이 같은 이름·설명으로 찍어 낸 묶음
     DUPLICATE,               // ③ 같은 URL·비슷한 제목
     ALREADY_SEEN,            // ③ 이전 실행에서 이미 본 글
+    NOT_RELEVANT,            // ④ 분류 결과 어느 프로필에도 맞지 않음·AI와 무관 (2단계)
     BELOW_PROFILE_THRESHOLD, // ⑤ 프로필 임계값 미달 (2단계)
     SAME_TOPIC,              // ⑤ 주제 합치기 (2단계)
     OVER_QUOTA,              // ② 출처 최대 건수 초과, ⑤ 프로필·분류 상한 초과(2단계)

@@ -1,0 +1,14 @@
+{
+  "categories": [
+    { "id": "dev-tools", "name": "개발 도구" },
+    { "id": "workflow-automation", "name": "업무 자동화" },
+    { "id": "content-creation", "name": "콘텐츠 제작" },
+    { "id": "voice-conversation", "name": "음성·대화" },
+    { "id": "data-search", "name": "데이터·검색" },
+    { "id": "education", "name": "교육·학습" },
+    { "id": "commerce-marketing", "name": "커머스·마케팅" },
+    { "id": "personal-productivity", "name": "개인 생산성" },
+    { "id": "health-life", "name": "건강·생활" },
+    { "id": "other", "name": "기타" }
+  ]
+}
