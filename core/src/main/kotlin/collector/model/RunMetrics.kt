@@ -10,7 +10,8 @@ import kotlinx.serialization.json.JsonTransformingSerializer
 data class RunMetrics(
     val snapshots: List<MetricSnapshot> = emptyList(),
     val profiles: Map<String, ProfileMetrics> = emptyMap(),
-    val scoreClampWarnings: Int = 0
+    val scoreClampWarnings: Int = 0,
+    val cardRejections: Map<String, Int> = emptyMap()
 )
 
 @Serializable

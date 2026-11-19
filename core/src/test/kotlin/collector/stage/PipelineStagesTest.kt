@@ -227,7 +227,12 @@ class PipelineStagesTest {
         }
     }
 
-    @Test fun `작성 출력이 잘리면 상한을 올려 한 번 재시도하고 단계는 하나씩 기록한다`() = runTest {
+    @Test fun `작성 출력이 잘리면 상한을 올려 한 번 재시도하고 단계는 하나씩 기록한다`() =
+        checkGenerationRetry(truncated = true)
+
+    @Test fun validationRetryRecordsFirstAttemptSeparately() = checkGenerationRetry(truncated = false)
+
+    private fun checkGenerationRetry(truncated: Boolean) = runTest {
         val first = item(1, "github")
         val second = item(2, "github")
         val expected = card(first, second).let { it.copy(demandSignals = emptyList(), competitors = it.demandSignals) }
@@ -243,8 +248,12 @@ class PipelineStagesTest {
                     })}}"""
                     "generate" -> {
                         tokenLimits += req.maxOutputTokens
-                        if (tokenLimits.size == 1) throw LlmServiceException(reason = "truncated")
-                        """{"cards":${Json.encodeToJsonElement(listOf(expected, expected.copy(title = "Duplicate card")))}}"""
+                        val cards = if (tokenLimits.size == 1) {
+                            if (truncated) throw LlmServiceException(reason = "truncated")
+                            listOf(expected.copy(title = "First card", problem = ""))
+                        } else listOf(expected.copy(techSignals = expected.techSignals +
+                            expected.techSignals.single().copy(note = "")), expected.copy(title = "Duplicate card"))
+                        """{"cards":${Json.encodeToJsonElement(cards)}}"""
                     }
                     else -> error("예상하지 않은 단계")
                 }
@@ -263,11 +272,16 @@ class PipelineStagesTest {
             emptyList(), emptyMap(), 0))
         val result = full.run(base, inputs, emptyList(), emptyList(), now, today) {}
         assertEquals(2, tokenLimits.size)
-        assertEquals(tokenLimits[0] * 3 / 2, tokenLimits[1])
+        assertEquals(if (truncated) tokenLimits[0] * 3 / 2 else tokenLimits[0], tokenLimits[1])
         assertEquals(expected.title, result.cards.single().title)
         assertEquals(2, result.report.stages.single { it.stage == "generate" }.output)
         assertEquals(1, result.report.stages.single { it.stage == "validate" }.output)
-        assertTrue(result.report.issues.any { "Duplicate card" in it })
+        assertEquals(listOfNotNull(
+            if (truncated) null else "1차 시도: 카드 제외 (First card) · 필수 항목 비어 있음: problem",
+            "인용 일부 제거 (${expected.title}) · 인용 1건 제거: note 빈칸 1",
+            "카드 제외 (Duplicate card) · 중복 카드: ${expected.title}"
+        ), result.report.issues)
+        assertEquals(mapOf("DUPLICATE" to 1), result.metrics.cardRejections)
         val metrics = Json.encodeToJsonElement(result).jsonObject.getValue("metrics").jsonObject
         assertEquals(JsonPrimitive(2), metrics["scoreClampWarnings"])
         val counts = metrics.getValue("profiles").jsonObject
@@ -296,9 +310,14 @@ class PipelineStagesTest {
             card(tech, excessDemand).copy(id = "6")
         )
         val duplicates = mutableListOf<String>()
-        val validated = CardValidator(config, setOf("dev-tools")).validate(copies, citations) { duplicates += it.id }
+        val rejected = mutableMapOf<String, CardRejectionReason>()
+        val validated = CardValidator(config, setOf("dev-tools")).validate(copies, citations, onRejected = { card, rejection ->
+            rejected[card.id] = rejection.reason
+            if (rejection.reason == CardRejectionReason.DUPLICATE) duplicates += card.id
+        })
         assertEquals(listOf("2", "5"), validated.map { it.id })
         assertEquals(listOf("3"), duplicates)
+        assertEquals(CardRejectionReason.CATEGORY_CAP, rejected["6"])
     }
 
     @Test fun `cards with different demand sets survive evidence containment`() {
@@ -311,9 +330,10 @@ class PipelineStagesTest {
         val citations = CitationValidator(listOf(signal(tech), signal(demand, profile = "demand-signal"),
             signal(extraDemand, profile = "demand-signal")))
         val duplicates = mutableListOf<String>()
-        val validated = CardValidator(config, setOf("dev-tools")).validate(listOf(first, second), citations) {
-            duplicates += it.id
-        }
+        val validated = CardValidator(config, setOf("dev-tools")).validate(listOf(first, second), citations, onRejected = { card, rejection ->
+            assertEquals(CardRejectionReason.DUPLICATE, rejection.reason)
+            duplicates += card.id
+        })
         assertEquals(listOf(first.id, second.id), validated.map { it.id })
         assertTrue(duplicates.isEmpty())
     }
@@ -324,7 +344,7 @@ class PipelineStagesTest {
         val demand = item(3)
         val competitor = item(4)
         val original = card(techA, demand)
-        val first = original.copy(techSignals = original.techSignals + SignalRef(techB.key, techB.url, "기술"))
+        val first = original.copy(title = "앞 카드", techSignals = original.techSignals + SignalRef(techB.key, techB.url, "기술"))
         val second = first.copy(
             id = "duplicate",
             techSignals = first.techSignals.reversed(),
@@ -333,11 +353,61 @@ class PipelineStagesTest {
         val citations = CitationValidator(listOf(signal(techA), signal(techB),
             signal(demand, profile = "demand-signal"), signal(competitor, profile = "market-signal")))
         val duplicates = mutableListOf<String>()
-        val validated = CardValidator(config, setOf("dev-tools")).validate(listOf(first, second), citations) {
-            duplicates += it.id
-        }
+        val validated = CardValidator(config, setOf("dev-tools")).validate(listOf(first, second.copy(title = "뒤 카드")), citations,
+            onRejected = { card, rejection ->
+                assertEquals(CardRejectionReason.DUPLICATE, rejection.reason)
+                assertContains(rejection.detail, first.title)
+                duplicates += card.id
+            })
         assertEquals(listOf(first.id), validated.map { it.id })
         assertEquals(listOf(second.id), duplicates)
+    }
+
+    @Test fun cardRejectionReasonsAndCitationCounts() {
+        val tech = item(1)
+        val demand = item(2)
+        val otherDemand = item(3)
+        val original = card(tech, demand)
+        val techRef = original.techSignals.single()
+        val demandRef = original.demandSignals.single()
+        val blankNote = techRef.copy(note = "")
+        val unknown = techRef.copy(url = "https://invalid.example")
+        val citations = CitationValidator(listOf(signal(tech), signal(demand, profile = "demand-signal"),
+            signal(otherDemand, profile = "demand-signal")))
+        val noMarketEvidence = original.copy(
+            demandSignals = listOf(demandRef.copy(note = "")), competitors = listOf(techRef)
+        )
+        assertEquals(mapOf(
+            "techSignals" to emptyMap(),
+            "demandSignals" to mapOf("note 빈칸" to 1),
+            "competitors" to mapOf("항목 중복 사용" to 1)
+        ), citations.check(noMarketEvidence).invalidByBlock)
+        val rejected = mutableListOf<CardRejection>()
+        val trimmed = mutableListOf<String>()
+        val cards = CardValidator(config.copy(ideaCount = 1, maxCardsPerCategory = 2), setOf("dev-tools")).validate(
+            listOf(
+                original.copy(category = "unknown", tags = emptyList(), problem = ""),
+                original.copy(tags = emptyList(), problem = ""),
+                original.copy(tags = listOf("tag", "")),
+                original.copy(problem = "", effort = " "),
+                original.copy(techSignals = listOf(unknown, unknown, demandRef)),
+                noMarketEvidence,
+                original.copy(techSignals = listOf(techRef, blankNote)),
+                card(tech, otherDemand).copy(techSignals = listOf(techRef, blankNote))
+            ), citations, onRejected = { _, rejection -> rejected += rejection },
+            onCitationsTrimmed = { _, detail -> trimmed += detail }
+        )
+        assertEquals(listOf(original), cards)
+        assertEquals(listOf(
+            CardRejection(CardRejectionReason.INVALID_CATEGORY, "분류 id 오류: unknown"),
+            CardRejection(CardRejectionReason.INVALID_TAGS, "태그 없음"),
+            CardRejection(CardRejectionReason.INVALID_TAGS, "빈 태그 포함"),
+            CardRejection(CardRejectionReason.MISSING_FIELD, "필수 항목 비어 있음: problem, effort"),
+            CardRejection(CardRejectionReason.CITATION, "기술 신호 근거 없음(인용 3건 무효: URL 불일치 2, 블록-프로필 불일치 1)"),
+            CardRejection(CardRejectionReason.CITATION, "수요·경쟁 근거 없음(인용 2건 무효: note 빈칸 1, 항목 중복 사용 1)"),
+            CardRejection(CardRejectionReason.IDEA_COUNT_CAP, "카드 수 상한 초과 (최대 1)")
+        ), rejected)
+        assertEquals(listOf("인용 1건 제거: note 빈칸 1"), trimmed)
     }
 
     @Test fun `인용은 근거 유형과 항목 URL 쌍을 검사하고 같은 원본의 재사용을 제외한다`() {

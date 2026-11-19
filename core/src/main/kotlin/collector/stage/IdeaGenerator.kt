@@ -97,6 +97,12 @@ class IdeaGenerator(
     )))
 }
 
+internal data class CitationCheck(
+    val card: IdeaCard?,
+    val detail: String?,
+    val invalidByBlock: Map<String, Map<String, Int>>
+)
+
 class CitationValidator(signals: List<Signal>, merged: Map<String, List<Signal>> = emptyMap()) {
     private val originalsByRef = buildMap {
         for (signal in signals) {
@@ -112,20 +118,51 @@ class CitationValidator(signals: List<Signal>, merged: Map<String, List<Signal>>
 
     private fun original(ref: SignalRef): Signal? = originalsByRef[ref.itemId to ref.url]
 
-    fun validate(card: IdeaCard): IdeaCard? {
+    fun validate(card: IdeaCard): IdeaCard? = check(card).card
+
+    internal fun check(card: IdeaCard): CitationCheck {
         val used = mutableSetOf<String>()
-        fun List<SignalRef>.valid(vararg profiles: String) = mapNotNull { ref ->
-            val signal = original(ref) ?: return@mapNotNull null
-            if (ref.note.isBlank() || signal.classification.profile !in profiles || !used.add(signal.item.key)) {
-                return@mapNotNull null
+        fun List<SignalRef>.valid(invalid: MutableMap<String, Int>, vararg profiles: String) = mapNotNull { ref ->
+            val signal = original(ref)
+            val reason = when {
+                signal == null -> "URL 불일치"
+                ref.note.isBlank() -> "note 빈칸"
+                signal.classification.profile !in profiles -> "블록-프로필 불일치"
+                !used.add(signal.item.key) -> "항목 중복 사용"
+                else -> return@mapNotNull ref.copy(
+                    license = if (signal.classification.profile == "tech-signal") signal.item.extra["license"] else null
+                )
             }
-            ref.copy(license = if (signal.classification.profile == "tech-signal") signal.item.extra["license"] else null)
+            invalid[reason] = invalid.getOrDefault(reason, 0) + 1
+            null
         }
-        val tech = card.techSignals.valid("tech-signal")
-        val demand = card.demandSignals.valid("demand-signal")
-        val competitors = card.competitors.valid("market-signal", "tech-signal")
-        if (tech.isEmpty() || demand.isEmpty() && competitors.isEmpty()) return null
-        return card.copy(techSignals = tech, demandSignals = demand, competitors = competitors)
+        val invalidTech = mutableMapOf<String, Int>()
+        val invalidDemand = mutableMapOf<String, Int>()
+        val invalidCompetitors = mutableMapOf<String, Int>()
+        val tech = card.techSignals.valid(invalidTech, "tech-signal")
+        val demand = card.demandSignals.valid(invalidDemand, "demand-signal")
+        val competitors = card.competitors.valid(invalidCompetitors, "market-signal", "tech-signal")
+        val invalidByBlock = mapOf(
+            "techSignals" to invalidTech,
+            "demandSignals" to invalidDemand,
+            "competitors" to invalidCompetitors
+        )
+        fun counts(vararg blocks: String) = blocks.flatMap { invalidByBlock.getValue(it).entries }
+            .groupingBy { it.key }.fold(0) { count, entry -> count + entry.value }
+        fun summary(invalid: Map<String, Int>) = invalid.entries.joinToString { (reason, count) -> "$reason $count" }
+        fun missing(block: String, invalid: Map<String, Int>) = if (invalid.isEmpty()) "$block 근거 없음(인용 없음)"
+            else "$block 근거 없음(인용 ${invalid.values.sum()}건 무효: ${summary(invalid)})"
+        val missingBlocks = listOfNotNull(
+            if (tech.isEmpty()) missing("기술 신호", counts("techSignals")) else null,
+            if (demand.isEmpty() && competitors.isEmpty()) missing("수요·경쟁", counts("demandSignals", "competitors")) else null
+        )
+        if (missingBlocks.isNotEmpty()) return CitationCheck(null, missingBlocks.joinToString(" · "), invalidByBlock)
+        val invalid = counts("techSignals", "demandSignals", "competitors")
+        return CitationCheck(
+            card.copy(techSignals = tech, demandSignals = demand, competitors = competitors),
+            if (invalid.isEmpty()) null else "인용 ${invalid.values.sum()}건 제거: ${summary(invalid)}",
+            invalidByBlock
+        )
     }
 
     fun citedSignals(card: IdeaCard): List<Signal> =
@@ -135,36 +172,66 @@ class CitationValidator(signals: List<Signal>, merged: Map<String, List<Signal>>
         refs.mapNotNull(::original).distinctBy { it.item.key }
 }
 
+enum class CardRejectionReason {
+    MISSING_FIELD, INVALID_CATEGORY, INVALID_TAGS, CITATION, DUPLICATE, CATEGORY_CAP, IDEA_COUNT_CAP
+}
+
+data class CardRejection(val reason: CardRejectionReason, val detail: String)
+
 class CardValidator(private val config: PipelineConfig, private val categories: Set<String>) {
-    private data class Evidence(val itemIds: Set<String>, val demandIds: Set<String>, val techTopics: Set<String>)
+    private data class Evidence(val title: String, val itemIds: Set<String>, val demandIds: Set<String>, val techTopics: Set<String>)
 
     fun validate(cards: List<IdeaCard>, citations: CitationValidator,
-                 onDuplicate: (IdeaCard) -> Unit = {}): List<IdeaCard> {
+                 onRejected: (IdeaCard, CardRejection) -> Unit = { _, _ -> },
+                 onCitationsTrimmed: (IdeaCard, String) -> Unit = { _, _ -> }): List<IdeaCard> {
         val counts = mutableMapOf<String, Int>()
         val acceptedEvidence = mutableListOf<Evidence>()
         return cards.mapNotNull { card ->
-            if (card.category !in categories || card.tags.isEmpty() || card.tags.any(String::isBlank) ||
-                listOf(card.title, card.oneLiner, card.whyToday, card.problem, card.effort,
-                    card.differentiation, card.biggestRisk, card.validationPlan).any(String::isBlank)) return@mapNotNull null
-            val validated = citations.validate(card) ?: return@mapNotNull null
+            fun reject(reason: CardRejectionReason, detail: String): Nothing? {
+                onRejected(card, CardRejection(reason, detail))
+                return null
+            }
+            if (card.category !in categories) {
+                return@mapNotNull reject(CardRejectionReason.INVALID_CATEGORY, "분류 id 오류: ${card.category}")
+            }
+            if (card.tags.isEmpty()) return@mapNotNull reject(CardRejectionReason.INVALID_TAGS, "태그 없음")
+            if (card.tags.any(String::isBlank)) return@mapNotNull reject(CardRejectionReason.INVALID_TAGS, "빈 태그 포함")
+            val missing = listOf(
+                "title" to card.title, "oneLiner" to card.oneLiner, "whyToday" to card.whyToday,
+                "problem" to card.problem, "effort" to card.effort, "differentiation" to card.differentiation,
+                "biggestRisk" to card.biggestRisk, "validationPlan" to card.validationPlan
+            ).filter { (_, value) -> value.isBlank() }.map { (field, _) -> field }
+            if (missing.isNotEmpty()) {
+                return@mapNotNull reject(CardRejectionReason.MISSING_FIELD, "필수 항목 비어 있음: ${missing.joinToString()}")
+            }
+            val citationCheck = citations.check(card)
+            val validated = citationCheck.card
+                ?: return@mapNotNull reject(CardRejectionReason.CITATION, checkNotNull(citationCheck.detail))
             val evidence = Evidence(
+                title = card.title,
                 itemIds = citations.citedSignals(validated).map { it.item.key }.toSet(),
                 demandIds = citations.citedSignals(validated.demandSignals).map { it.item.key }.toSet(),
                 techTopics = citations.citedSignals(validated.techSignals).map { it.classification.topicKey }.toSet()
             )
-            if (acceptedEvidence.any { prior ->
+            val duplicate = acceptedEvidence.firstOrNull { prior ->
                 evidence.itemIds == prior.itemIds ||
                     (evidence.demandIds.isNotEmpty() && evidence.demandIds == prior.demandIds &&
                         evidence.techTopics.any { it in prior.techTopics })
-            }) {
-                onDuplicate(card)
-                return@mapNotNull null
+            }
+            if (duplicate != null) {
+                return@mapNotNull reject(CardRejectionReason.DUPLICATE, "중복 카드: ${duplicate.title}")
             }
             val count = counts.getOrDefault(card.category, 0)
-            if (count >= config.maxCardsPerCategory) return@mapNotNull null
-            if (acceptedEvidence.size >= config.ideaCount) return@mapNotNull null
+            if (count >= config.maxCardsPerCategory) {
+                return@mapNotNull reject(CardRejectionReason.CATEGORY_CAP,
+                    "분류 상한 초과: ${card.category} (최대 ${config.maxCardsPerCategory})")
+            }
+            if (acceptedEvidence.size >= config.ideaCount) {
+                return@mapNotNull reject(CardRejectionReason.IDEA_COUNT_CAP, "카드 수 상한 초과 (최대 ${config.ideaCount})")
+            }
             counts[card.category] = count + 1
             acceptedEvidence += evidence
+            citationCheck.detail?.let { onCitationsTrimmed(card, it) }
             validated
         }
     }

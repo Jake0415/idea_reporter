@@ -198,13 +198,25 @@ class FullPipeline(
         val badgeCalculator = BadgeCalculator(config.badges)
         val validator = CardValidator(config, generator.categories.map { it.id }.toSet())
         val citations = CitationValidator(enriched, selected.groups)
+        val cardRejections = mutableMapOf<String, Int>()
+        val validationIssues = mutableListOf<String>()
+        val firstAttemptIssues = mutableListOf<String>()
         suspend fun validate(cards: List<IdeaCard>) = stage("validate", cards.size, { it: List<IdeaCard> -> it.size }) {
-            validator.validate(cards, citations) { issues += "중복 카드 제외 (${it.title})" }.map {
+            validator.validate(cards, citations, onRejected = { card, rejection ->
+                validationIssues += "카드 제외 (${card.title}) · ${rejection.detail}"
+                val reason = rejection.reason.name
+                cardRejections[reason] = cardRejections.getOrDefault(reason, 0) + 1
+            }, onCitationsTrimmed = { card, detail ->
+                validationIssues += "인용 일부 제거 (${card.title}) · $detail"
+            }).map {
                 it.copy(badges = badgeCalculator.badges(citations.citedSignals(it), priorTopics + topics, snapshots, now, today))
             }
         }
         var cards = validate(generated.cards)
         if (generated.failure in setOf("JSON 응답 오류", TRUNCATED_RESPONSE) || generated.cards.isNotEmpty() && cards.isEmpty()) {
+            firstAttemptIssues += validationIssues.map { "1차 시도: $it" }
+            validationIssues.clear()
+            cardRejections.clear()
             generated = generate(retryAfterTruncation = generated.failure == TRUNCATED_RESPONSE)
             cards = validate(generated.cards)
         }
@@ -262,11 +274,12 @@ class FullPipeline(
             items = input.map { enrichedById[it.key]?.item ?: it }, dropped = dropped, classified = signals,
             cards = cards, trackingUpdates = updates, topics = topics,
             metrics = RunMetrics(collected.distinctBy { it.key }.map { MetricSnapshot(it.key, it.rawScore, now) },
-                profileMetrics, classified.scoreClampWarnings),
+                profileMetrics, classified.scoreClampWarnings, cardRejections),
             tracked = trackedAfter, trackClassified = cache, trackingOnlyKeys = input.map { it.key }.toSet() - cardKeys,
             report = base.report.copy(stages = stages, llmCalls = costs.drainCalls(), cardCount = cards.size,
                 trackingUpdateCount = updates.size, dropCounts = dropped.groupingBy { it.reason }.eachCount(),
-                issues = issues.distinct(), totalMillis = base.report.totalMillis + (System.nanoTime() - started) / 1_000_000)
+                issues = issues.distinct() + firstAttemptIssues + validationIssues,
+                totalMillis = base.report.totalMillis + (System.nanoTime() - started) / 1_000_000)
         )
     }
 }

@@ -76,3 +76,8 @@
   - Claude 직접: ideas.md에 "같은 수요로 다른 카드는 주제가 다른 기술 신호로" 추가, PH 공개 피드 기본 목록에서 제외(허용 범위 미확인, design.md §9·CLAUDE.md).
 - 리뷰 3회차: **Claude 통과**, OpenAI 높음·중간 없음(낮음 1: CLAUDE.md 문구 → 반영). P5 완료.
   - 다음 과제(낮음): 카드 검증 탈락 사유(인용 부족·필수 항목·분류)를 실행 기록에 남기기.
+
+## P6 카드 검증 탈락 사유 기록
+- 지시: `docs/dev/P6-card-drop-reasons.md`. 개발: Codex(IdeaGenerator·FullPipeline·RunMetrics·PipelineStagesTest), 테스트 138개.
+- 탈락 7종(필수 항목·분류 id·태그·인용·중복·분류 상한·카드 수 상한)을 `카드 제외 (제목) · 상세`로 실행 기록에 남김. 인용 일부 제거 별도 기록, 재시도 시 `1차 시도: ` 접두어, `metrics.cardRejections`는 최종 시도 기준.
+- 리뷰 1회차: **Claude 통과**(낮음 2: 긴 제목 줄임, 같은 줄 반복 가능 — 참고만), **OpenAI 통과**(지적 없음). P6 완료.
