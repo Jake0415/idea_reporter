@@ -19,10 +19,10 @@ import {TextInput} from '@astryxdesign/core/TextInput';
 import {Token} from '@astryxdesign/core/Token';
 import {VStack} from '@astryxdesign/core/VStack';
 import {
-  ArchiveBoxIcon, ArrowPathIcon, ChevronLeftIcon, Cog6ToothIcon, HomeIcon, StarIcon,
+  ArchiveBoxIcon, ArrowPathIcon, ChevronLeftIcon, Cog6ToothIcon, HomeIcon, SignalIcon, StarIcon,
 } from '@heroicons/react/24/outline';
 import {
-  ArchiveBoxIcon as ArchiveSolid, Cog6ToothIcon as CogSolid, HomeIcon as HomeSolid, StarIcon as StarSolid,
+  ArchiveBoxIcon as ArchiveSolid, Cog6ToothIcon as CogSolid, HomeIcon as HomeSolid, SignalIcon as SignalSolid, StarIcon as StarSolid,
 } from '@heroicons/react/24/solid';
 import {themes, defaultThemeSlug} from './astryx-themes';
 
@@ -60,12 +60,30 @@ const IDEAS: Idea[] = [
     tech: '단백질 서열로 학습한 모델 공개 · HN 165점', demand: '"연구실 논문 공유 어떻게 하세요?" · HN 댓글', quotes: [['phd_park', '슬랙 채널에 링크만 쌓여서 아무도 안 읽음']],
     effort: '1인 2주', diff: '연구실 단위 + 주제 키워드 학습', risk: '연구실이 돈을 낼지', valid: '연구실 3곳에 2주 무료 제공, 클릭률·해지 의사 확인'},
 ];
-const TOPICS = [
-  {label: '회의록', n: 6, seen: false}, {label: 'Gemini 4', n: 5, seen: false}, {label: '코드 번역', n: 3, seen: false},
-  {label: '에이전트', n: 4, seen: true}, {label: '로컬 LLM', n: 7, seen: true}, {label: '연구 요약', n: 2, seen: true},
+type Trend = 'UP' | 'FLAT' | 'DOWN';
+type Tracked = {
+  id: string; from: string; title: string; short: string; cat: string; started: string; last: string; news: number;
+  trend: Trend; strength: number; quiet?: boolean; keywords: string[]; comps: string[]; bars: number[];
+  updates: {date: string; summary: string; changes: string[]; n: number}[];
+};
+const TRACKED: Tracked[] = [
+  {id: 't1', from: 'c1', title: '로컬 LLM 회의록 앱', short: '회의록', cat: '업무 자동화', started: '11/13', last: '오늘', news: 3, trend: 'UP', strength: 7.8,
+    keywords: ['meeting-notes', 'local-llm', 'whisper', '설치형 회의록'], comps: ['클라우드 회의록 서비스 A', '오픈소스 B (신규)'], bars: [1, 0, 2, 0, 1, 0, 3],
+    updates: [
+      {date: '11월 19일', summary: '설치형 회의록 오픈소스가 새로 공개됐고(경쟁), 보안 규정 불만 글이 2건 더 올라왔다(수요).', changes: ['새 경쟁 제품', '수요 증가'], n: 3},
+      {date: '11월 17일', summary: '양자화 음성 모델 v2가 나와 노트북 처리 속도가 1.6배 빨라졌다(업체 주장).', changes: ['기술 새 버전'], n: 1},
+      {date: '11월 14일', summary: '경쟁 서비스 A가 가격을 20% 올렸다는 글.', changes: ['위험 변화'], n: 1},
+    ]},
+  {id: 't2', from: 'c2', title: '소상공인 문의 응대 봇', short: '응대 봇', cat: '커머스·마케팅', started: '11/18', last: '오늘', news: 1, trend: 'FLAT', strength: 5.1,
+    keywords: ['customer-support', 'smb', 'ai-agent'], comps: [], bars: [0, 0, 0, 0, 0, 1, 1],
+    updates: [{date: '11월 19일', summary: '메신저 API 정책 변경 예고 — 자동 응답 제한 가능성.', changes: ['위험 변화'], n: 1}]},
+  {id: 't3', from: 'c4', title: '연구실 논문 다이제스트', short: '논문', cat: '데이터·검색', started: '10/20', last: '31일 전', news: 0, trend: 'DOWN', strength: 1.2, quiet: true,
+    keywords: ['research-digest', 'arxiv'], comps: ['연구 요약 서비스 C'], bars: [0, 0, 0, 0, 0, 0, 0], updates: []},
 ];
+const TREND_LABEL: Record<Trend, string> = {UP: '▲ 상승', FLAT: '■ 유지', DOWN: '▼ 하락'};
+const TREND_VARIANT: Record<Trend, 'success' | 'neutral' | 'error'> = {UP: 'success', FLAT: 'neutral', DOWN: 'error'};
 
-type Screen = 'today' | 'detail' | 'archive' | 'settings';
+type Screen = 'today' | 'detail' | 'archive' | 'settings' | 'track' | 'trackDetail';
 type Mode = 'light' | 'dark';
 type Layout = 'feed' | 'compact' | 'focus';
 type Slug = keyof typeof themes;
@@ -100,7 +118,7 @@ export default function App() {
       </div>
       {view === 'single' && <div className="review-bar">{seg(slug, setSlug, (Object.keys(THEME_INFO) as Slug[]).map(s => [s, THEME_INFO[s].name]))}</div>}
       <div className="review-bar">{seg(layout, setLayout, (Object.keys(LAYOUT_INFO) as Layout[]).map(l => [l, LAYOUT_INFO[l].name]))}</div>
-      {view === 'single' && <div className="review-bar">{seg(screen, setScreen, [['today', 'SC-01 오늘'], ['detail', 'SC-02 상세'], ['archive', 'SC-03 보관함'], ['settings', 'SC-11 AI 공급자']])}</div>}
+      {view === 'single' && <div className="review-bar">{seg(screen, setScreen, [['today', 'SC-01 오늘'], ['detail', 'SC-02 상세'], ['track', 'SC-13 추적'], ['trackDetail', 'SC-14 추적 상세'], ['archive', 'SC-03 보관함'], ['settings', 'SC-11 AI 공급자']])}</div>}
       <div className="review-note">
         {view === 'single' ? `${THEME_INFO[slug].name}: ${THEME_INFO[slug].note}` : '같은 화면(SC-01 오늘)을 테마 4종으로 나란히'} · 레이아웃 {LAYOUT_INFO[layout].name}: {LAYOUT_INFO[layout].note}
       </div>
@@ -117,6 +135,8 @@ export default function App() {
 function PhoneApp({slug, mode, layout, initialScreen}: {slug: Slug; mode: Mode; layout: Layout; initialScreen: Screen}) {
   const [screen, setScreen] = useState<Screen>(initialScreen);
   const [focusIdx, setFocusIdx] = useState(0);
+  const [trackId, setTrackId] = useState('t1');
+  const tracked = TRACKED.find(t => t.id === trackId)!;
   const [backTo, setBackTo] = useState<Screen>('today');
   const [ideaId, setIdeaId] = useState('c1');
   const [stars, setStars] = useState<Record<string, boolean>>({c2: true});
@@ -144,7 +164,12 @@ function PhoneApp({slug, mode, layout, initialScreen}: {slug: Slug; mode: Mode; 
                 <Heading level={3}>카드 상세</Heading>
               </HStack>
             ) : (
-              <Heading level={2}>{{today: '오늘의 아이디어', archive: '보관함', settings: 'AI 공급자·모델', detail: ''}[screen]}</Heading>
+              screen === 'trackDetail' ? (
+                <HStack gap={1} vAlign="center">
+                  <IconButton label="뒤로" icon={<Icon icon={ChevronLeftIcon} size="lg" />} variant="ghost" onClick={() => setScreen('track')} />
+                  <Heading level={3}>추적 상세</Heading>
+                </HStack>
+              ) : <Heading level={2}>{{today: '오늘의 아이디어', archive: '보관함', settings: 'AI 공급자·모델', track: '추적', detail: '', trackDetail: ''}[screen]}</Heading>
             )}
             {screen === 'today' && (
               <IconButton label="지금 실행" tooltip="지금 실행" icon={<Icon icon={ArrowPathIcon} size="lg" />} variant="ghost" isDisabled={running} onClick={() => setRunning(true)} />
@@ -158,12 +183,12 @@ function PhoneApp({slug, mode, layout, initialScreen}: {slug: Slug; mode: Mode; 
           <div className="phone-body">
             {screen === 'today' && (
               <VStack gap={3} padding={4}>
-                {/* 반복 주제: 인스타그램 스토리처럼 (SC-04 진입) */}
+                {/* 추적 줄: 추적 중인 아이디어(인스타그램 스토리 형태). 오늘 업데이트가 있으면 강조색 고리 → SC-14 */}
                 <div className="story">
-                  {TOPICS.map(t => (
-                    <div className="story-item" key={t.label}>
-                      <div className={`story-ring ${t.seen ? 'seen' : ''}`}><Avatar name={t.label} size="lg" /></div>
-                      <Text type="supporting" maxLines={1}>{t.label}</Text>
+                  {[...TRACKED].sort((a, b) => b.news - a.news).map(t => (
+                    <div className="story-item" key={t.id} onClick={() => { setTrackId(t.id); setScreen('trackDetail'); }} style={{cursor: 'pointer'}}>
+                      <div className={`story-ring ${t.news ? '' : 'seen'}`}><Avatar name={t.short} size="lg" /></div>
+                      <Text type="supporting" maxLines={1}>{t.title}</Text>
                     </div>
                   ))}
                 </div>
@@ -250,6 +275,64 @@ function PhoneApp({slug, mode, layout, initialScreen}: {slug: Slug; mode: Mode; 
               </VStack>
             )}
 
+            {screen === 'track' && (
+              <VStack gap={3} padding={4}>
+                <HStack justify="between"><Text type="supporting">추적 3/10 · 오늘 업데이트 2건</Text><Text type="supporting">신호 강도 = 최근 7일 관련 글</Text></HStack>
+                {TRACKED.map(t => (
+                  <ClickableCard key={t.id} label={t.title} onClick={() => { setTrackId(t.id); setScreen('trackDetail'); }}>
+                    <VStack gap={2}>
+                      <HStack justify="between" vAlign="center"><Heading level={4}>{t.title}</Heading><Badge label={TREND_LABEL[t.trend]} variant={TREND_VARIANT[t.trend]} /></HStack>
+                      <HStack justify="between" vAlign="center">
+                        <HStack gap={1}><Token label={t.cat} size="sm" color="blue" />{t.news ? <Badge label={`오늘 새 소식 ${t.news}`} variant="warning" /> : <Badge label={t.quiet ? '조용함' : '추적 중'} variant="neutral" />}</HStack>
+                        <Text type="supporting">마지막 {t.last}</Text>
+                      </HStack>
+                      {t.updates[0] && <Text type="supporting" maxLines={2}>{t.updates[0].summary}</Text>}
+                      <Text type="supporting">{t.started}부터 추적 · 신호 강도 {t.strength}</Text>
+                    </VStack>
+                  </ClickableCard>
+                ))}
+                <Text type="supporting">밀어서 추적 종료 · 30일 새 소식이 없으면 "조용함"</Text>
+              </VStack>
+            )}
+
+            {screen === 'trackDetail' && (
+              <VStack gap={3} padding={4}>
+                <VStack gap={1}>
+                  <Heading level={2}>{tracked.title}</Heading>
+                  <HStack gap={1}><Token label={tracked.cat} size="sm" color="blue" /><Badge label={tracked.quiet ? '조용함' : '추적 중'} variant="neutral" /><Badge label={TREND_LABEL[tracked.trend]} variant={TREND_VARIANT[tracked.trend]} /></HStack>
+                </VStack>
+                <Card variant="muted"><VStack gap={2}>
+                  <HStack justify="between"><Text type="label">신호 강도 {tracked.strength}</Text><Text type="supporting">{tracked.started}부터 추적</Text></HStack>
+                  <HStack gap={1} vAlign="end">
+                    {tracked.bars.map((v, i) => <ProgressBar key={i} label={`${7 - i}일 전`} isLabelHidden value={v ? Math.min(100, 30 + v * 23) : 4} />)}
+                  </HStack>
+                  <HStack justify="between"><Text type="supporting">7일 전</Text><Text type="supporting">오늘</Text></HStack>
+                </VStack></Card>
+                <Block title="달라진 점">
+                  {tracked.updates.length === 0
+                    ? <Banner status="info" title="조용함" description="30일 동안 새 소식이 없습니다. 조사는 계속합니다. 키워드를 바꿔 보세요." />
+                    : <VStack gap={2}>{tracked.updates.map(u => (
+                        <Card key={u.date}><VStack gap={1.5}>
+                          <HStack justify="between"><Text type="label">{u.date}</Text><Text type="supporting">근거 {u.n}건</Text></HStack>
+                          <Text>{u.summary}</Text>
+                          <HStack gap={1}>{u.changes.map(c => <Badge key={c} label={c} variant="warning" />)}</HStack>
+                        </VStack></Card>
+                      ))}</VStack>}
+                </Block>
+                <Block title="경쟁 제품 (추적 중 발견)">
+                  {tracked.comps.length ? <VStack gap={0.5}>{tracked.comps.map(c => <Text key={c}>· {c}</Text>)}</VStack> : <Text type="supporting">아직 없음</Text>}
+                </Block>
+                <Block title="추적 키워드">
+                  <HStack gap={1}>{tracked.keywords.map(k => <Token key={k} label={k} size="sm" onRemove={() => {}} />)}<Token label="+ 추가" size="sm" /></HStack>
+                  <Text type="supporting">카드 제목·태그·주제·경쟁 제품에서 자동 추출 · 출처별 전용 검색에 사용</Text>
+                </Block>
+                <HStack gap={2}>
+                  <Button label="원래 카드 보기" variant="secondary" onClick={() => open(tracked.from, 'today')} />
+                  <Button label="추적 종료" variant="ghost" />
+                </HStack>
+              </VStack>
+            )}
+
             {screen === 'archive' && (
               <VStack gap={3} padding={4}>
                 <TextInput label="검색" isLabelHidden value={query} onChange={v => setQuery(v)} />
@@ -297,6 +380,7 @@ function PhoneApp({slug, mode, layout, initialScreen}: {slug: Slug; mode: Mode; 
           <Divider />
           <HStack justify="around" paddingBlock={2}>
             <TabIcon label="오늘" on={screen === 'today' || (screen === 'detail' && backTo === 'today')} outline={HomeIcon} solid={HomeSolid} onClick={() => setScreen('today')} />
+            <TabIcon label="추적" on={screen === 'track' || screen === 'trackDetail'} outline={SignalIcon} solid={SignalSolid} onClick={() => setScreen('track')} />
             <TabIcon label="보관함" on={screen === 'archive' || (screen === 'detail' && backTo === 'archive')} outline={ArchiveBoxIcon} solid={ArchiveSolid} onClick={() => setScreen('archive')} />
             <TabIcon label="설정" on={screen === 'settings'} outline={Cog6ToothIcon} solid={CogSolid} onClick={() => setScreen('settings')} />
           </HStack>

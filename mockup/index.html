@@ -180,6 +180,18 @@ const CARDS = [
    comp:[], hist:[], effort:"1인 3주", diff:"한국 회계 기준 맞춤", risk:"책임 소재 때문에 도입 거부", valid:"회계사 5명 인터뷰 + 질문 목록 샘플 평가",
    caveats:["기술 신호가 없어 '근거 부족' 경고 대상"], links:2, score:6.5, invalid:true},
 ];
+const TRACKED = [
+  {id:"t1", title:"로컬 LLM 회의록 앱", from:"c1", cat:"workflow-automation", started:"11/13", last:"오늘", news:3, trend:"UP", strength:7.8, status:"추적 중",
+   kw:["meeting-notes","local-llm","whisper","설치형 회의록"], comps:["클라우드 회의록 서비스 A","오픈소스 B (신규)"],
+   ups:[
+    {d:"11/19", s:"설치형 회의록 오픈소스가 새로 공개됐고(경쟁), 보안 규정 불만 글이 2건 더 올라왔다(수요).", ch:["새 경쟁 제품","수요 증가"], n:3},
+    {d:"11/17", s:"양자화 음성 모델 v2가 나와 노트북 처리 속도가 1.6배 빨라졌다(업체 주장).", ch:["기술 새 버전"], n:1},
+    {d:"11/14", s:"경쟁 서비스 A가 가격을 20% 올렸다는 글.", ch:["위험 변화"], n:1}], bars:[1,0,2,0,1,0,3]},
+  {id:"t2", title:"소상공인 문의 응대 봇", from:"c2", cat:"commerce-marketing", started:"11/18", last:"오늘", news:1, trend:"FLAT", strength:5.1, status:"추적 중",
+   kw:["customer-support","smb","ai-agent"], comps:[], ups:[{d:"11/19", s:"메신저 API 정책 변경 예고 — 자동 응답 제한 가능성.", ch:["위험 변화"], n:1}], bars:[0,0,0,0,0,1,1]},
+  {id:"t3", title:"연구실 논문 다이제스트", from:"c4", cat:"data-search", started:"10/20", last:"31일 전", news:0, trend:"DOWN", strength:1.2, status:"조용함",
+   kw:["research-digest","arxiv"], comps:["연구 요약 서비스 C"], ups:[], bars:[0,0,0,0,0,0,0]},
+];
 const state = {screen:"SC-01", st:{}, stars:{c2:true}, notInterested:{}, sheet:null, toast:null, setupStep:1, filters:{star:false}, expandedLinks:false};
 
 /* ===================== 화면 정의 ===================== */
@@ -205,6 +217,16 @@ const SCREENS = [
   states:["기본","관심 없음 이유 선택","근거 링크 펼침","확인 필요 있음"],
   entry:["SC-01·SC-03 카드","메일 링크 ideacollector://card/{id}"],
   open:["메모·공유를 MVP에 넣을지"]},
+ {g:"추적 탭", id:"SC-13", name:"추적 목록", mvp:true, tab:"track", isNew:true,
+  purpose:"★한 아이디어가 그 뒤로 어떻게 변하는지 한곳에서 본다.",
+  feats:["F-33 관심 추적(★=추적 시작, 종료, 조용함)","F-35 추적 업데이트(신호 강도 화살표)"],
+  data:["TrackedStore(TrackedIdea)","TrackingUpdate 최신 1건","신호 강도·추이: 코드 계산(design §7-2)"],
+  states:["기본","추적 없음","한도 도달"], entry:["하단 탭 추적","SC-01 추적 줄"], open:["추적 한도 10개가 적당한지"]},
+ {g:"추적 탭", id:"SC-14", name:"추적 상세", mvp:true, tab:"track", back:"SC-13", isNew:true,
+  purpose:"한 아이디어의 변화 기록과 지금 상태를 본다.",
+  feats:["F-35 달라진 점 타임라인·신호 강도 추이","F-33 추적 키워드 편집·추적 종료","F-36 주간 심층 조사(L)"],
+  data:["TrackedIdea","TrackingUpdate 목록","IdeaCard(원래 카드)","Item(근거)"],
+  states:["기본","아직 업데이트 없음","조용함"], entry:["SC-13 줄","SC-01 추적 줄","추적 업데이트 알림","메일 ideacollector://track/{id}"], open:["주간 심층 조사를 MVP에 넣을지(현재 L)"]},
  {g:"보관함 탭", id:"SC-03", name:"지난 카드", mvp:true, tab:"archive",
   purpose:"지난 카드를 다시 찾고 비교한다.",
   feats:["F-12 날짜별 보관함","F-13 필터·검색(★만, 분류, 태그, 글자)"],
@@ -290,7 +312,7 @@ function appbar(title, opts={}){
   return `<div class="appbar">${back}<div class="t">${title}</div>${opts.right||""}</div>`;
 }
 function tabs(active){
-  const t=[["today","오늘","SC-01"],["archive","보관함","SC-03"],["settings","설정","SC-06"]];
+  const t=[["today","오늘","SC-01"],["track","추적","SC-13"],["archive","보관함","SC-03"],["settings","설정","SC-06"]];
   return `<div class="tabs">${t.map(([k,l,to])=>`<button class="${k===active?"on":""}" data-nav="${to}"><span class="ic"></span>${l}</button>`).join("")}</div>`;
 }
 function phone(inner, tab){
@@ -360,6 +382,14 @@ R["SC-00"] = s => {
   }
   return phone(appbar("시작하기")+`<div class="scr">${body}</div>`);
 };
+const trendIc = t => t==="UP"?`<span style="color:var(--ok)">▲ 상승</span>`:t==="DOWN"?`<span style="color:var(--bad)">▼ 하락</span>`:`<span class="muted">■ 유지</span>`;
+function trackRow(){
+  const ts = TRACKED.filter(t=>t.status!=="종료").sort((a,b)=>b.news-a.news);
+  return `<div class="row" style="gap:12px;overflow-x:auto;padding:2px 0 10px">${ts.map(t=>`<div data-nav="SC-14" data-track="${t.id}" style="display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;flex:none;width:62px">
+    <div style="padding:2px;border-radius:50%;background:${t.news?"var(--accent)":"var(--line)"}"><div style="width:52px;height:52px;border-radius:50%;border:2px solid #fff;background:var(--box);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px">${esc(t.title.slice(0,2))}</div></div>
+    <div class="tiny" style="max-width:62px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${esc(t.title)}</div></div>`).join("")}
+    <div style="flex:none;width:62px;display:flex;flex-direction:column;align-items:center;gap:3px"><div style="width:56px;height:56px;border-radius:50%;border:1px dashed var(--line);display:flex;align-items:center;justify-content:center;color:var(--ink3)">★</div><div class="tiny">★로 추가</div></div></div>`;
+}
 function criteriaForm(){
   return `<div class="field"><label>개발 범위</label><div class="chips"><span class="chip sel">1인</span><span class="chip">2~3인</span></div><div class="chips" style="margin-top:4px"><span class="chip">2주</span><span class="chip sel">4주</span><span class="chip">8주</span></div></div>
   <div class="field"><label>대상 고객 (여러 개)</label><div class="chips"><span class="chip sel">개발자</span><span class="chip sel">소규모 사업자</span><span class="chip">일반 소비자</span><span class="chip">기업</span><span class="chip">교육</span></div></div>
@@ -379,7 +409,8 @@ R["SC-01"] = s => {
   if(s==="키 확인 실패") banner = `<div class="box bad small" data-nav="SC-11" style="cursor:pointer">Claude 키 확인 실패 — OpenAI로 대신 실행했습니다. 키를 확인해 주세요 ›</div>`;
   if(s==="카드 0개") { cards=[]; banner=`<div class="box soft small">오늘은 조건(기술 신호 + 수요/경쟁 신호)을 채운 아이디어가 없습니다. 수집 412건 중 후보 6건.<br><u data-nav="SC-10a">실행 상세 보기</u></div>`; }
   const runBtn = `<button class="act" ${s==="실행 중"?"disabled":""} data-sheet="rerun">지금 실행</button>`;
-  return phone(appbar("오늘의 아이디어",{right:runBtn})+`<div class="scr">${top}${banner}${cards.map(cardRow).join("")}</div>`,"today");
+  const track = trackRow();
+  return phone(appbar("오늘의 아이디어",{right:runBtn})+`<div class="scr">${track}${top}${banner}${cards.map(cardRow).join("")}</div>`,"today");
 };
 R["SC-02"] = s => {
   if(s==="관심 없음 이유 선택" && !state.sheet) state.sheet="ni";
@@ -417,6 +448,36 @@ R["SC-03"] = s => {
     <div class="input ${empty?"":"ph"}" style="margin-bottom:8px">${empty?"블록체인":"🔍 제목·설명·태그 검색"}</div>
     <div class="chips" style="margin-bottom:6px"><button class="chip ${onlyStar?"sel":""}" data-setstate="SC-03:${onlyStar?"기본":"★만"}">★만</button><span class="chip">분류 ▾</span><span class="chip">태그 ▾</span><span class="chip sel">관심 없음 숨김</span></div>
     ${list}</div>`,"archive");
+};
+R["SC-13"] = s => {
+  if(s==="추적 없음") return phone(appbar("추적")+`<div class="scr"><div class="box soft small" style="text-align:center;padding:28px 16px"><div class="h">아직 추적 중인 아이디어가 없습니다</div>카드의 ★를 누르면 그 아이디어를 매일 계속 조사해 여기에 쌓아 드립니다.<div style="margin-top:12px"><button class="btn pri" data-nav="SC-01">오늘의 카드 보기</button></div></div></div>`,"track");
+  const head = `<div class="row sb" style="margin-bottom:8px"><span class="tiny">추적 ${s==="한도 도달"?"10":"3"}/10 · 오늘 업데이트 2건</span><span class="tiny">신호 강도 = 최근 7일 관련 글</span></div>`;
+  const full = s==="한도 도달" ? `<div class="box warn small">추적이 가득 찼습니다(10/10). 새로 ★하려면 가장 오래 조용한 "연구실 논문 다이제스트"를 멈출까요? <u>멈추고 추가</u></div>` : "";
+  return phone(appbar("추적")+`<div class="scr">${head}${full}${TRACKED.map(t=>`<div class="card" data-nav="SC-14" data-track="${t.id}" style="${t.status==="조용함"?"opacity:.65":""}">
+     <div class="row sb"><div class="title">${esc(t.title)}</div><span class="small">${trendIc(t.trend)}</span></div>
+     <div class="row sb" style="margin-top:4px"><div class="chips">${chipCat(t.cat)}${t.news?`<span class="chip badge">오늘 새 소식 ${t.news}</span>`:`<span class="chip">${t.status}</span>`}</div><span class="tiny">마지막 ${t.last}</span></div>
+     ${t.ups[0]?`<div class="small muted" style="margin-top:6px">${esc(t.ups[0].s)}</div>`:""}
+     <div class="tiny" style="margin-top:4px">${t.started}부터 추적 · 신호 강도 ${t.strength}</div></div>`).join("")}
+     <div class="tiny" style="text-align:center;margin-top:6px">밀어서 추적 종료 · 30일 새 소식이 없으면 "조용함"</div></div>`,"track");
+};
+R["SC-14"] = s => {
+  const t = TRACKED.find(x=>x.id===(state.track||"t1"));
+  const none = s==="아직 업데이트 없음", quiet = s==="조용함";
+  const bars = `<div class="row" style="gap:3px;align-items:flex-end;height:36px">${t.bars.map(v=>`<i style="flex:1;border-radius:2px;background:${v?"var(--accent)":"var(--line2)"};height:${6+v*10}px"></i>`).join("")}</div><div class="row sb tiny"><span>7일 전</span><span>오늘</span></div>`;
+  const ups = none ? `<div class="box soft small">추적을 시작했습니다. 내일 실행부터 관련 글을 찾아 여기에 쌓습니다.</div>` :
+    (quiet||!t.ups.length) ? `<div class="box soft small">30일 동안 새 소식이 없습니다(조용함). 조사는 계속합니다. 키워드를 바꿔 보세요.</div>` :
+    t.ups.map(u=>`<div class="box" style="margin-bottom:8px"><div class="row sb"><b class="small">${u.d}</b><span class="tiny">근거 ${u.n}건 · <u>원문</u></span></div><div class="small" style="margin:4px 0">${esc(u.s)}</div><div class="chips">${u.ch.map(c=>`<span class="chip badge">${c}</span>`).join("")}</div></div>`).join("");
+  return phone(appbar("추적 상세",{back:"SC-13"})+`<div class="scr">
+    <div class="h" style="font-size:17px">${esc(t.title)}</div>
+    <div class="row sb" style="margin:4px 0 8px"><div class="chips">${chipCat(t.cat)}<span class="chip">${quiet?"조용함":t.status}</span></div><span class="small">${trendIc(quiet?"DOWN":t.trend)}</span></div>
+    <div class="box soft"><div class="row sb small"><span>신호 강도 <b>${quiet?1.2:t.strength}</b></span><span class="tiny">${t.started}부터 추적</span></div>${bars}</div>
+    <div class="sec">달라진 점</div>${ups}
+    <div class="sec">경쟁 제품 (추적 중 발견)</div>${t.comps.length?t.comps.map(c=>`<div class="small">· ${esc(c)}</div>`).join(""):`<div class="tiny">아직 없음</div>`}
+    <div class="sec">추적 키워드</div><div class="chips">${t.kw.map(k=>`<span class="chip">${esc(k)} ✕</span>`).join("")}<span class="chip">+ 추가</span></div>
+    <div class="tiny" style="margin-top:4px">카드 제목·태그·주제·경쟁 제품에서 자동 추출 · 출처별 전용 검색에 사용</div>
+    <div class="sec">주간 심층 조사 <span class="pill l">L</span></div><div class="tiny">주 1회 웹 검색으로 경쟁·시장 변화 정리(비용 상한)</div>
+    <div class="row" style="margin-top:12px"><button class="btn" style="flex:1" data-nav="SC-02" data-card="${t.from}">원래 카드 보기</button><button class="btn" style="flex:1" data-toast="추적을 멈췄습니다 · 기록은 남습니다">추적 종료</button></div>
+  </div>`,"track");
 };
 R["SC-04"] = () => phone(appbar("반복 주제",{back:"SC-03",right:`<span class="pill l">L</span>`})+`<div class="scr">
   <div class="tiny" style="margin-bottom:8px">최근 30일 · 2번 이상 나온 주제</div>
@@ -518,9 +579,12 @@ R["MAIL"] = s => `<div class="mail"><div class="mh">보낸 사람 sender@gmail.c
   <div class="sec">목차</div>${CARDS.filter(c=>!c.invalid).map((c,i)=>`<div class="small">${i+1}. ${esc(c.title)} <span class="chip cat">${CATS[c.cat]}</span> ${badges(c)}</div>`).join("")}
   ${CARDS.filter(c=>!c.invalid).slice(0,2).map((c,i)=>`<div class="box" style="margin-top:12px"><div class="h">${i+1}. ${esc(c.title)}</div><div class="small muted">${esc(c.one)}</div><div class="small" style="margin-top:6px"><b>오늘 고른 이유</b> ${esc(c.why)}</div><div class="small"><b>핵심 근거</b> ${esc((c.tech[0]||c.demand[0]).t)} · ${esc((c.demand[0]||c.comp[0]||c.tech[0]).t)}</div><div class="small"><b>가장 큰 위험</b> ${esc(c.risk)}</div><div style="margin-top:6px"><u style="color:var(--accent)" data-nav="SC-02" data-card="${c.id}">앱에서 보기 ›</u></div></div>`).join("")}
   <div class="tiny" style="margin-top:6px">… 카드 3~5 같은 형식</div>
+  <div class="sec">추적 업데이트</div>
+  ${TRACKED.filter(t=>t.news).map(t=>`<div class="box"><div class="row sb"><b class="small">${esc(t.title)}</b><span class="small">${trendIc(t.trend)}</span></div><div class="small muted">${esc(t.ups[0].s)}</div><div style="margin-top:4px"><u style="color:var(--accent)" data-nav="SC-14" data-track="${t.id}">앱에서 보기 ›</u></div></div>`).join("")}
   <div class="tiny" style="border-top:1px solid var(--line2);margin-top:14px;padding-top:8px">오늘 비용 $0.14 · 이번 달 $2.31 (추정) · 실행 1분 05초 · HTML + 일반 텍스트 동시 발송</div></div></div>`;
 R["NOTI"] = () => `<div class="noti"><div class="tiny" style="margin-bottom:8px">알림 (누르면 해당 화면으로)</div>
   <div class="n" data-nav="SC-01"><b class="small">AI 아이디어</b><div class="small">오늘의 카드 5개가 준비됐습니다 · 수집 412 → 카드 5</div></div>
+  <div class="n" data-nav="SC-14" data-track="t1"><b class="small">AI 아이디어 · 추적 업데이트</b><div class="small">"로컬 LLM 회의록 앱"에 새 경쟁 제품·수요 글 3건 외 1개 아이디어</div></div>
   <div class="n" data-nav="SC-10a"><b class="small">AI 아이디어 · 실행 실패</b><div class="small">Reddit 시간 초과 · 일부 출처로 실행했습니다</div></div>
   <div class="n" data-nav="SC-11"><b class="small">AI 아이디어 · 키 확인 필요</b><div class="small">Claude 키 인증에 실패했습니다. 키를 확인해 주세요</div></div></div>`;
 
@@ -562,7 +626,7 @@ function showToast(msg, undoFn){ state.toast=msg; undo=undoFn||null; render(); c
 document.addEventListener("click", e=>{
   const t = e.target.closest("[data-star],[data-ni],[data-undo],[data-sheet],[data-close],[data-togglelinks],[data-setstate],[data-toast],[data-nav]");
   if(!t) return;
-  if(t.dataset.star!==undefined){ e.stopPropagation(); const id=t.dataset.star; state.stars[id]=!state.stars[id]; showToast(state.stars[id]?"★ 관심에 추가했습니다":"관심을 해제했습니다",()=>{state.stars[id]=!state.stars[id];}); return; }
+  if(t.dataset.star!==undefined){ e.stopPropagation(); const id=t.dataset.star; state.stars[id]=!state.stars[id]; showToast(state.stars[id]?"★ 추적을 시작했습니다 · 추적 탭에서 매일 업데이트":"추적을 멈췄습니다 · 기록은 남습니다",()=>{state.stars[id]=!state.stars[id];}); return; }
   if(t.dataset.ni){ const id=state.card||"c1"; state.notInterested[id]=t.dataset.ni; closeSheet(); showToast("관심 없음으로 표시했습니다 · 다음 날 반영",()=>{delete state.notInterested[id];}); return; }
   if(t.dataset.undo!==undefined){ if(undo) undo(); state.toast=null; render(); return; }
   if(t.dataset.sheet){ state.sheet=t.dataset.sheet; render(); return; }
@@ -570,7 +634,7 @@ document.addEventListener("click", e=>{
   if(t.dataset.close!==undefined && (e.target===t || t.tagName==="BUTTON")){ closeSheet(); render(); return; }
   if(t.dataset.toast){ const m=t.dataset.toast; if(t.dataset.closeAfter!==undefined) closeSheet(); showToast(m); return; }
   if(t.dataset.setstate){ const [id,st]=t.dataset.setstate.split(/:(.+)/); if(t.dataset.closeAfter!==undefined) closeSheet(); state.st[id]=st; if(t.dataset.nav) state.screen=t.dataset.nav; else if(id!==state.screen && !byId[state.screen].states.includes(st)) {} render(); return; }
-  if(t.dataset.nav){ e.preventDefault(); if(t.dataset.card) state.card=t.dataset.card; state.screen=t.dataset.nav; state.sheet=null; state.expandedLinks=false; render(); document.getElementById("stage").scrollTop=0; }
+  if(t.dataset.nav){ e.preventDefault(); if(t.dataset.card) state.card=t.dataset.card; if(t.dataset.track) state.track=t.dataset.track; state.screen=t.dataset.nav; state.sheet=null; state.expandedLinks=false; render(); document.getElementById("stage").scrollTop=0; }
 });
 document.getElementById("exportNotes").addEventListener("click",()=>{
   const md = "# 와이어프레임 검토 메모\n\n" + SCREENS.filter(s=>notes[s.id]).map(s=>`## ${s.id} ${s.name}\n${notes[s.id]}\n`).join("\n");
