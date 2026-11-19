@@ -5,7 +5,6 @@ import collector.model.DroppedItem
 import collector.model.Item
 import collector.model.RunReport
 import collector.pipeline.Pipeline
-import collector.port.SecretProvider
 import collector.profile.ProfileLoader
 import collector.source.GitHubAdapter
 import collector.source.HackerNewsAdapter
@@ -36,7 +35,10 @@ fun main(args: Array<String>) = runBlocking {
         return@runBlocking
     }
     println("· 프로필: " + profiles.profiles.joinToString { "${it.config.name}(임계값 ${it.config.threshold})" })
-    val secrets = SecretProvider { System.getenv(it) }
+    val secrets = DotEnv.secretProvider(DotEnv.load(File(".env")))
+    val keyStatus = listOf("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GITHUB_TOKEN")
+        .joinToString { "$it ${if (secrets.get(it) != null) "있음" else "없음"}" }   // 값은 출력하지 않음
+    println("· 비밀값: $keyStatus")
     val http = Http.client()
     val seen = JsonFileSeenStore(File("out/seen.json"))
     val pipeline = Pipeline(
