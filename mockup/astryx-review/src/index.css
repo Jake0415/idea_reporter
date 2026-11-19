@@ -1,0 +1,6 @@
+@import '@astryxdesign/core/reset.css';
+@import '@astryxdesign/core/astryx.css';
+
+/* 검토용 페이지 바탕(폰 프레임 바깥). 앱 화면 안은 Astryx 토큰만 쓴다. */
+html, body, #root { height: 100%; }
+body { background: #e5e7eb; }

@@ -1,0 +1,58 @@
+{
+  "name": "feed",
+  "like": "neutral",
+  "mode": "both",
+  "settings": [
+    {
+      "thing": "accent",
+      "value": "#0095F6",
+      "source": "dial"
+    },
+    {
+      "thing": "neutral",
+      "value": "#737373",
+      "source": "dial"
+    },
+    {
+      "thing": "corners",
+      "value": "small",
+      "source": "dial"
+    },
+    {
+      "thing": "font",
+      "value": "system",
+      "source": "dial"
+    },
+    {
+      "thing": "--color-background-body",
+      "value": "#FFFFFF",
+      "source": "token",
+      "mode": "light"
+    },
+    {
+      "thing": "--color-background-body",
+      "value": "#000000",
+      "source": "token",
+      "mode": "dark"
+    },
+    {
+      "thing": "--color-background-surface",
+      "value": "#FFFFFF",
+      "source": "token",
+      "mode": "light"
+    },
+    {
+      "thing": "--color-background-surface",
+      "value": "#000000",
+      "source": "token",
+      "mode": "dark"
+    },
+    {
+      "thing": "vibrancy",
+      "value": "30",
+      "source": "dial"
+    }
+  ],
+  "lifted": [],
+  "palette": "29d5d56d734b903202c8a50b845299c647bced41c9314f2bd70be3177e5d1efd"
+}
