@@ -15,7 +15,7 @@
 - 인스타그램 제외(API 제한·약관 위험). X는 필요 시 선별 계정만(유료).
 - 출처: Hacker News, GitHub, Hugging Face, Reddit, Product Hunt, (선택) arXiv — 공식 API 우선, HTML 파싱은 피한다.
 - 모델: 1차 분류 `claude-haiku-5-5`, 최종 작성 `claude-opus-5-5`. 일일 비용 상한(`dailyBudgetUsd`)을 둔다.
-- [Horizon](https://github.com/Thysrael/Horizon)(MIT) **설계만 차용**해 Kotlin으로 새로 구현: 신호 프로필 3종(기술·수요·경쟁), 프로필별 임계값, 주제 합치기, 분류별 상한, 댓글 수집, 과거 기록 검색, 인용 검증, 출처 통계, RSS. 코드·프롬프트를 옮기면 `THIRD_PARTY_NOTICES.md`에 고지.
+- [Horizon](https://github.com/Thysrael/Horizon)(MIT) **설계만 차용**해 Kotlin으로 새로 구현: 신호 프로필 3종(기술·수요·경쟁), 프로필별 임계값, 주제 합치기, 분류별 상한, 댓글 수집, 과거 기록 검색, 인용 검증, 출처 통계, RSS 입력 어댑터. 근거는 [docs/verification/horizon-rea-check.md](docs/verification/horizon-rea-check.md). 코드·프롬프트를 옮기면 `THIRD_PARTY_NOTICES.md`에 고지.
 - MVP 하단 탭은 오늘·보관함·설정. 수집함(SC-05)은 나중이지만 탈락 이유 기록은 1단계부터.
 
 ## 미정 사항
