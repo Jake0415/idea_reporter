@@ -25,7 +25,7 @@
 ## 개발 순서
 0. 메뉴·기능 설계 — 완료([docs/menu.md](docs/menu.md))
 1. `core` 골격, `Item`, HN·GitHub 어댑터, 규칙 필터, 스팸 묶음 거르기, 중복 제거, 탈락 이유 기록 — 완료(PC 실행·테스트 확인)
-2. Classifier(프로필 배정·주제 합치기) + 선택(임계값·상한) + 댓글·과거 기록 + IdeaGenerator(피드백 반영) + 인용 검증 + 비용 기록 + HtmlRenderer
+2. (완료: 출처 기준 조정, 신호 프로필 3종·ProfileLoader) Classifier(프로필 배정·주제 합치기) + 선택(임계값·상한) + 댓글·과거 기록 + IdeaGenerator(피드백 반영) + 인용 검증 + 비용 기록 + HtmlRenderer
 3. 나머지 어댑터 4개, 설정 파일 연동
 4. `app`: WorkManager, Room, Keystore, SMTP 메일
 5. 앱 화면: 오늘 카드·보관함·출처/평가 기준 수정·실행 기록

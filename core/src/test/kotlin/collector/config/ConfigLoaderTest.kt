@@ -11,7 +11,8 @@ class ConfigLoaderTest {
         val hn = file.sources.filterIsInstance<HnConfig>().single()
         val gh = file.sources.filterIsInstance<GitHubConfig>().single()
 
-        assertEquals(50, hn.minRawScore)
+        assertEquals(20, hn.minRawScore)
+        assertEquals(100, gh.fetchPerQuery)
         assertEquals(listOf("tech-signal"), gh.profile)
         assertTrue("crypto" in file.excludeKeywords)
     }

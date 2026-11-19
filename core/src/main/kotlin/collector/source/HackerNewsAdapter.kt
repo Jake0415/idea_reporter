@@ -29,16 +29,16 @@ class HackerNewsAdapter(
                 .addQueryParameter("query", query)
                 .addQueryParameter("tags", "story")
                 .addQueryParameter("numericFilters", "created_at_i>$since,points>=${config.minRawScore}")
-                .addQueryParameter("hitsPerPage", config.maxItems.coerceIn(1, 100).toString())
+                .addQueryParameter("hitsPerPage", config.fetchPerQuery.coerceIn(1, 100).toString())
                 .build()
             val body = Http.getText(http, Request.Builder().url(url).build())
             Http.json.decodeFromString(Response.serializer(), body).hits
                 .filter { !it.title.isNullOrBlank() }
                 .forEach { hits.putIfAbsent(it.objectID, it) }   // 검색어끼리 겹치면 하나만
         }
+        // 출처당 최대 건수(maxItems)는 거르고 난 뒤 파이프라인이 적용한다(SourceCap)
         return hits.values
             .sortedByDescending { it.points ?: 0 }
-            .take(config.maxItems)
             .map { it.toItem() }
     }
 

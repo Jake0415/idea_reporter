@@ -1,0 +1,12 @@
+{
+  "id": "market-signal",
+  "name": "경쟁 제품",
+  "description": "이미 나온 AI 제품과 그 빈틈",
+  "threshold": 5.0,
+  "maxCandidates": 4,
+  "content": {
+    "classifyMaxChars": 1000,
+    "generateMaxChars": 3000,
+    "sampling": "prefix"
+  }
+}

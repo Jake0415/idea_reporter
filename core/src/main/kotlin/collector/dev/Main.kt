@@ -6,6 +6,7 @@ import collector.model.Item
 import collector.model.RunReport
 import collector.pipeline.Pipeline
 import collector.port.SecretProvider
+import collector.profile.ProfileLoader
 import collector.source.GitHubAdapter
 import collector.source.HackerNewsAdapter
 import collector.source.Http
@@ -29,6 +30,12 @@ fun main(args: Array<String>) = runBlocking {
     val keepUnseen = "--keep-unseen" in args
 
     val sources = ConfigLoader.load(File("config/sources.local.json"))
+    val profiles = ProfileLoader.loadDefaults()
+    ProfileLoader.validateRouting(sources, profiles).takeIf { it.isNotEmpty() }?.let {
+        println("출처 설정 오류:\n- " + it.joinToString("\n- "))
+        return@runBlocking
+    }
+    println("· 프로필: " + profiles.profiles.joinToString { "${it.config.name}(임계값 ${it.config.threshold})" })
     val secrets = SecretProvider { System.getenv(it) }
     val http = Http.client()
     val seen = JsonFileSeenStore(File("out/seen.json"))

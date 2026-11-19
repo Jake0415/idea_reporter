@@ -3,10 +3,11 @@
     {
       "id": "hn",
       "enabled": true,
-      "queries": ["LLM", "AI agent", "Show HN AI"],
+      "queries": ["LLM", "AI agent", "Show HN AI", "GPT", "Claude", "open source model"],
       "windowHours": 24,
-      "minRawScore": 50,
+      "minRawScore": 20,
       "maxItems": 60,
+      "fetchPerQuery": 50,
       "profile": ["tech-signal", "demand-signal", "market-signal"]
     },
     {
@@ -16,6 +17,7 @@
       "createdWithinDays": 14,
       "minRawScore": 200,
       "maxItems": 50,
+      "fetchPerQuery": 100,
       "profile": ["tech-signal"]
     }
   ],

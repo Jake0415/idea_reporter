@@ -34,7 +34,7 @@ class GitHubAdapter(
                 .addQueryParameter("q", "$query created:>=$sinceDate stars:>=${config.minRawScore}")
                 .addQueryParameter("sort", "stars")
                 .addQueryParameter("order", "desc")
-                .addQueryParameter("per_page", config.maxItems.coerceIn(1, 100).toString())
+                .addQueryParameter("per_page", config.fetchPerQuery.coerceIn(1, 100).toString())
                 .build()
             val request = Request.Builder().url(url)
                 .header("Accept", "application/vnd.github+json")
@@ -45,9 +45,9 @@ class GitHubAdapter(
             Http.json.decodeFromString(Response.serializer(), body).items
                 .forEach { repos.putIfAbsent(it.id, it) }
         }
+        // 출처당 최대 건수(maxItems)는 스팸을 거른 뒤 파이프라인이 적용한다(SourceCap)
         return repos.values
             .sortedByDescending { it.stargazers_count }
-            .take(config.maxItems)
             .map { it.toItem() }
     }
 

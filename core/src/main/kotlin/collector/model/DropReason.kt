@@ -13,7 +13,7 @@ enum class DropReason {
     ALREADY_SEEN,            // ③ 이전 실행에서 이미 본 글
     BELOW_PROFILE_THRESHOLD, // ⑤ 프로필 임계값 미달 (2단계)
     SAME_TOPIC,              // ⑤ 주제 합치기 (2단계)
-    OVER_QUOTA,              // ⑤ 상한 초과 (2단계)
+    OVER_QUOTA,              // ② 출처 최대 건수 초과, ⑤ 프로필·분류 상한 초과(2단계)
     CLASSIFY_FAILED,         // ④ 분류 실패 (2단계)
     BUDGET_EXCEEDED          // 비용 상한 초과 (2단계)
 }

@@ -1,0 +1,4 @@
+{
+  "profiles": ["tech-signal", "demand-signal", "market-signal"],
+  "default": "tech-signal"
+}

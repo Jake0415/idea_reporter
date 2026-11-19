@@ -11,6 +11,7 @@ import collector.port.SeenStore
 import collector.refine.Deduplicator
 import collector.refine.RuleFilter
 import collector.refine.Scorer
+import collector.refine.SourceCap
 import collector.refine.SpamClusterFilter
 import collector.source.SourceAdapter
 import kotlinx.coroutines.CancellationException
@@ -64,10 +65,11 @@ class Pipeline(
         // ② 규칙 필터
         onStage("filter")
         t = System.nanoTime()
-        val ruled = RuleFilter(file.excludeKeywords)
-            .filter(collected, configs.associateBy { it.sourceId }, startedAt)
-        val filtered = SpamClusterFilter().filter(ruled.kept)
-        dropped += ruled.dropped + filtered.dropped
+        val configById = configs.associateBy { it.sourceId }
+        val ruled = RuleFilter(file.excludeKeywords).filter(collected, configById, startedAt)
+        val despammed = SpamClusterFilter().filter(ruled.kept)
+        val filtered = SourceCap.cap(despammed.kept, configById)
+        dropped += ruled.dropped + despammed.dropped + filtered.dropped
         stages += StageResult("filter", collected.size, filtered.kept.size, ms(t))
 
         // ③ 중복 제거 + 이미 본 글 제외

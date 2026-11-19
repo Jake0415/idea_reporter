@@ -1,0 +1,12 @@
+{
+  "id": "tech-signal",
+  "name": "기술 신호",
+  "description": "새로 가능해진 기술: 모델, 오픈소스, API, 기법",
+  "threshold": 6.0,
+  "maxCandidates": 8,
+  "content": {
+    "classifyMaxChars": 1000,
+    "generateMaxChars": 4000,
+    "sampling": "prefix"
+  }
+}

@@ -57,14 +57,17 @@ ai-idea-collector/
 | `market-signal` | 경쟁 제품 | 새로 출시된 AI 제품 | 반응, 빈틈(불만 댓글), 따라 하기 쉬운 정도 | Product Hunt |
 
 - 작성 프롬프트(`ideas.md`)를 쓸 때 검증 보고서 §4-10의 차용 문구 후보(제목 15단어 이하·제품명 유지, 막연한 전망이면 생략, 추천 수는 합의 근거 아님, 과거 인용은 직접 연결만)를 반영한다.
+- 프로필 기본값(구현됨): tech-signal 임계값 6.0·후보 8·앞부분 1000/4000자, demand-signal 6.0·8·앞중간끝 1500/6000자, market-signal 5.0·4·앞부분 1000/3000자. `ProfileLoader`가 시작할 때 값 범위·모르는 필드·빈 파일과 출처의 프로필 배정을 검증한다.
 - HN·RSS처럼 섞인 출처는 후보 `["tech-signal","demand-signal","market-signal"]` 중에서 1차 분류가 배정한다(별도 호출 없음).
 - 프로필 파일 구조:
 
 ```
-core/src/main/resources/profiles/<id>/
-├── profile.json    id, 이름, 임계값 기본값, 입력 글자 예산, 샘플링 방식
-├── match.md        포함/제외 기준
-└── analysis.md     0~10 평가표와 판단 요령
+core/src/main/resources/profiles/
+├── index.json      프로필 목록과 기본 프로필(tech-signal)
+└── <id>/
+    ├── profile.json    id, 이름, 설명, threshold, maxCandidates, content(classifyMaxChars·generateMaxChars·sampling)
+    ├── match.md        포함/제외 기준, 애매할 때
+    └── analysis.md     0~10 평가표와 판단 요령(라이선스·업체 주장·추천 수 등)
 core/src/main/resources/prompts/
 ├── classify.md     1차 분류 공통 지시(배치, 출력 스키마)
 ├── ideas.md        아이디어 종합 지시(카드 스키마, 인용 규칙)
@@ -101,7 +104,7 @@ app/src/main/kotlin/collector/app/
 | 단계 | 내용 | 하루 처리량 | LLM 비용 |
 |---|---|---|---|
 | ① Collect | 어댑터 병렬 실행, 출처 하나 실패해도 계속 | 300~500건 | 0 |
-| ② Filter | 기간, 출처별 최소 점수, 제외 키워드, **스팸 묶음**(같은 출처에서 3개 이상 계정이 같은 이름·설명으로 찍어 낸 저장소) → 탈락 이유 기록 | → ~150 | 0 |
+| ② Filter | 기간, 출처별 최소 점수, 제외 키워드, **스팸 묶음**(같은 출처에서 3개 이상 계정이 같은 이름·설명으로 찍어 낸 저장소), **출처 상한**(거른 뒤 출처당 `maxItems`) → 탈락 이유 기록. 어댑터는 스팸을 감안해 검색어당 `fetchPerQuery`건을 넉넉히 받아 온다 | → ~150 | 0 |
 | ③ Dedupe | URL 정규화, 제목 유사도, 이미 본 글, 여러 출처 합치기(`alsoSeenIn`), 점수 0~100 통일 | → ~80 | 0 |
 | ④ Classify | Haiku 5.5, 25건씩 묶어: 프로필 배정·0~10점·이유·한 줄 요약·태그 3~5개·`topicKey` | 80 | ~$0.01 |
 | ⑤ Select | 프로필별 임계값 → `topicKey`로 주제 합치기(중복 항목 URL·댓글은 대표에 붙임) → 프로필별·분류별 상한. **비싼 ⑦ 작성 전에** 후보를 줄여 비용 절약 | → 15~20 | 0 |
@@ -177,8 +180,8 @@ data class SourceStats(val source: String, val days: Int, val fetched: Int, val 
 
 | id | 방법 | 조건 | 1차 필터 | 프로필 |
 |---|---|---|---|---|
-| hn | Algolia 검색 API | queries: LLM, AI agent, Show HN AI / 24h | minScore 50 | 후보 3종 |
-| github | 저장소 검색 API | topic:llm, ai-agent, generative-ai / 14일 내 생성, 스타순 | minStars 200 | tech-signal |
+| hn | Algolia 검색 API | queries: LLM, AI agent, Show HN AI, GPT, Claude, open source model / 24h, 검색어당 50 | minScore 20, 최대 60 | 후보 3종 |
+| github | 저장소 검색 API | topic:llm, ai-agent, generative-ai / 14일 내 생성, 스타순, 검색어당 100 | minStars 200, 최대 50 | tech-signal |
 | hf | 모델·Spaces API | 트렌딩 정렬 | 상위 30 | tech-signal |
 | reddit | 서브레딧 인기글(OAuth 권장) | LocalLLaMA, SaaS, ChatGPT, artificial / day | minUpvotes 100 | demand-signal (LocalLLaMA는 후보 2종) |
 | ph | GraphQL API(토큰) | topic artificial-intelligence, 오늘 | minVotes 50 | market-signal |
