@@ -1,6 +1,8 @@
 package collector.refine
 
 import collector.config.SourceConfig
+import collector.config.HfConfig
+import collector.config.RssConfig
 import collector.model.DropReason
 import collector.model.DroppedItem
 import collector.model.Item
@@ -14,10 +16,24 @@ object SourceCap {
         val kept = mutableListOf<Item>()
         val dropped = mutableListOf<DroppedItem>()
         for ((source, group) in items.groupBy { it.source }) {
-            val limit = configs[source]?.maxItems ?: Int.MAX_VALUE
-            val sorted = group.sortedByDescending { it.rawScore }
-            kept += sorted.take(limit)
-            sorted.drop(limit).forEach { dropped += DroppedItem(it, DropReason.OVER_QUOTA, "출처 최대 ${limit}건 초과") }
+            fun take(sorted: List<Item>, limit: Int, label: String): List<Item> {
+                sorted.drop(limit).forEach { dropped += DroppedItem(it, DropReason.OVER_QUOTA, "$label 최대 ${limit}건 초과") }
+                return sorted.take(limit)
+            }
+            val config = configs[source]
+            if (config is RssConfig) {
+                val limits = config.feeds.associate { it.name to it.maxItems.coerceAtLeast(0) }
+                for ((feed, entries) in group.groupBy { it.extra["feed"] }) {
+                    kept += take(entries.sortedByDescending { it.publishedAt }, limits[feed] ?: config.maxItems, "피드")
+                }
+            } else {
+                val candidates = if (config is HfConfig) {
+                    group.groupBy { it.externalId.substringBefore(':') }.values.flatMap { repos ->
+                        take(repos.sortedByDescending { it.rawScore }, config.maxItemsPerKind.coerceAtLeast(0), "종류")
+                    }
+                } else group
+                kept += take(candidates.sortedByDescending { it.rawScore }, config?.maxItems ?: Int.MAX_VALUE, "출처")
+            }
         }
         return FilterResult(kept, dropped)
     }

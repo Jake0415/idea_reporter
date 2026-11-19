@@ -10,6 +10,7 @@ import collector.profile.ProfileLoader
 import collector.prompt.PromptResolver
 import collector.refine.UrlNormalizer
 import collector.source.SourceAdapter
+import collector.source.RedditAdapter
 import collector.stage.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
@@ -24,7 +25,8 @@ class FullPipeline(
     private val config: PipelineConfig, private val profiles: ProfileLoader.ProfileSet, prompts: PromptResolver,
     router: LlmRouter, private val costs: CostGuard, private val http: OkHttpClient,
     private val history: RunHistory, private val trackedStore: TrackedStore,
-    val collectOnly: Boolean = false
+    val collectOnly: Boolean = false,
+    private val reddit: RedditAdapter? = null
 ) {
     private val classifier = Classifier(config, profiles, prompts, router)
     private val selector = Selector(config)
@@ -77,7 +79,7 @@ class FullPipeline(
 
     internal suspend fun run(base: PipelineResult, collected: List<Item>, tracking: List<Item>, tracked: List<TrackedIdea>,
                              now: Instant, today: LocalDate, onStage: (String) -> Unit): PipelineResult {
-        val comments = CommentFetcher(http, config.commentsPerItem)
+        val comments = CommentFetcher(http, config.commentsPerItem, reddit)
         val started = System.nanoTime()
         val date = today.toString()
         val stages = base.report.stages.toMutableList()

@@ -25,6 +25,16 @@
       "maxItems": 50,
       "fetchPerQuery": 100,
       "profile": ["tech-signal"]
+    },
+    { "id": "hf", "enabled": true },
+    { "id": "reddit", "enabled": false },
+    { "id": "ph", "enabled": false },
+    {
+      "id": "rss",
+      "enabled": false,
+      "feeds": [
+        { "name": "Hugging Face Blog", "url": "https://huggingface.co/blog/feed.xml", "profile": "tech-signal", "maxItems": 10 }
+      ]
     }
   ],
   "excludeKeywords": ["crypto", "giveaway", "hiring"]

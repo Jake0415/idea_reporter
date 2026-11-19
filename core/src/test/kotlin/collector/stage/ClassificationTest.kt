@@ -115,6 +115,43 @@ class ClassificationTest {
         assertEquals(79, requests.get())
     }
 
+    @Test fun redditTopCommentsReachClassificationAndBodyReachesEnrichment() = runTest {
+        okhttp3.mockwebserver.MockWebServer().use { server ->
+            fun enqueue(body: String) = server.enqueue(okhttp3.mockwebserver.MockResponse().setBody(body))
+            val fullText = "request ".repeat(410)
+            val longComment = "x".repeat(400)
+            val replies = (1..6).joinToString(",") {
+                val body = if (it == 1) longComment else "Reply $it"
+                """{"kind":"t1","data":{"author":"author","body":"$body"}}"""
+            }
+            val thread = """[{"data":{"children":[]}},{"data":{"children":[$replies]}}]"""
+            enqueue("""{"access_token":"mock","expires_in":3600}""")
+            enqueue(collector.fixture("reddit_top.json").replace("Model feedback", fullText))
+            server.enqueue(okhttp3.mockwebserver.MockResponse().setResponseCode(500))
+            enqueue(thread)
+            val http = OkHttpClient()
+            val base = server.url("/").toString()
+            val reddit = collector.source.RedditAdapter(http, { "mock" }, base, base)
+            val post = reddit.fetch(collector.config.RedditConfig(subreddits = listOf("LocalLLaMA")), collector.NOW).single()
+            val comments = CommentFetcher(http, 5, reddit)
+            assertTrue(comments.fetch(post).isEmpty())
+            val contexts = comments.contexts(listOf(post))
+
+            val result = classifier { request, keys ->
+                val input = Json.parseToJsonElement(request.user).jsonObject.getValue("items").jsonArray.single().jsonObject
+                assertEquals(300, input.getValue("snippet").jsonPrimitive.content.length)
+                assertEquals(listOf(longComment.take(300), "Reply 2", "Reply 3", "Reply 4", "Reply 5"),
+                    input.getValue("topComments").jsonArray.map { it.jsonPrimitive.content })
+                keys.map { row(it).copy(profile = "demand-signal") }
+            }.classify(listOf(post), emptyList(), emptyList(), contexts)
+
+            val signal = Enricher(http, profiles, comments).enrich(result.signals, emptyMap()).single()
+            assertEquals(fullText.take(3000), signal.body)
+            assertEquals(5, signal.enrichedComments.size)
+            assertEquals(4, server.requestCount)
+        }
+    }
+
     @Test fun cancellingFirstHnCallerLetsWaitingCallerLoadThread() = runTest {
         val firstStarted = CompletableDeferred<Unit>()
         val releaseFirst = CountDownLatch(1)

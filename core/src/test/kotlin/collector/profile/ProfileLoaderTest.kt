@@ -10,6 +10,15 @@ import kotlin.test.assertTrue
 
 class ProfileLoaderTest {
     @Test
+    fun rejectsUnknownSubredditProfile() {
+        val file = collector.config.ConfigLoader.parse("""{"sources":[{"id":"reddit",
+            "subredditProfiles":{"LocalLLaMA":["missing-profile"]}}]}""")
+        val errors = ProfileLoader.validateRouting(file, ProfileLoader.loadDefaults())
+        assertTrue(errors.single().contains("reddit/LocalLLaMA"))
+        assertTrue(errors.single().contains("missing-profile"))
+    }
+
+    @Test
     fun `기본 프로필 3종을 읽고 검증을 통과한다`() {
         val set = ProfileLoader.loadDefaults { path ->
             assertTrue(path.endsWith(".json"))

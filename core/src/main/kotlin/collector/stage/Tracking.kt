@@ -47,6 +47,7 @@ class TrackingSearch(private val config: PipelineConfig.Tracking) {
             is HnConfig -> source.copy(queries = queries, minRawScore = minimum)
             is GitHubConfig -> source.copy(queries = queries.map { "\"${it.replace("\"", "")}\" in:name,description" },
                 minRawScore = minimum)
+            else -> return emptyList()
         }
         val filtered = RuleFilter(excluded).filter(adapter.fetch(search, now), mapOf(source.sourceId to search), now)
         return SpamClusterFilter().filter(filtered.kept).kept.sortedByDescending { it.rawScore }

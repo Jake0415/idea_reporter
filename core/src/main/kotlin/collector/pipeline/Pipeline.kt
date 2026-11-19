@@ -9,6 +9,10 @@ import collector.refine.Scorer
 import collector.refine.SourceCap
 import collector.refine.SpamClusterFilter
 import collector.source.SourceAdapter
+import collector.config.RssConfig
+import collector.source.RssAdapter
+import collector.source.RssFetchException
+import collector.source.MissingSourceSecret
 import kotlinx.coroutines.CancellationException
 import java.io.IOException
 import kotlinx.coroutines.TimeoutCancellationException
@@ -68,7 +72,7 @@ class Pipeline(
             val tracking = async { full?.search(tracked, configs, adapterById, startedAt, file.excludeKeywords) }
             regular.awaitAll() to tracking.await()
         }
-        val normal = fetches.flatMap { it.second }
+        val normal = fetches.flatMap { it.items }
         val (tracking, trackingIssues) = search ?: (emptyList<Item>() to emptyList())
         val collected = normal + tracking
         stages += StageResult("collect", 0, collected.size, ms(t))
@@ -103,30 +107,40 @@ class Pipeline(
         val report = RunReport(
             runDate = today.toString(),
             startedAt = startedAt.toString(),
-            sources = fetches.map { (source, _) -> source.copy(trackingFetched = tracking.count { it.source == source.source }) },
+            sources = fetches.map { (source) -> source.copy(trackingFetched = tracking.count { it.source == source.source }) },
             stages = stages,
             dropCounts = dropped.groupingBy { it.reason }.eachCount(),
             totalMillis = ms(totalStart),
-            issues = trackingIssues
+            issues = trackingIssues + fetches.mapNotNull { it.warning }
         )
         val base = PipelineResult(scored, dropped, report)
         return full?.takeUnless { it.collectOnly }?.run(base, collected, tracking, tracked, startedAt, today, onStage) ?: base
     }
 
-    private suspend fun fetchOne(config: collector.config.SourceConfig, now: Instant): Pair<SourceResult, List<Item>> {
+    private data class Fetch(val source: SourceResult, val items: List<Item> = emptyList(), val warning: String? = null)
+
+    private suspend fun fetchOne(config: collector.config.SourceConfig, now: Instant): Fetch {
         val start = System.nanoTime()
         val adapter = adapterById[config.sourceId]
-            ?: return SourceResult(config.sourceId, 0, "어댑터 없음", 0) to emptyList()
+            ?: return Fetch(SourceResult(config.sourceId, 0, "어댑터 없음", 0))
+        fun failure(reason: String?) = Fetch(SourceResult(config.sourceId, 0, reason, ms(start)))
         return try {
-            val items = withTimeout(sourceTimeout) { adapter.fetch(config, now) }
-                .map { if (it.profileHint.isEmpty()) it.copy(profileHint = config.profile) else it }
-            SourceResult(config.sourceId, items.size, null, ms(start)) to items
+            val (fetched, warning) = if (adapter is RssAdapter && config is RssConfig) {
+                val result = adapter.fetchWithSummary(config, now, sourceTimeout)
+                result.items to result.warning
+            } else withTimeout(sourceTimeout) { adapter.fetch(config, now) } to null
+            val items = fetched.map { if (it.profileHint.isEmpty()) it.copy(profileHint = config.profile) else it }
+            Fetch(SourceResult(config.sourceId, items.size, millis = ms(start)), items, warning)
         } catch (e: TimeoutCancellationException) {
-            SourceResult(config.sourceId, 0, "시간 초과(${sourceTimeout})", ms(start)) to emptyList()
+            failure("시간 초과(${sourceTimeout})")
         } catch (e: CancellationException) {
             throw e
+        } catch (e: RssFetchException) {
+            failure(e.message)
+        } catch (e: MissingSourceSecret) {
+            failure(e.message)
         } catch (e: Exception) {
-            SourceResult(config.sourceId, 0, if (full == null) e.message ?: "수집 요청 실패" else safeFailure(e), ms(start)) to emptyList()
+            failure(if (full == null) e.message ?: "수집 요청 실패" else safeFailure(e))
         }
     }
 

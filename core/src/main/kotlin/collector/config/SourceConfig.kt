@@ -1,7 +1,13 @@
 package collector.config
 
+import collector.source.rssPrivatePattern
+import collector.source.rssPrivateValues
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.*
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.time.Duration
 
 /**
@@ -61,6 +67,97 @@ data class GitHubConfig(
     override val sourceId: String get() = "github"
     override fun window(): Duration = Duration.ofDays(createdWithinDays.toLong())
 }
+
+@Serializable
+@SerialName("hf")
+data class HfConfig(
+    override val enabled: Boolean = true,
+    override val minRawScore: Int = 0,
+    override val maxItems: Int = 30,
+    override val fetchPerQuery: Int = 30,
+    override val profile: List<String> = listOf("tech-signal"),
+    val maxItemsPerKind: Int = 15
+) : SourceConfig() {
+    override val sourceId: String get() = "hf"
+    override fun window(): Duration = Duration.ofDays(365_250)
+}
+
+@Serializable
+@SerialName("reddit")
+data class RedditConfig(
+    override val enabled: Boolean = false,
+    val subreddits: List<String> = listOf("LocalLLaMA", "SaaS", "ChatGPT", "artificial"),
+    val minUpvotes: Int = 100,
+    override val maxItems: Int = 30,
+    override val fetchPerQuery: Int = 25,
+    override val profile: List<String> = listOf("demand-signal"),
+    val subredditProfiles: Map<String, List<String>> = mapOf("LocalLLaMA" to listOf("tech-signal", "demand-signal"))
+) : SourceConfig() {
+    override val sourceId: String get() = "reddit"
+    override val minRawScore: Int get() = minUpvotes
+    override fun window(): Duration = Duration.ofDays(1)
+}
+
+@Serializable
+@SerialName("ph")
+data class ProductHuntConfig(
+    override val enabled: Boolean = false,
+    val topic: String = "artificial-intelligence",
+    val minVotes: Int = 50,
+    override val maxItems: Int = 30,
+    override val fetchPerQuery: Int = 30,
+    override val profile: List<String> = listOf("market-signal")
+) : SourceConfig() {
+    override val sourceId: String get() = "ph"
+    override val minRawScore: Int get() = minVotes
+    override fun window(): Duration = Duration.ofDays(1)
+}
+
+@Serializable
+data class RssFeed(
+    val name: String,
+    val url: String,
+    @Serializable(with = RssProfilesSerializer::class) val profile: List<String>,
+    val maxItems: Int = 10
+) {
+    constructor(name: String, url: String, profile: String, maxItems: Int = 10) :
+        this(name, url, listOf(profile), maxItems)
+}
+
+internal object RssProfilesSerializer : JsonTransformingSerializer<List<String>>(ListSerializer(String.serializer())) {
+    override fun transformDeserialize(element: JsonElement): JsonElement =
+        if (element is JsonPrimitive && element.isString) JsonArray(listOf(element)) else element
+}
+
+@Serializable
+@SerialName("rss")
+data class RssConfig(
+    override val enabled: Boolean = false,
+    val windowHours: Int = 168,
+    val feeds: List<RssFeed> = listOf(RssFeed("Hugging Face Blog", "https://huggingface.co/blog/feed.xml", "tech-signal"))
+) : SourceConfig() {
+    init {
+        val names = mutableSetOf<String>()
+        for ((index, feed) in feeds.withIndex()) {
+            val privatePattern = feed.url.toHttpUrlOrNull()?.rssPrivateValues()?.rssPrivatePattern()
+            require(privatePattern?.containsMatchIn(feed.name) != true) {
+                "RSS 피드 ${index + 1}번 이름에 URL 비밀값 포함"
+            }
+            if (!names.add(feed.name)) throw DuplicateRssFeedNameException(feed.name)
+        }
+    }
+
+    override val sourceId: String get() = "rss"
+    override val minRawScore: Int get() = 0
+    override val maxItems: Int get() = feeds.sumOf { it.maxItems.coerceAtLeast(0) }
+    override val fetchPerQuery: Int get() = feeds.maxOfOrNull { it.maxItems } ?: 0
+    override val profile: List<String> get() = feeds.flatMap { it.profile }.distinct()
+    override fun window(): Duration = Duration.ofHours(windowHours.toLong())
+}
+
+internal class DuplicateRssFeedNameException(name: String) : IllegalArgumentException(
+    if ("://" in name || name.any { it.isISOControl() }) "RSS 피드 이름 중복" else "RSS 피드 이름 중복: $name"
+)
 
 /** sources.default.json 전체 */
 @Serializable

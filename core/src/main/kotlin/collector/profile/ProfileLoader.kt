@@ -1,6 +1,8 @@
 package collector.profile
 
 import collector.config.SourcesFile
+import collector.config.RedditConfig
+import collector.config.RssConfig
 import kotlinx.serialization.json.Json
 
 /**
@@ -52,11 +54,18 @@ object ProfileLoader {
 
     /** 출처 설정의 profile 배정이 실제 프로필을 가리키는지. 문제 목록(비어 있으면 정상) */
     fun validateRouting(sources: SourcesFile, set: ProfileSet): List<String> = buildList {
+        fun validate(label: String, profiles: List<String>) {
+            if (profiles.isEmpty()) add("$label: profile 이 비어 있습니다")
+            val unknown = profiles.filter { set[it] == null }
+            if (unknown.isNotEmpty()) add("$label: 알 수 없는 프로필 $unknown")
+            if (profiles.size != profiles.toSet().size) add("$label: profile 에 중복이 있습니다")
+        }
         for (s in sources.sources) {
-            if (s.profile.isEmpty()) add("${s.sourceId}: profile 이 비어 있습니다")
-            val unknown = s.profile.filter { set[it] == null }
-            if (unknown.isNotEmpty()) add("${s.sourceId}: 알 수 없는 프로필 $unknown")
-            if (s.profile.size != s.profile.toSet().size) add("${s.sourceId}: profile 에 중복이 있습니다")
+            validate(s.sourceId, s.profile)
+            if (s is RedditConfig) s.subredditProfiles.forEach { (subreddit, profiles) ->
+                validate("reddit/$subreddit", profiles)
+            }
+            if (s is RssConfig) s.feeds.forEach { feed -> validate("rss/${feed.name}", feed.profile) }
         }
     }
 

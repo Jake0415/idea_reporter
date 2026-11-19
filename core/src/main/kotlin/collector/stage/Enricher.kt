@@ -7,6 +7,7 @@ import collector.model.Signal
 import collector.profile.ProfileLoader
 import collector.profile.Sampling
 import collector.source.Http
+import collector.source.RedditAdapter
 import collector.source.plainText
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
@@ -25,9 +26,13 @@ import java.net.Proxy
 import java.net.UnknownHostException
 import java.util.concurrent.ConcurrentHashMap
 
-class CommentFetcher(private val http: OkHttpClient, private val limit: Int) {
+class CommentFetcher(
+    private val http: OkHttpClient, private val limit: Int, private val reddit: RedditAdapter? = null
+) {
     suspend fun fetch(item: Item): List<Comment> {
-        if (item.source != "hn" || limit == 0) return emptyList()
+        if (limit <= 0) return emptyList()
+        if (item.source == "reddit") return fetchRedditComments(item.externalId).take(limit)
+        if (item.source != "hn") return emptyList()
         val thread = fetchThread(item) ?: return emptyList()
         return thread.children.asSequence()
             .filter { !it.author.isNullOrBlank() && !it.text.isNullOrBlank() }
@@ -36,12 +41,17 @@ class CommentFetcher(private val http: OkHttpClient, private val limit: Int) {
 
     internal suspend fun contexts(items: List<Item>): Map<String, HnContext> = coroutineScope {
         val slots = Semaphore(4)
-        items.asSequence().filter { it.source == "hn" }.take(40).map { item ->
+        val candidates = items.filter { it.source == "hn" }.take(40) + items.filter { it.source == "reddit" }
+        candidates.distinctBy { it.key }.map { item ->
             async { slots.withPermit { context(item)?.let { item.key to it } } }
-        }.toList().awaitAll().filterNotNull().toMap()
+        }.awaitAll().filterNotNull().toMap()
     }
 
     internal suspend fun context(item: Item): HnContext? {
+        if (item.source == "reddit" && reddit != null) {
+            val top = fetchRedditComments(item.externalId).take(5)
+            return HnContext(topComments = top.map { it.text.take(300) })
+        }
         if (item.source != "hn") return null
         val thread = fetchThread(item) ?: return null
         val story = plainText(thread.storyText ?: thread.text, 1000)
@@ -57,6 +67,22 @@ class CommentFetcher(private val http: OkHttpClient, private val limit: Int) {
     }
 
     private val threads = ConcurrentHashMap<String, CachedThread>()
+
+    private class CachedRedditComments {
+        val mutex = Mutex()
+        var comments: List<Comment>? = null
+    }
+
+    private val redditComments = ConcurrentHashMap<String, CachedRedditComments>()
+
+    private suspend fun fetchRedditComments(id: String): List<Comment> {
+        val adapter = reddit ?: return emptyList()
+        val cached = redditComments.computeIfAbsent(id) { CachedRedditComments() }
+        return cached.mutex.withLock {
+            cached.comments ?: fetchOrNull { adapter.comments(id, maxOf(limit, 5)) }
+                ?.also { cached.comments = it }.orEmpty()
+        }
+    }
 
     private suspend fun fetchThread(item: Item): Thread? {
         val cached = threads.computeIfAbsent(item.externalId) { CachedThread() }
@@ -114,7 +140,9 @@ class Enricher(http: OkHttpClient, private val profiles: ProfileLoader.ProfileSe
                 slots.withPermit {
                     val item = signal.item
                     val budget = checkNotNull(profiles[signal.classification.profile]).config.content
-                    val text = fetchOrNull {
+                    val text = if (item.source in setOf("hf", "reddit", "ph", "rss")) {
+                        if (item.source == "reddit") item.extra["body"].orEmpty().ifBlank { item.snippet } else item.snippet
+                    } else fetchOrNull {
                         val request = Request.Builder().url(item.url).build()
                         val html = withContext(Dispatchers.IO) {
                             articleHttp.newCall(request).execute().use { response ->

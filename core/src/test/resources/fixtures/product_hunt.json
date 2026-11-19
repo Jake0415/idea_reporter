@@ -1,0 +1,11 @@
+﻿{
+  "data": {
+    "posts": {
+      "edges": [
+        {"node":{"id":"1","name":"AI product","tagline":"Example launch","url":"https://www.producthunt.com/posts/ai-product","votesCount":70,"createdAt":"2026-11-19T00:00:00Z"}},
+        {"node":{"id":"2","name":"Older launch","url":"https://www.producthunt.com/posts/older","votesCount":100,"createdAt":"2026-11-18T23:59:59Z"}},
+        {"node":{"id":"3","name":"Low vote launch","url":"https://www.producthunt.com/posts/low-vote","votesCount":49,"createdAt":"2026-11-19T00:00:00Z"}}
+      ]
+    }
+  }
+}

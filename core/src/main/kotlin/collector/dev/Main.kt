@@ -1,6 +1,7 @@
 package collector.dev
 
 import collector.config.ConfigLoader
+import collector.config.DuplicateRssFeedNameException
 import collector.config.PipelineConfig
 import collector.llm.*
 import collector.model.DropReason
@@ -15,6 +16,10 @@ import collector.prompt.PromptResolver
 import collector.report.HtmlRenderer
 import collector.source.GitHubAdapter
 import collector.source.HackerNewsAdapter
+import collector.source.HuggingFaceAdapter
+import collector.source.ProductHuntAdapter
+import collector.source.RedditAdapter
+import collector.source.RssAdapter
 import collector.source.Http
 import collector.stage.IdeaGenerator
 import kotlinx.coroutines.runBlocking
@@ -38,6 +43,7 @@ fun main(args: Array<String>) {
     } catch (e: Exception) {
         println("실행 실패 · ${safeFailure(e)}")
         when (e) {
+            is DuplicateRssFeedNameException -> println("출처 설정 오류 · ${e.message}")
             is IllegalArgumentException -> println("사용법 · --keep-unseen --no-llm --budget <USD>")
             is RunLockedException -> println("다른 실행이 진행 중입니다.")
         }
@@ -99,9 +105,13 @@ private suspend fun runMain(args: Array<String>) {
             val router = LlmRouter(providers, costs, models, defaults.models.fallback, preflightBudget = true)
             val tracked = JsonFileTrackedStore(out.resolve("tracked.json"))
             val seen = JsonFileSeenStore(out.resolve("seen.json"))
-            val full = FullPipeline(defaults, profiles, prompts, router, costs, http, history, tracked, collectOnly = noLlm)
+            val reddit = RedditAdapter(http, secrets)
+            val full = FullPipeline(defaults, profiles, prompts, router, costs, http, history, tracked,
+                collectOnly = noLlm, reddit = reddit)
             val startedAt = Instant.now()
-            val pipeline = Pipeline(listOf(HackerNewsAdapter(http), GitHubAdapter(http, secrets)), seen, clock = { startedAt },
+            val adapters = listOf(HackerNewsAdapter(http), GitHubAdapter(http, secrets), HuggingFaceAdapter(http),
+                reddit, ProductHuntAdapter(http, secrets), RssAdapter(http))
+            val pipeline = Pipeline(adapters, seen, clock = { startedAt },
                 onStage = { println("· 단계 \u00b7 ${HtmlRenderer.stageName(it)}") }, full = full)
             val result = try {
                 pipeline.run(sources)
