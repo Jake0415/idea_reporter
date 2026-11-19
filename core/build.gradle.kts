@@ -12,6 +12,8 @@ dependencies {
     implementation(libs.coroutines.core)
     implementation(libs.serialization.json)
     implementation(libs.okhttp)
+    implementation("com.anthropic:anthropic-java:3.3.0")
+    implementation("com.openai:openai-java:4.109.0")
 
     testImplementation(kotlin("test"))
     testImplementation(libs.junit.jupiter)

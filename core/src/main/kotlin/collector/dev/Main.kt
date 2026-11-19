@@ -16,6 +16,7 @@ import java.io.File
 import java.io.FileDescriptor
 import java.io.FileOutputStream
 import java.io.PrintStream
+import kotlin.system.exitProcess
 
 /**
  * PC 실행 진입점(1단계 확인용).
@@ -26,6 +27,11 @@ import java.io.PrintStream
  */
 fun main(args: Array<String>) = runBlocking {
     System.setOut(PrintStream(FileOutputStream(FileDescriptor.out), true, "UTF-8"))
+    if ("--llm-smoke" in args) {
+        val secrets = DotEnv.secretProvider(DotEnv.load(File(".env")))
+        if (!llmSmoke(secrets)) exitProcess(1)
+        return@runBlocking
+    }
     val keepUnseen = "--keep-unseen" in args
 
     val sources = ConfigLoader.load(File("config/sources.local.json"))

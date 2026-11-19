@@ -144,7 +144,12 @@ data class StageModel(val provider: ProviderId, val model: String)
 - 인증 실패(키 만료·폐기)는 재시도하지 않고 실행 기록과 알림으로 "키를 확인하세요"를 띄운다.
 
 ### 실행 기록
-- `RunReport`에 LLM 호출 기록 `LlmCall(stage, provider, model, inputTokens, outputTokens, cachedInputTokens, costUsd, fallbackUsed, error)` 목록을 추가한다(SC-10 실행 상세).
+- `RunReport`에 LLM 호출 기록 `LlmCall(stage, provider, model, promptId, promptVersion, inputTokens(캐시 포함), outputTokens, cachedInputTokens, cacheWriteTokens, costUsd, priceFallback, priceUnverified, fallbackUsed, error)` 목록을 추가한다(SC-10 실행 상세). `error`는 사유 코드만: truncated·invalid_json·empty·http_4xx·http_5xx·timeout·auth·key_missing·refused 등(키·응답 본문 금지).
+
+### 구현 결정 (P1, 2026-11-19)
+- SDK: `com.anthropic:anthropic-java:3.3.0`, `com.openai:openai-java:4.109.0`. OpenAI 기본: fast `gpt-5.4-mini`, strong `gpt-5.5`(가격 미검증 표시).
+- 가격: 요청 모델이 가격표에 없으면 호출 전 차단(대체 없음). 응답 모델은 정확 일치 → 날짜 접미사 제거 일치 → 없으면 공급자 최고가 추정(`priceFallback`). Haiku 5.5는 입력 10만 토큰 초과 요금 구간 반영.
+- 잘린 응답(max_tokens/length)·해석 실패는 비용을 기록한 실패로 처리해 대체 대상. 예산을 넘긴 호출의 결과는 반환하고 다음 호출부터 차단(동시 호출 시 소폭 초과 가능). 단계별 시간 제한: 분류·추적 60초, 작성 600초.
 
 ## 6. 디렉터리
 
@@ -302,7 +307,7 @@ app:  RoomPromptStore     PC: FilePromptStore(config/prompts/)
 ```
 
 ```kotlin
-@Serializable data class PromptOverride(val id: String, val text: String, val version: Int, val baseHash: String, val editedAt: Instant)
+@Serializable data class PromptOverride(val id: String, val text: String, val version: String /* 숫자 또는 "unknown"(이력 불일치) */, val baseHash: String, val editedAt: Instant)
 @Serializable data class PromptVersion(val id: String, val version: Int, val text: String, val savedAt: Instant)
 ```
 

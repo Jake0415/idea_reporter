@@ -1,0 +1,6 @@
+[
+  {"provider":"ANTHROPIC","model":"claude-haiku-5-5","tier":"fast","inputUsd":0.10,"outputUsd":0.50,"cachedInputUsd":0.01,"priceVerified":false,"longContext":{"thresholdInputTokens":100000,"input":0.50,"output":2.50}},
+  {"provider":"ANTHROPIC","model":"claude-opus-5-5","tier":"strong","inputUsd":4.00,"outputUsd":20.00,"cachedInputUsd":0.20},
+  {"provider":"OPENAI","model":"gpt-5.4-mini","tier":"fast","inputUsd":0.75,"outputUsd":4.50,"cachedInputUsd":0.075,"priceVerified":false},
+  {"provider":"OPENAI","model":"gpt-5.5","tier":"strong","inputUsd":5.00,"outputUsd":30.00,"cachedInputUsd":0.50,"priceVerified":false}
+]

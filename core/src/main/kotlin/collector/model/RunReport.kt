@@ -1,5 +1,6 @@
 package collector.model
 
+import collector.llm.LlmCall
 import kotlinx.serialization.Serializable
 
 /** 실행 기록. 깔때기(SC-01·메일), 실행 기록(SC-10)에 쓴다. */
@@ -10,7 +11,8 @@ data class RunReport(
     val sources: List<SourceResult>,
     val stages: List<StageResult>,
     val dropCounts: Map<DropReason, Int>,
-    val totalMillis: Long
+    val totalMillis: Long,
+    val llmCalls: List<LlmCall> = emptyList()
 ) {
     val fetchedTotal: Int get() = sources.sumOf { it.fetched }
     val failedSources: List<SourceResult> get() = sources.filter { it.error != null }
