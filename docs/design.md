@@ -74,6 +74,78 @@ core/src/main/resources/prompts/
 └── criteria.default.md  나의 평가 기준(1인 개발 범위, 대상 고객, 제외 분야, 수익화)
 ```
 
+## 5-1. LLM 공급자와 사용자 키
+
+**Claude(Anthropic)와 OpenAI 두 공급자를 지원**하고, 사용자가 **자기 키를 직접 등록**하면 그 공급자가 연동된다. 앱에 개발자 키를 넣어 배포하지 않는다.
+
+### 원칙
+- 키는 사용자가 앱(SC-00, SC-11)에서 등록한다. 하나 이상 있어야 실행된다. 저장은 기기 보안 저장소(Android Keystore)에만, 화면에는 등록 여부와 끝 4자리만 보인다. PC·runner는 환경 변수 `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`.
+- 키는 저장소·문서·로그·실행 기록·대화 기록에 남기지 않는다.
+- **단계별로 공급자와 모델을 따로 고른다.** 예: 분류=Claude Haiku, 작성=OpenAI 상위 모델. 기본값은 등록된 키에 따라 정한다(둘 다 있으면 Claude 기준: 분류 `claude-haiku-5-5`, 작성 `claude-opus-5-5`).
+- 모델 목록은 하드코딩하지 않고, 키 등록 시 각 공급자의 모델 목록 API로 받아 와 고르게 한다. OpenAI 기본 모델 id는 구현할 때 공식 문서로 확인해 정한다.
+
+### 구조
+
+```
+core/src/main/kotlin/collector/llm/
+├── LlmProvider.kt        공급자 공통 인터페이스
+├── AnthropicProvider.kt  Anthropic Java SDK (com.anthropic:anthropic-java)
+├── OpenAiProvider.kt     OpenAI Java SDK (com.openai:openai-java)
+├── LlmRouter.kt          단계 → (공급자, 모델) 선택, 대체 공급자 처리
+├── ModelCatalog.kt       공급자별 모델 목록·가격표(가격은 사용자가 고칠 수 있는 설정)
+└── CostGuard.kt          호출별 토큰·비용 누적, 일일 상한
+```
+
+```kotlin
+enum class ProviderId { ANTHROPIC, OPENAI }
+
+interface LlmProvider {
+    val id: ProviderId
+    /** 키 확인 + 사용 가능한 모델 목록 (키 등록 시 호출) */
+    suspend fun listModels(): List<ModelInfo>
+    /** 구조화된 출력(JSON 스키마)으로 한 번 호출 */
+    suspend fun complete(request: LlmRequest): LlmResult
+}
+
+data class LlmRequest(
+    val model: String,
+    val system: String,          // 고정 지시(캐시 대상): 프로필 평가표, ideas.md
+    val user: String,            // 그날 데이터
+    val jsonSchema: JsonObject,  // 출력 스키마 (ClassifiedItem 목록, IdeaCard 목록)
+    val maxOutputTokens: Int,
+    val effort: Effort = Effort.MEDIUM   // 공급자별 추론 강도 설정으로 변환
+)
+
+data class LlmResult(
+    val json: String,
+    val provider: ProviderId, val model: String,
+    val inputTokens: Int, val outputTokens: Int, val cachedInputTokens: Int,
+    val costUsd: Double,          // ModelCatalog 가격표로 계산
+    val refused: Boolean = false  // 공급자가 거절한 경우
+)
+
+@Serializable
+data class StageModel(val provider: ProviderId, val model: String)
+```
+
+### 공급자 차이를 흡수하는 곳
+
+| 항목 | Claude | OpenAI | 처리 |
+|---|---|---|---|
+| 구조화된 출력 | `output_config.format`(JSON 스키마) | `response_format`(JSON 스키마, strict) | 각 Provider가 같은 `jsonSchema`를 자기 형식으로 변환 |
+| 프롬프트 캐싱 | `cache_control` 지정 | 자동 캐싱 | system(고정)을 앞, user(그날 데이터)를 뒤에 두는 순서를 공통으로 지킴 |
+| 추론 강도 | `output_config.effort` | 모델별 추론 설정 | `Effort`를 공급자 값으로 변환 |
+| 거절 | `stop_reason: refusal` + 서버 측 대체(fallback) | 거절 응답 | `refused=true`로 통일 → LlmRouter가 대체 공급자로 1회 재시도 |
+| 웹 검색(보충 검색, 선택) | 웹 검색 서버 도구 | 웹 검색 도구 | 6단계(선택)에서 공급자별로 구현 |
+| 키 확인 | 모델 목록 API | 모델 목록 API | `listModels()` 성공 여부로 판정 |
+
+### 대체 공급자
+- 단계별로 "대체 공급자 사용"을 켤 수 있다(기본: 두 키가 모두 있으면 켬). 기본 공급자가 오류(인증 실패 제외)·거절·시간 초과면 대체 공급자의 같은 등급 모델로 1회 재시도한다.
+- 인증 실패(키 만료·폐기)는 재시도하지 않고 실행 기록과 알림으로 "키를 확인하세요"를 띄운다.
+
+### 실행 기록
+- `RunReport`에 LLM 호출 기록 `LlmCall(stage, provider, model, inputTokens, outputTokens, cachedInputTokens, costUsd, fallbackUsed, error)` 목록을 추가한다(SC-10 실행 상세).
+
 ## 6. 디렉터리
 
 ```
@@ -83,8 +155,8 @@ core/src/main/kotlin/collector/
 ├── profile/   ProfileLoader, ProfileRouter(명시 배정/후보 배정)
 ├── source/    SourceAdapter + HackerNews/GitHub/HuggingFace/Reddit/ProductHunt/Arxiv/Rss
 ├── refine/    UrlNormalizer, RuleFilter, Deduplicator, Scorer, QuotaSelector
-├── llm/       LlmClient, Classifier, CommentFetcher, Enricher, IdeaGenerator, CitationValidator,
-│              Supplement, CostGuard
+├── llm/       LlmProvider, AnthropicProvider, OpenAiProvider, LlmRouter, ModelCatalog, CostGuard (§5-1)
+├── stage/     Classifier, CommentFetcher, Enricher, IdeaGenerator, CitationValidator, Supplement
 ├── history/   HistorySearch(인터페이스) — 과거 항목·카드 전문 검색
 ├── report/    HtmlRenderer, MarkdownRenderer
 ├── port/      SeenStore, ItemStore, IdeaStore, FeedbackStore, StatsStore, Mailer, SecretProvider
@@ -194,8 +266,11 @@ data class SourceStats(val source: String, val days: Int, val fetched: Int, val 
 
 ```json
 {
-  "classifyModel": "claude-haiku-5-5",
-  "generateModel": "claude-opus-5-5",
+  "models": {
+    "classify": { "provider": "ANTHROPIC", "model": "claude-haiku-5-5" },
+    "generate": { "provider": "ANTHROPIC", "model": "claude-opus-5-5" },
+    "fallback": true
+  },
   "classifyBatchSize": 25,
   "profiles": {
     "tech-signal":   { "threshold": 6.0, "maxCandidates": 8 },
@@ -219,12 +294,13 @@ data class SourceStats(val source: String, val days: Int, val fetched: Int, val 
 - LLM 응답은 구조화된 출력(JSON 스키마)으로 받고, 파싱 실패 시 1회만 재시도, 그래도 실패하면 점수 null로 저장.
 - 인용 검증: 카드의 모든 URL이 이번 실행의 수집 항목에 있어야 함. 없으면 그 근거를 제거하고, 근거가 하나도 안 남는 카드는 버림.
 - 날짜별 실행 키로 같은 날 재실행 시 중복 카드·메일 방지.
-- 비밀값(Anthropic·GitHub·Reddit·Product Hunt 키, Gmail 앱 비밀번호)은 SecretProvider로만 접근. 앱=Android Keystore, runner=환경 변수.
+- 비밀값(Anthropic·OpenAI·GitHub·Reddit·Product Hunt 키, Gmail 앱 비밀번호)은 SecretProvider로만 접근. 앱=Android Keystore, runner=환경 변수. 키 값은 로그·실행 기록·예외 메시지에 남기지 않는다.
 - 어댑터는 fixtures 기반 테스트, LLM 단계는 가짜 LlmClient로 테스트.
-- Claude Opus 5.5 호출에는 서버 측 거절 대비 fallback 설정을 기본으로 넣는다.
+- Claude Opus 5.5 호출에는 서버 측 거절 대비 fallback 설정을 기본으로 넣는다. 공급자를 넘는 대체는 LlmRouter가 맡는다(§5-1).
 
 ## 12. 알려진 제약
 - 안드로이드 WorkManager는 실행 시각을 보장하지 않음(절전·제조사 배터리 관리). 정시가 필요하면 runner + GitHub Actions.
 - Claude 웹 검색/읽기는 로그인 필요한 페이지(X·인스타 피드 등)를 읽지 못함.
 - 웹 검색은 1,000회당 약 $10 + 토큰(가격 페이지에서 확인 필요).
+- 모델 가격은 공급자가 자주 바꾼다. 가격표는 설정값으로 두고, 비용 표시는 "추정"으로 표기한다.
 - 과거 기록 검색은 단어 일치 기반이라 동의어·다른 언어 표현은 못 찾음(Horizon과 같은 한계).

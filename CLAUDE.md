@@ -14,7 +14,8 @@
 - 로직은 순수 Kotlin(JVM) `core` 모듈에 두고, 안드로이드 의존성은 `app`에만. 실행 시각 보장이 필요해지면 `runner`(JVM) + GitHub Actions로 같은 `core`를 돌린다.
 - 인스타그램 제외(API 제한·약관 위험). X는 필요 시 선별 계정만(유료).
 - 출처: Hacker News, GitHub, Hugging Face, Reddit, Product Hunt, (선택) arXiv — 공식 API 우선, HTML 파싱은 피한다.
-- 모델: 1차 분류 `claude-haiku-5-5`, 최종 작성 `claude-opus-5-5`. 일일 비용 상한(`dailyBudgetUsd`)을 둔다.
+- LLM: **Claude(Anthropic)·OpenAI 두 공급자 지원, 사용자가 자기 키를 등록하면 연동**(design.md §5-1). 단계별(분류·작성)로 공급자·모델 선택, 모델 목록은 공급자 API에서 받음, 두 키가 있으면 대체 공급자 1회 재시도. 기본값(Claude): 분류 `claude-haiku-5-5`, 작성 `claude-opus-5-5`. 일일 비용 상한(`dailyBudgetUsd`).
+- **키 취급:** API 키는 코드·문서·설정 파일·로그·커밋에 절대 쓰지 않는다. PC는 환경 변수(`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`), 앱은 Keystore.
 - [Horizon](https://github.com/Thysrael/Horizon)(MIT) **설계만 차용**해 Kotlin으로 새로 구현: 신호 프로필 3종(기술·수요·경쟁), 프로필별 임계값, 주제 합치기, 분류별 상한, 댓글 수집, 과거 기록 검색, 인용 검증, 출처 통계, RSS 입력 어댑터. 근거는 [docs/verification/horizon-rea-check.md](docs/verification/horizon-rea-check.md). 코드·프롬프트를 옮기면 `THIRD_PARTY_NOTICES.md`에 고지.
 - MVP 하단 탭은 오늘·보관함·설정. 수집함(SC-05)은 나중이지만 탈락 이유 기록은 1단계부터.
 
