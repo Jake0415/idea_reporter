@@ -136,6 +136,7 @@ data class ClassifiedItem(
 
 @Serializable
 data class IdeaCard(
+    val id: String, val runDate: LocalDate, // 메일 앱 링크 ideacollector://card/{id}
     val title: String,
     val oneLiner: String,                 // 한 줄 설명
     val whyToday: String,                 // 오늘 고른 이유(추천 이유)
@@ -148,7 +149,9 @@ data class IdeaCard(
     val differentiation: String,
     val biggestRisk: String,              // 가장 큰 위험 1개
     val validationPlan: String,           // 2주·소액으로 검증하는 방법
-    val category: String, val badges: List<String> // 급상승·여러 곳에서 화제·3일 연속 등
+    val caveats: List<String>,            // 확인 필요: 단일 출처, 업체 주장, 커뮤니티 주장 등
+    val category: String, val badges: List<String>, // 급상승·여러 곳에서 화제·3일 연속 등
+    val tags: List<String>
 )
 
 @Serializable
