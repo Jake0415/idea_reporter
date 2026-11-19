@@ -1,0 +1,696 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>트렌드·사업성 분석 시안</title>
+<style>
+:root{
+  --accent:#0095F6; --accent-muted:#B2D9FF; --accent-ink:#00497D;
+  --bg:#FFFFFF; --surface:#FFFFFF; --muted:#F1F1F1; --ink:#000000; --ink2:#474747; --ink3:#8E8E8E;
+  --line:rgba(0,0,0,.08); --line2:rgba(0,0,0,.14);
+  --warn:#B45309; --warn-bg:#FEF3C7; --bad:#B91C1C; --bad-bg:#FEE2E2; --ok:#047857; --ok-bg:#D1FAE5;
+  --page:#F4F5F7; --phone-frame:#1F2937; --shadow:0 10px 30px rgba(0,0,0,.10);
+}
+:root[data-theme="dark"]{
+  --accent-muted:#00497D; --accent-ink:#B2D9FF;
+  --bg:#000000; --surface:#000000; --muted:#1B1B1B; --ink:#FFFFFF; --ink2:#9D9D9D; --ink3:#6E6E6E;
+  --line:rgba(255,255,255,.10); --line2:rgba(255,255,255,.18);
+  --warn:#FBBF24; --warn-bg:#3A2A08; --bad:#F87171; --bad-bg:#3B1111; --ok:#34D399; --ok-bg:#0B3326;
+  --page:#0E0F11; --phone-frame:#2A2D33; --shadow:0 10px 30px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.5 system-ui,"Malgun Gothic","Apple SD Gothic Neo",sans-serif}
+button{font:inherit;cursor:pointer;color:inherit}
+header.top{display:flex;align-items:center;gap:12px;padding:10px 16px;background:var(--surface);border-bottom:1px solid var(--line)}
+header.top h1{font-size:16px;margin:0}
+header.top .meta{color:var(--ink2);font-size:12px}
+header.top .sp{flex:1}
+.hbtn{border:1px solid var(--line2);background:var(--surface);border-radius:8px;padding:5px 10px;font-size:12px}
+.layout{display:grid;grid-template-columns:240px 1fr 340px;height:calc(100vh - 49px)}
+nav#map{overflow:auto;border-right:1px solid var(--line);background:var(--surface);padding:10px}
+nav#map h3{font-size:11px;color:var(--ink3);margin:14px 6px 4px;font-weight:600}
+nav#map a{display:flex;align-items:center;gap:6px;padding:5px 8px;border-radius:8px;color:var(--ink);text-decoration:none;font-size:13px;cursor:pointer}
+nav#map a:hover{background:var(--muted)}
+nav#map a.on{background:var(--accent-muted);color:var(--accent-ink);font-weight:600}
+nav#map a .id{font-family:ui-monospace,Consolas,monospace;font-size:11px;color:var(--ink3);min-width:46px}
+nav#map a.on .id{color:inherit}
+main{overflow:auto;display:flex;justify-content:center;align-items:flex-start;padding:24px}
+aside#info{overflow:auto;border-left:1px solid var(--line);background:var(--surface);padding:14px 16px}
+aside#info h2{font-size:16px;margin:4px 0 2px}
+aside#info .sid{font-family:ui-monospace,Consolas,monospace;color:var(--ink3);font-size:12px}
+aside#info h4{font-size:12px;color:var(--ink3);margin:14px 0 4px}
+aside#info ul{margin:0;padding-left:18px} aside#info li{margin:2px 0}
+.states{display:flex;flex-wrap:wrap;gap:4px}
+.states button{border:1px solid var(--line2);background:var(--muted);border-radius:999px;padding:2px 10px;font-size:12px}
+.states button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.cost0{color:var(--ok);font-weight:600} .costy{color:var(--warn);font-weight:600}
+
+/* phone */
+.phone{width:390px;height:800px;background:var(--bg);border:10px solid var(--phone-frame);border-radius:38px;display:flex;flex-direction:column;overflow:hidden;position:relative;box-shadow:var(--shadow);flex:none}
+.status{height:26px;display:flex;align-items:center;justify-content:space-between;padding:0 20px;font-size:11px;color:var(--ink2);flex:none}
+.appbar{display:flex;align-items:center;gap:8px;padding:6px 14px;flex:none;min-height:48px}
+.appbar .t{font-weight:700;font-size:22px;flex:1;letter-spacing:-.01em}
+.appbar .t.sm{font-size:16px}
+.ib{border:none;background:none;padding:4px;display:flex;align-items:center;justify-content:center;border-radius:8px}
+.ib:hover{background:var(--muted)}
+.ib svg{width:24px;height:24px}
+.scr{flex:1;overflow:auto;padding:4px 14px 20px}
+.tabs{display:flex;border-top:1px solid var(--line);flex:none;background:var(--bg);padding:6px 0 10px}
+.tabs button{flex:1;border:none;background:none;display:flex;justify-content:center;padding:6px 0;color:var(--ink)}
+.tabs svg{width:26px;height:26px}
+.seg{display:flex;gap:6px;margin:2px 0 12px}
+.seg button{border:1px solid var(--line2);background:var(--bg);border-radius:8px;padding:5px 12px;font-size:13px;font-weight:600}
+.seg button.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.weekbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;font-size:13px}
+.weekbar b{font-size:14px}
+.box{border:1px solid var(--line);border-radius:10px;background:var(--surface);padding:11px 12px;margin-bottom:10px}
+.box.soft{background:var(--muted);border-color:transparent}
+.box.warn{background:var(--warn-bg);border-color:transparent;color:var(--warn)}
+.box.bad{background:var(--bad-bg);border-color:transparent;color:var(--bad)}
+.box.ok{background:var(--ok-bg);border-color:transparent;color:var(--ok)}
+.box.info{background:var(--accent-muted);border-color:transparent;color:var(--accent-ink)}
+.sec{font-size:13px;font-weight:700;margin:16px 2px 8px;display:flex;align-items:center;justify-content:space-between}
+.sec span{font-weight:400;font-size:12px;color:var(--ink3)}
+.muted{color:var(--ink2)} .small{font-size:12px} .tiny{font-size:11px;color:var(--ink3)}
+.row{display:flex;align-items:center;gap:8px} .sb{justify-content:space-between} .grow{flex:1;min-width:0}
+.theme{display:flex;align-items:center;gap:10px;padding:10px 2px;border-bottom:1px solid var(--line);cursor:pointer}
+.theme:last-child{border-bottom:none}
+.theme .nm{font-weight:600;font-size:14px;line-height:1.3}
+.theme .mt{font-size:11.5px;color:var(--ink2);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.theme .gr{font-weight:700;font-size:13px;text-align:right;min-width:52px}
+.up{color:var(--ok)} .down{color:var(--bad)}
+.ck{width:22px;height:22px;border-radius:50%;border:1.5px solid var(--line2);flex:none;display:flex;align-items:center;justify-content:center;font-size:12px;color:#fff}
+.ck.on{background:var(--accent);border-color:var(--accent)}
+.mark{display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:700;color:var(--accent);background:var(--accent-muted);border-radius:5px;padding:0 6px;margin-left:4px;vertical-align:1px}
+:root[data-theme="dark"] .mark{color:var(--accent-ink)}
+.hot{font-size:11px;font-weight:700;color:var(--warn);background:var(--warn-bg);border-radius:5px;padding:0 6px;margin-left:4px;vertical-align:1px}
+.tok{display:inline-block;font-size:11px;border-radius:5px;padding:1px 7px;background:var(--muted);color:var(--ink2);margin:0 4px 4px 0;white-space:nowrap}
+.btn{border:1px solid var(--line2);background:var(--bg);border-radius:8px;padding:8px 12px;font-size:13px;font-weight:600}
+.btn.pri{background:var(--accent);color:#fff;border-color:var(--accent)}
+.btn.full{width:100%}
+.btn.dis{opacity:.45;cursor:not-allowed}
+.fab{position:absolute;left:14px;right:14px;bottom:74px;z-index:3;box-shadow:0 6px 18px rgba(0,149,246,.35)}
+.list .li{display:flex;align-items:center;gap:10px;padding:11px 2px;border-bottom:1px solid var(--line);cursor:pointer}
+.list .li:last-child{border-bottom:none}
+.chev{color:var(--ink3)}
+.score{font-weight:800;font-size:18px;min-width:40px;font-variant-numeric:tabular-nums}
+.score.hi{color:var(--accent)}
+.bar{height:6px;border-radius:3px;background:var(--muted);overflow:hidden;flex:1}
+.bar i{display:block;height:100%;background:var(--accent);border-radius:3px}
+.bar.low i{background:var(--warn)}
+.tbl{width:100%;border-collapse:collapse;font-size:12px}
+.tbl td,.tbl th{border-bottom:1px solid var(--line);padding:6px 4px;text-align:left}
+.tbl th{color:var(--ink3);font-weight:600}
+.tbl td.r,.tbl th.r{text-align:right;font-variant-numeric:tabular-nums}
+.sig{border-radius:8px;padding:8px 10px;margin:6px 0;background:var(--muted);font-size:12.5px}
+.sig .src{color:var(--ink3);font-size:11px}
+.blk{border-top:1px solid var(--line);padding:12px 0}
+.blk .bt{font-size:12px;font-weight:700;color:var(--ink2);margin-bottom:6px}
+.sheet-bg{position:absolute;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:flex-end;z-index:5}
+.sheet{background:var(--bg);width:100%;border-radius:22px 22px 0 0;padding:10px 16px 22px;max-height:88%;overflow:auto}
+.sheet .grab{width:40px;height:4px;border-radius:2px;background:var(--line2);margin:0 auto 12px}
+.toggle{width:40px;height:24px;border-radius:12px;background:var(--line2);position:relative;flex:none}
+.toggle.on{background:var(--accent)}
+.toggle::after{content:"";position:absolute;width:20px;height:20px;border-radius:50%;background:#fff;top:2px;left:2px;transition:left .15s}
+.toggle.on::after{left:18px}
+.radio{display:flex;gap:10px;align-items:flex-start;border:1px solid var(--line2);border-radius:10px;padding:10px;margin-bottom:8px;cursor:pointer}
+.radio.on{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
+.radio .dot{width:18px;height:18px;border-radius:50%;border:1.5px solid var(--line2);flex:none;margin-top:1px}
+.radio.on .dot{border:5px solid var(--accent)}
+.step{display:flex;gap:10px;align-items:flex-start;padding:8px 0}
+.step .c{width:22px;height:22px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;border:1.5px solid var(--line2);color:var(--ink3)}
+.step.done .c{background:var(--accent);border-color:var(--accent);color:#fff}
+.step.now .c{border-color:var(--accent);color:var(--accent)}
+.spin{width:44px;height:44px;border-radius:50%;border:4px solid var(--muted);border-top-color:var(--accent);animation:sp 1s linear infinite;margin:18px auto 10px}
+@keyframes sp{to{transform:rotate(360deg)}}
+.bubble{border-radius:14px;padding:9px 12px;margin:8px 0;max-width:86%;font-size:13px}
+.bubble.me{background:var(--accent);color:#fff;margin-left:auto;border-bottom-right-radius:4px}
+.bubble.ai{background:var(--muted);border-bottom-left-radius:4px}
+.inputbar{display:flex;gap:8px;padding:8px 12px 12px;border-top:1px solid var(--line);flex:none}
+.inputbar .in{flex:1;border:1px solid var(--line2);border-radius:20px;padding:8px 14px;color:var(--ink3);font-size:13px}
+.respbar{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;padding:10px 12px 12px;border-top:1px solid var(--line);flex:none;background:var(--bg)}
+.respbar .btn{padding:8px 0;font-size:12.5px}
+.chip{display:inline-block;border:1px solid var(--line2);border-radius:999px;padding:5px 12px;font-size:12.5px;margin:0 6px 8px 0;cursor:pointer}
+.chip.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.toast{position:absolute;left:50%;bottom:80px;transform:translateX(-50%);background:#262626;color:#fff;border-radius:8px;padding:8px 12px;font-size:12px;z-index:6;white-space:nowrap}
+
+/* doc / mail / noti */
+.doc{max-width:860px;width:100%;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:24px 28px}
+.doc h2{margin:0 0 4px;font-size:22px}
+.doc h3{font-size:15px;margin:22px 0 8px}
+.doc p{margin:6px 0;color:var(--ink2)}
+.doc table{width:100%;border-collapse:collapse;font-size:13px;margin:6px 0}
+.doc td,.doc th{border-bottom:1px solid var(--line);padding:7px 6px;text-align:left;vertical-align:top}
+.doc th{color:var(--ink3);font-weight:600}
+.flow{display:flex;flex-wrap:wrap;align-items:stretch;gap:8px;margin:8px 0}
+.flow .n{border:1px solid var(--line2);border-radius:10px;padding:8px 10px;font-size:12.5px;background:var(--surface);min-width:118px;flex:1}
+.flow .n b{display:block;font-size:13px}
+.flow .n.pay{border-color:var(--warn);background:var(--warn-bg)}
+.flow .n.free{border-color:var(--ok);background:var(--ok-bg)}
+.flow .ar{display:flex;align-items:center;color:var(--ink3)}
+.layers{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.layers .l{border:1px solid var(--line);border-radius:10px;padding:12px}
+.layers .l b{display:block;margin-bottom:4px}
+.ia{font-family:ui-monospace,Consolas,monospace;font-size:12.5px;background:var(--muted);border-radius:10px;padding:12px 14px;white-space:pre;overflow:auto;line-height:1.6}
+.mail{width:620px;max-width:100%;background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.mail .mh{padding:12px 18px;border-bottom:1px solid var(--line);font-size:12px;color:var(--ink2)}
+.mail .mh b{color:var(--ink);font-size:15px;display:block;margin-top:2px}
+.mail .mb{padding:18px 22px}
+.mail .mb h4{margin:18px 0 6px;font-size:14px}
+.mail .cta{display:inline-block;background:var(--accent);color:#fff;border-radius:8px;padding:8px 14px;font-weight:600;font-size:13px;text-decoration:none}
+.noti{width:390px}
+.noti .n{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:11px 13px;margin-bottom:10px;box-shadow:0 2px 10px rgba(0,0,0,.06);cursor:pointer}
+@media (max-width:1180px){.layout{grid-template-columns:200px 1fr}aside#info{display:none}}
+@media (max-width:760px){.layout{grid-template-columns:1fr;height:auto}nav#map{display:none}main{padding:12px 0}.phone{transform:scale(.92);transform-origin:top center}}
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>트렌드 리포트 + 요청형 사업성 분석 — UX 시안</h1>
+  <span class="meta">A 피드 톤 · 샘플 데이터 · 화면 안의 버튼·목록을 눌러 이동</span>
+  <span class="sp"></span>
+  <button class="hbtn" id="themeBtn">다크 모드</button>
+</header>
+<div class="layout">
+  <nav id="map"></nav>
+  <main id="stage"></main>
+  <aside id="info"></aside>
+</div>
+<script>
+/* ───────── 샘플 데이터 (가상) ───────── */
+const W = {label:'11월 4주', range:'11.16 – 11.22', days:28};
+const themes = [
+  {id:'t1', name:'로컬 소형 모델 문서 검토', w:[2,3,4,12], g:180, src:['HN','GitHub','RSS'], demand:2, market:1, oss:'+86/일', lic:'Apache-2.0 2 · MIT 1', mine:'★1', mark:true,
+    why:'증가율 ×3.0 · 수요 2 · 출처 3', repos:['docsieve/docsieve','quietlint/quietlint'],
+    ev:{demand:[['Ask HN: 사내 문서를 외부 LLM에 안 보내고 검토할 방법?','HN · 214점 · 댓글 96'],['문서 리뷰 SaaS가 데이터 보관 정책 때문에 막혔다는 글','HN · 88점']],
+        tech:[['docsieve — 3B 모델로 마크다운 검토 규칙 실행','GitHub · ★2.1k · Apache-2.0'],['소형 모델 양자화로 노트북에서 7B 실행 정리','RSS · Simon Willison']],
+        market:[['Show HN: 클라우드형 문서 교정 도구 출시','HN · 132점']]}},
+  {id:'t2', name:'에이전트 실행 기록·관측', w:[3,4,6,11], g:115, src:['HN','GitHub','HF'], demand:2, market:2, oss:'+54/일', lic:'MIT 3', mine:'—', mark:true, why:'증가율 ×2.2 · 수요 2 · 출처 3', repos:['tracelane/tracelane']},
+  {id:'t3', name:'전화 응대 음성 에이전트', w:[1,1,2,5], g:250, src:['HN','HF'], demand:1, market:1, oss:'+31/일', lic:'Apache-2.0 1', mine:'—', mark:true, why:'증가율 ×3.8 · 수요 1 · 출처 2', repos:['voxdesk/voxdesk']},
+  {id:'t4', name:'MCP 서버 도구', w:[12,15,16,20], g:40, src:['HN','GitHub'], demand:0, market:4, oss:'+40/일', lic:'MIT 5', mine:'관심 없음 1', why:'수요 신호 없음'},
+  {id:'t5', name:'Gemini 설정 검사기', w:[0,0,1,9], g:null, src:['GitHub'], demand:0, market:0, oss:'복제 96', lic:'—', mine:'—', hot:true, why:'같은 이름 저장소 96개 — 복제·스팸 급증'},
+  {id:'t6', name:'브라우저 자동화 에이전트', w:[6,7,7,9], g:32, src:['HN','GitHub','RSS'], demand:1, market:3, oss:'+22/일', lic:'MIT 2', mine:'—', why:'시장 3 — 붐빔'},
+];
+const falling = [
+  {name:'RAG 프레임워크', w:[14,11,9,6], g:-45},
+  {name:'프롬프트 마켓플레이스', w:[5,4,3,2], g:-50},
+  {name:'코드 리뷰 봇', w:[9,8,8,7], g:-15},
+];
+const repos = [
+  {n:'docsieve/docsieve', d:'3B 모델로 문서 검토 규칙 실행', star:'2.1k', day:312, lang:'Python', lic:'Apache-2.0', fork:'4.1%', theme:'로컬 소형 모델 문서 검토'},
+  {n:'tracelane/tracelane', d:'에이전트 호출 추적·비용 보기', star:'1.4k', day:198, lang:'TypeScript', lic:'MIT', fork:'6.3%', theme:'에이전트 실행 기록·관측'},
+  {n:'voxdesk/voxdesk', d:'전화 음성 에이전트 오픈소스', star:'890', day:121, lang:'Python', lic:'Apache-2.0', fork:'3.0%', theme:'전화 응대 음성 에이전트'},
+  {n:'mcpkit/registry', d:'MCP 서버 모음·설치 도구', star:'3.3k', day:96, lang:'Go', lic:'MIT', fork:'2.2%', theme:'MCP 서버 도구'},
+  {n:'quietlint/quietlint', d:'오프라인 글 검토 CLI', star:'610', day:74, lang:'Rust', lic:'MIT', fork:'5.0%', theme:'로컬 소형 모델 문서 검토'},
+];
+const opps = [
+  {id:'o1', s:3.8, name:'사내 문서 로컬 검토 설치형 도구', who:'보안 규정 때문에 외부 LLM을 못 쓰는 5~50인 개발팀', weak:null, req:true,
+    sc:[['수요 강도',4,'Ask HN 214점 글 — 외부 전송 없는 검토 요청 구체적'],['지불 의사',4,'유료 클라우드 교정 도구 존재, 사내 설치형 문의 댓글 3건'],['시기',4,'3B 모델로 노트북 실행 가능해짐(docsieve)'],['경쟁 공백',4,'경쟁 제품은 클라우드형만'],['1인 실현성',3,'설치형 배포·업데이트 부담'],['방어력',3,'대형 업체 온프레미스 출시 시 위협']],
+    gate:'통과', critic:'"기업 영업 없이 팀이 찾아올까?" → 개발자 커뮤니티 배포·무료 개인판으로 대응 가능', change:null},
+  {id:'o2', s:3.1, name:'에이전트 실행 비용 알림', who:'에이전트를 여러 개 돌리는 1인·소규모 개발자', weak:'방어력(2)',
+    sc:[['수요 강도',4,'비용 폭주 경험 글 2건'],['지불 의사',3,'월 5~10달러 의향 댓글 1건'],['시기',4,'에이전트 실행 증가'],['경쟁 공백',3,'관측 도구에 일부 기능 있음'],['1인 실현성',4,'API 사용량 집계 위주'],['방어력',2,'공급자가 자체 알림을 넣으면 끝']],
+    gate:'통과', critic:null, change:'공급자 대시보드에 없는 "여러 공급자 합산" 수요가 확인되면 재검토'},
+  {id:'o3', s:2.6, name:'오픈소스 문서 검토 SaaS', who:'오픈소스 메인테이너', weak:'경쟁 공백(2)',
+    sc:[['수요 강도',3,'문서 품질 불만 글'],['지불 의사',2,'오픈소스는 지불 의사 낮음'],['시기',3,''],['경쟁 공백',2,'무료 도구 다수'],['1인 실현성',4,''],['방어력',2,'']],
+    gate:'통과', critic:null, change:'기업 후원형 과금 근거가 생기면'},
+  {id:'o4', s:2.2, name:'에이전트 로그 공유 서비스', who:'에이전트 디버깅을 함께 하는 팀', weak:null, gateFail:'수요 근거 1건',
+    sc:[['수요 강도',2,'요청 글 1건뿐'],['지불 의사',2,''],['시기',3,''],['경쟁 공백',3,''],['1인 실현성',3,''],['방어력',2,'']],
+    gate:'탈락 — 수요 근거 1건(기준 2건)', critic:null, change:'다른 출처에서 같은 요청이 1건 더 나오면'},
+];
+const oppsNV = [
+  {id:'n1', s:3.2, name:'전화 응대 음성 에이전트 — 소규모 식당 예약', weak:'지불 의사(2)'},
+  {id:'n2', s:2.9, name:'에이전트 실행 비용 알림', weak:'방어력(2)'},
+  {id:'n3', s:2.4, name:'음성 에이전트 테스트 도구', weak:null, gateFail:'출처 1종'},
+];
+const history = [
+  {d:'11.22', t:'로컬 소형 모델 문서 검토 외 1', r:'의뢰 1건', st:'검토 중', cost:'$0.41'},
+  {d:'11.15', t:'전화 응대 음성 에이전트', r:'사업성 미달 (3.2)', st:'—', cost:'$0.19'},
+  {d:'11.08', t:'이번 주 전체 분석', r:'의뢰 1건', st:'거절 · 너무 큼', cost:'$0.88'},
+];
+
+/* ───────── 아이콘 ───────── */
+const I = {
+  home:(f)=>`<svg viewBox="0 0 24 24" fill="${f?'currentColor':'none'}" stroke="currentColor" stroke-width="1.8"><path d="M3 10.5 12 3l9 7.5V21h-6v-6H9v6H3z"/></svg>`,
+  trend:(f)=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${f?2.6:1.8}" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/></svg>`,
+  track:(f)=>`<svg viewBox="0 0 24 24" fill="${f?'currentColor':'none'}" stroke="currentColor" stroke-width="1.8"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/></svg>`,
+  archive:(f)=>`<svg viewBox="0 0 24 24" fill="${f?'currentColor':'none'}" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v11h14V9M10 13h4"/></svg>`,
+  settings:(f)=>`<svg viewBox="0 0 24 24" fill="${f?'currentColor':'none'}" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3" fill="none"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>`,
+  back:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 5l-7 7 7 7"/></svg>`,
+  more:`<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>`,
+  hist:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/></svg>`,
+  share:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 12v7h16v-7M12 3v12M7 8l5-5 5 5"/></svg>`,
+};
+const spark = (w, color='var(--accent)', wd=48, h=22) => {
+  const max = Math.max(...w, 1), step = wd/(w.length-1);
+  const pts = w.map((v,i)=>`${(i*step).toFixed(1)},${(h-2-(v/max)*(h-4)).toFixed(1)}`).join(' ');
+  return `<svg width="${wd}" height="${h}" viewBox="0 0 ${wd} ${h}" style="flex:none"><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+};
+const weekBars = (w) => {
+  const max = Math.max(...w, 1), labels = ['3주 전','2주 전','지난주','이번 주'];
+  return `<svg viewBox="0 0 320 130" width="100%" height="130">${w.map((v,i)=>{
+    const h = (v/max)*90, x = 18+i*76;
+    return `<rect x="${x}" y="${100-h}" width="44" height="${h}" rx="5" fill="${i===3?'var(--accent)':'var(--accent-muted)'}"/>
+    <text x="${x+22}" y="${94-h}" text-anchor="middle" font-size="12" font-weight="700" fill="var(--ink)">${v}</text>
+    <text x="${x+22}" y="118" text-anchor="middle" font-size="11" fill="var(--ink3)">${labels[i]}</text>`;}).join('')}</svg>`;
+};
+
+/* ───────── 화면 정의 ───────── */
+const S = {}; let cur = 'UX-0', st = {}; const sel = new Set(['t1','t2']);
+const screens = [
+  {g:'구성안', id:'UX-0', name:'UX 구성안 개요', kind:'doc'},
+  {g:'구성안', id:'UX-1', name:'정보 전달 흐름', kind:'doc'},
+  {g:'트렌드 탭 (자동 · 0원)', id:'SC-01', name:'오늘 화면 진입점'},
+  {g:'트렌드 탭 (자동 · 0원)', id:'SC-17', name:'주간 리포트 — 기술'},
+  {g:'트렌드 탭 (자동 · 0원)', id:'SC-18', name:'주간 리포트 — 오픈소스'},
+  {g:'트렌드 탭 (자동 · 0원)', id:'SC-19', name:'테마 상세'},
+  {g:'사업성 분석 (요청형)', id:'SC-20', name:'분석 요청 확인'},
+  {g:'사업성 분석 (요청형)', id:'SC-21', name:'분석 진행 중'},
+  {g:'사업성 분석 (요청형)', id:'SC-22', name:'분석 결과'},
+  {g:'사업성 분석 (요청형)', id:'SC-23', name:'간단 보기'},
+  {g:'사업성 분석 (요청형)', id:'SC-24', name:'개발 의뢰서'},
+  {g:'사업성 분석 (요청형)', id:'SC-25', name:'의뢰 응답'},
+  {g:'사업성 분석 (요청형)', id:'SC-26', name:'추가 질문'},
+  {g:'사업성 분석 (요청형)', id:'SC-27', name:'분석 기록'},
+  {g:'설정', id:'SC-28', name:'분석 설정'},
+  {g:'전달 채널', id:'N-02', name:'알림', kind:'noti'},
+  {g:'전달 채널', id:'M-02', name:'메일 — 주간 트렌드', kind:'mail'},
+  {g:'전달 채널', id:'M-03', name:'메일 — 분석 결과', kind:'mail'},
+];
+
+const phone = (inner, tab='trend', extra='') => `<div class="phone"><div class="status"><span>9:41</span><span>●●● 5G 82%</span></div>${inner}${tab?tabs(tab):''}${extra}</div>`;
+const tabs = (on) => `<div class="tabs">${[['home','SC-01'],['trend','SC-17'],['track',null],['archive',null],['settings','SC-28']].map(([k,go])=>`<button ${go?`data-go="${go}"`:''} aria-label="${k}">${I[k](k===on)}</button>`).join('')}</div>`;
+const bar = (t, opts={}) => `<div class="appbar">${opts.back?`<button class="ib" data-go="${opts.back}" aria-label="뒤로">${I.back}</button>`:''}<div class="t ${opts.back?'sm':''}">${t}</div>${opts.right||''}</div>`;
+const segs = (on) => `<div class="seg">${[['기술','SC-17'],['오픈소스','SC-18'],['분석 기록','SC-27']].map(([n,go])=>`<button class="${n===on?'on':''}" data-go="${go}">${n}</button>`).join('')}</div>`;
+
+S['UX-0'] = () => `<div class="doc">
+  <h2>UX 구성안 — 트렌드 리포트 + 요청형 사업성 분석</h2>
+  <p>원칙: <b>기술 분석은 알아서 오고(0원), 돈이 드는 사업성 분석은 내가 고른 것만 요청한다.</b> 비용이 드는 버튼에는 항상 추정 비용을 붙이고, 저장된 내용을 다시 보는 것은 모두 0원이다.</p>
+  <h3>1. 메뉴 구조 — 하단 탭에 "트렌드" 추가 (5개)</h3>
+  <div class="ia">오늘(SC-01) ─ 일요일엔 맨 위에 "이번 주 트렌드 리포트" 띠
+트렌드(신규)
+ ├ 기술 ········· SC-17 주간 리포트(뜨는·지는 테마, ◆ 분석 후보)
+ │   └ SC-19 테마 상세(추이·지표·근거) ─ [사업성 분석 요청]
+ ├ 오픈소스 ····· SC-18 빠르게 크는 저장소·언어·라이선스·과열
+ └ 분석 기록 ···· SC-27 지난 분석·진행 중 의뢰
+       SC-20 분석 요청 확인(하단 시트, 추정 비용) → SC-21 진행 중
+       → SC-22 분석 결과(점수 순 목록) ─ SC-23 간단 보기(시트, 0원)
+                                       └ SC-24 개발 의뢰서 → SC-25 응답 / SC-26 추가 질문
+추적 · 보관함 · 설정(SC-28 분석 설정 추가)</div>
+  <h3>2. 화면마다 지키는 규칙</h3>
+  <table>
+    <tr><th>규칙</th><th>적용</th></tr>
+    <tr><td><b>비용 표시</b></td><td>LLM을 부르는 버튼만 주황 "≈$0.41". 나머지 화면 하단엔 "0원" 표시 없음(기본이 0원). 요청 전 확인 시트는 생략할 수 없다.</td></tr>
+    <tr><td><b>점진 공개</b></td><td>리포트(한 줄) → 테마 상세(숫자) → 분석 결과(점수 한 줄) → 간단 보기(6항목) → 의뢰서(전문). 깊이 들어갈수록 정보가 늘어난다.</td></tr>
+    <tr><td><b>판단과 안내 구분</b></td><td>◆는 코드 규칙의 "분석 후보 안내"(파란 표시), 점수·의뢰는 LLM 판단(결과 화면에서만). 리포트엔 판단 문구를 쓰지 않는다.</td></tr>
+    <tr><td><b>미달도 정보</b></td><td>사업성 미달이어도 결과 화면·메일은 같은 형식. 맨 위 판단 칸만 "미달 + 이유"로 바뀐다.</td></tr>
+    <tr><td><b>근거 우선</b></td><td>모든 숫자·주장 옆에 근거 수(수요 2·출처 3)와 원문 링크. LLM 문장은 회색 "AI 판단" 꼬리표.</td></tr>
+    <tr><td><b>같은 일 두 번 안 함</b></td><td>같은 주 같은 테마를 다시 요청하면 저장된 결과를 먼저 보여 준다.</td></tr>
+  </table>
+  <h3>3. 이번 시안에 새로 정의한 화면</h3>
+  <table>
+    <tr><th>ID</th><th>화면</th><th>비용</th></tr>
+    <tr><td>SC-17·18·19</td><td>주간 리포트(기술·오픈소스)·테마 상세</td><td class="cost0">0원</td></tr>
+    <tr><td>SC-20·21</td><td>분석 요청 확인·진행 중</td><td class="costy">요청 1건</td></tr>
+    <tr><td>SC-22·23</td><td>분석 결과·간단 보기</td><td class="cost0">0원(저장분)</td></tr>
+    <tr><td>SC-24·25</td><td>개발 의뢰서·응답(수락·거절·보류)</td><td class="cost0">0원</td></tr>
+    <tr><td>SC-26</td><td>추가 질문</td><td class="costy">질문마다</td></tr>
+    <tr><td>SC-27·28</td><td>분석 기록·분석 설정</td><td class="cost0">0원</td></tr>
+    <tr><td>N-02·M-02·M-03</td><td>알림·주간 트렌드 메일·분석 결과 메일</td><td class="cost0">0원</td></tr>
+  </table>
+  <p class="small">SC 번호는 시안용 제안이다. 확정하면 menu.md에 옮긴다. 데이터는 모두 가상 샘플이며, 비용 숫자는 sol 단가 미확인 상태의 예시다.</p>
+</div>`;
+
+S['UX-1'] = () => `<div class="doc">
+  <h2>정보 전달 흐름</h2>
+  <p>같은 정보를 세 겹으로 보낸다. 바깥 겹일수록 짧고, 안쪽 겹에서만 행동(요청·응답)한다.</p>
+  <div class="layers">
+    <div class="l"><b>① 알림 — 한 줄</b><span class="small muted">"이번 주 뜨는 테마 3 · 분석 후보 ◆2" / "분석 완료: 의뢰 1건". 누르면 해당 화면.</span></div>
+    <div class="l"><b>② 메일 — 읽기용 요약</b><span class="small muted">주간 리포트 표 전체, 분석 결과 목록·의뢰서 요약. 메일에서 LLM을 부르지 않는다(버튼은 앱으로 연결).</span></div>
+    <div class="l"><b>③ 앱 — 탐색과 요청</b><span class="small muted">테마 고르기, 비용 확인 후 분석 요청, 간단 보기, 의뢰서 응답, 추가 질문.</span></div>
+  </div>
+  <h3>주간 흐름 (자동, 0원)</h3>
+  <div class="flow">
+    <div class="n free"><b>일요일 07:00</b>매일 데이터로 리포트 계산(코드)</div><div class="ar">→</div>
+    <div class="n free"><b>알림 + 메일</b>N-02 · M-02</div><div class="ar">→</div>
+    <div class="n free"><b>SC-17 리포트</b>◆ 후보 확인</div><div class="ar">→</div>
+    <div class="n free"><b>SC-19 테마 상세</b>숫자·근거 보기</div>
+  </div>
+  <h3>요청 흐름 (내가 원할 때만)</h3>
+  <div class="flow">
+    <div class="n"><b>테마 선택</b>1~3개 체크</div><div class="ar">→</div>
+    <div class="n pay"><b>SC-20 확인</b>추정 ≈$0.41 · 월 사용량</div><div class="ar">→</div>
+    <div class="n pay"><b>SC-21 진행</b>1~3분, 나가도 됨</div><div class="ar">→</div>
+    <div class="n free"><b>SC-22 결과</b>의뢰 / 미달 + 점수 순 목록</div>
+  </div>
+  <div class="flow">
+    <div class="n free"><b>SC-23 간단 보기</b>낮은 항목, 저장분 0원</div><div class="ar">→</div>
+    <div class="n free"><b>SC-24 의뢰서</b>11개 항목</div><div class="ar">→</div>
+    <div class="n free"><b>SC-25 응답</b>수락·거절·보류</div><div class="ar">→</div>
+    <div class="n pay"><b>SC-26 추가 질문</b>필요할 때만</div>
+  </div>
+  <h3>응답이 돌아가는 곳</h3>
+  <table>
+    <tr><th>응답</th><th>결과</th></tr>
+    <tr><td>수락</td><td>추적 탭에 자동 추가, 다음 주 리포트에 "진행 중 의뢰의 시장 변화"(코드 지표)</td></tr>
+    <tr><td>거절 + 이유</td><td>다음 분석 요청의 피드백 입력</td></tr>
+    <tr><td>보류</td><td>4주 뒤 리포트에 다시 표시</td></tr>
+    <tr><td>간단 보기·지켜보기</td><td>관심 신호 → ◆ 정렬에 반영</td></tr>
+  </table>
+</div>`;
+
+S['SC-01'] = () => phone(`${bar('오늘',{right:`<button class="ib">${I.hist}</button>`})}
+<div class="scr">
+  <div class="box info row" data-go="SC-17" style="cursor:pointer">
+    <div class="grow"><b>이번 주 트렌드 리포트</b><div class="small">뜨는 테마 3 · 분석 후보 ◆2 · 과열 1</div></div><span>›</span>
+  </div>
+  <div class="tiny" style="margin:2px 2px 10px">수집 224 → 후보 5 → 카드 2 · 07:45 · $0.10</div>
+  <div class="box"><b>사내 문서를 로컬 소형 모델로 검토하는 설치형 리뷰어</b><div class="small muted" style="margin:3px 0 6px">외부 전송 없이 팀 문서를 검토만 해 주는 도구</div><span class="tok">개발 도구</span><span class="tok">여러 곳에서 화제</span></div>
+  <div class="box"><b>에이전트 호출 비용을 공급자 합산으로 알려 주는 알림</b><div class="small muted" style="margin:3px 0 6px">여러 공급자 키 사용량을 한곳에서</div><span class="tok">개발 도구</span></div>
+  <div class="tiny" style="text-align:center;margin-top:10px">기존 오늘 화면(SC-01)에 리포트 띠만 추가 — 일요일 리포트 도착 후 7일간 표시</div>
+</div>`, 'home');
+
+S['SC-17'] = () => sc17('', st['SC-17']);
+const sc17 = (overlay, state) => {
+  const empty = state==='데이터 부족';
+  const picking = state!=='기본';
+  const row = (t) => `<div class="theme" data-go="SC-19" data-theme="${t.id}">
+      ${picking?`<div class="ck ${sel.has(t.id)?'on':''}" data-pick="${t.id}">${sel.has(t.id)?'✓':''}</div>`:''}
+      <div class="grow"><div class="nm">${t.name}${t.mark?'<span class="mark">◆ 분석 후보</span>':''}${t.hot?'<span class="hot">과열</span>':''}</div>
+      <div class="mt">${t.w[3]}건 · 출처 ${t.src.length} · 수요 ${t.demand} · 시장 ${t.market}</div></div>
+      ${spark(t.w, t.hot?'var(--warn)':'var(--accent)')}
+      <div class="gr ${t.g==null?'':'up'}">${t.g==null?'신규':'+'+t.g+'%'}</div></div>`;
+  return phone(`${bar('트렌드',{right:`<button class="ib" data-go="SC-28">${I.more}</button>`})}
+  <div class="scr" style="padding-bottom:${picking&&!empty?'70px':'20px'}">
+    ${segs('기술')}
+    <div class="weekbar"><button class="ib" style="padding:0">‹</button><div><b>${W.label}</b> <span class="tiny">${W.range}</span></div><button class="ib" style="padding:0;opacity:.3">›</button></div>
+    ${empty?`<div class="box warn small"><b>데이터 부족 — 잠정 리포트</b><br>쌓인 기간 2일. 증가율은 2주 이상 쌓이면 표시합니다. 과거 4주 채우기를 실행하면 바로 볼 수 있습니다.</div>
+      <button class="btn full">과거 4주 채우기 (분류 소액 · 추정 $0.04)</button>`:`
+    <div class="box soft small">
+      <div>• <b>가장 뜬 테마</b> 전화 응대 음성 에이전트 ×3.8 (5건)</div>
+      <div>• <b>가장 빠른 저장소</b> docsieve/docsieve 하루 +312★</div>
+      <div>• <b>과열 경고</b> Gemini 설정 검사기 — 같은 이름 저장소 96개</div>
+    </div>
+    <div class="sec">뜨는 테마 <span>${picking?'분석할 테마를 고르세요 (최대 3)':'4주 추이 · 이번 주 증가율'}</span></div>
+    ${themes.map(row).join('')}
+    <div class="sec">지는 테마</div>
+    ${falling.map(t=>`<div class="theme"><div class="grow"><div class="nm">${t.name}</div><div class="mt">${t.w[3]}건</div></div>${spark(t.w,'var(--bad)')}<div class="gr down">${t.g}%</div></div>`).join('')}
+    <div class="tiny" style="margin-top:12px">◆ = 증가율 ×1.5 이상 · 수요 신호 1+ · 출처 2종+ (코드 규칙, 판단 아님)</div>`}
+  </div>
+  ${picking&&!empty?`<button class="btn pri fab" data-go="SC-20">선택한 ${sel.size}개 사업성 분석 요청 · <span style="opacity:.85">≈$${(0.18+0.12*sel.size).toFixed(2)}</span></button>`:''}`, 'trend', overlay);
+};
+
+S['SC-18'] = () => phone(`${bar('트렌드')}
+<div class="scr">
+  ${segs('오픈소스')}
+  <div class="weekbar"><button class="ib" style="padding:0">‹</button><div><b>${W.label}</b> <span class="tiny">${W.range}</span></div><button class="ib" style="padding:0;opacity:.3">›</button></div>
+  <div class="sec">빠르게 크는 저장소 <span>하루 스타 증가</span></div>
+  <div class="list">${repos.map((r,i)=>`<div class="li">
+    <div style="width:18px;font-weight:700;color:var(--ink3)">${i+1}</div>
+    <div class="grow"><div style="font-weight:600;font-size:13.5px">${r.n}</div><div class="tiny">${r.d}</div>
+    <div style="margin-top:4px"><span class="tok">${r.lang}</span><span class="tok">${r.lic}</span><span class="tok">포크 ${r.fork}</span></div></div>
+    <div style="text-align:right"><div class="up" style="font-weight:700">+${r.day}</div><div class="tiny">★${r.star}</div></div></div>`).join('')}</div>
+  <div class="sec">언어 <span>이번 주 새 저장소 50</span></div>
+  ${[['Python',46],['TypeScript',28],['Go',10],['Rust',8],['기타',8]].map(([n,v])=>`<div class="row small" style="margin:5px 0"><span style="width:76px">${n}</span><div class="bar"><i style="width:${v}%"></i></div><span style="width:34px;text-align:right">${v}%</span></div>`).join('')}
+  <div class="sec">라이선스 <span>재료로 쓸 수 있는가</span></div>
+  ${[['MIT',52],['Apache-2.0',30],['없음',12],['GPL 계열',6]].map(([n,v],i)=>`<div class="row small" style="margin:5px 0"><span style="width:76px">${n}</span><div class="bar ${i>1?'low':''}"><i style="width:${v}%"></i></div><span style="width:34px;text-align:right">${v}%</span></div>`).join('')}
+  <div class="sec">과열 — 복제·스팸 급증</div>
+  <div class="box warn small"><b>Gemini-Config-Checker</b> 같은 이름·설명 저장소 96개 (11.20)<br>수집에서 스팸으로 걸렀습니다. 유행 과열 신호로만 표시합니다.</div>
+</div>`);
+
+S['SC-19'] = () => { const t = themes[0]; return phone(`${bar('테마 상세',{back:'SC-17',right:`<button class="ib">${I.share}</button>`})}
+<div class="scr" style="padding-bottom:76px">
+  <div style="font-size:19px;font-weight:700;line-height:1.3;margin:2px 0 4px">${t.name}<span class="mark">◆ 분석 후보</span></div>
+  <div class="small muted">${t.why}</div>
+  <div class="box" style="margin-top:10px">${weekBars(t.w)}</div>
+  <table class="tbl">
+    <tr><th>지표</th><th class="r">값</th><th>뜻</th></tr>
+    <tr><td>증가율</td><td class="r up"><b>+180%</b></td><td class="tiny">이번 주 ÷ 지난 3주 평균</td></tr>
+    <tr><td>출처</td><td class="r">${t.src.join('·')}</td><td class="tiny">3종 — 한 동네 유행 아님</td></tr>
+    <tr><td>수요 신호</td><td class="r">${t.demand}건</td><td class="tiny">사람의 불편·요청</td></tr>
+    <tr><td>시장 신호</td><td class="r">${t.market}건</td><td class="tiny">출시 제품</td></tr>
+    <tr><td>OSS 속도</td><td class="r">${t.oss}</td><td class="tiny">관련 저장소 하루 스타 중앙값</td></tr>
+    <tr><td>라이선스</td><td class="r">${t.lic}</td><td class="tiny">재료로 사용 가능</td></tr>
+    <tr><td>내 반응</td><td class="r">${t.mine}</td><td class="tiny">관련 카드</td></tr>
+  </table>
+  <div class="blk"><div class="bt">수요 근거 ${t.ev.demand.length}</div>${t.ev.demand.map(([a,b])=>`<div class="sig">${a}<div class="src">${b} ↗</div></div>`).join('')}</div>
+  <div class="blk"><div class="bt">기술 근거 ${t.ev.tech.length}</div>${t.ev.tech.map(([a,b])=>`<div class="sig">${a}<div class="src">${b} ↗</div></div>`).join('')}</div>
+  <div class="blk"><div class="bt">시장(경쟁) ${t.ev.market.length}</div>${t.ev.market.map(([a,b])=>`<div class="sig">${a}<div class="src">${b} ↗</div></div>`).join('')}</div>
+  <div class="blk"><div class="bt">관련 카드</div><div class="small">11.20 · 사내 문서를 로컬 소형 모델로 검토하는 설치형 리뷰어 ★</div></div>
+</div>`, 'trend', `<button class="btn pri fab" data-go="SC-20">이 테마 사업성 분석 요청 · <span style="opacity:.85">≈$0.30</span></button>`); };
+
+S['SC-20'] = () => {
+  const s = st['SC-20'];
+  const all = s==='이번 주 전체', over = s==='예산 초과', dup = s==='이미 분석함';
+  const est = all ? 0.88 : 0.41;
+  return sc17(`
+  <div class="sheet-bg"><div class="sheet">
+    <div class="grab"></div>
+    <div style="font-size:17px;font-weight:700;margin-bottom:10px">사업성 분석 요청</div>
+    ${dup?`<div class="box info small"><b>이미 분석한 테마가 있습니다</b><br>로컬 소형 모델 문서 검토 — 11.22 분석 결과(같은 주 자료). <u data-go="SC-22" style="cursor:pointer">저장된 결과 보기(0원)</u></div>`:''}
+    <div class="radio ${all?'':'on'}"><div class="dot"></div><div><b>선택한 테마만</b><div class="small muted">로컬 소형 모델 문서 검토 · 에이전트 실행 기록·관측</div></div></div>
+    <div class="radio ${all?'on':''}"><div class="dot"></div><div><b>이번 주 전체에서 찾기</b><div class="small muted">리포트 전체에서 기회 분야 3~5개 — 비용이 큽니다</div></div></div>
+    <div class="row sb" style="padding:8px 2px"><div><b class="small">반대 검토 포함</b><div class="tiny">1위 분야의 실패 이유를 따로 검토 (+≈$0.11)</div></div><div class="toggle on"></div></div>
+    <div class="box soft small" style="margin-top:6px">
+      <div class="row sb"><span>모델</span><b>gpt-6.2-sol · 추론 high</b></div>
+      <div class="row sb"><span>호출</span><b>${all?'3~4회':'1~3회'} (미달이면 의뢰서 생략)</b></div>
+      <div class="row sb"><span>추정 비용</span><b class="costy">≈ $${est.toFixed(2)}</b></div>
+      <div class="row sb"><span>이번 달 사용</span><b>$1.48 / $5.00</b></div>
+      <div class="bar" style="margin-top:6px"><i style="width:${over?100:30}%;${over?'background:var(--bad)':''}"></i></div>
+    </div>
+    ${over?`<div class="box bad small"><b>월 상한을 넘습니다</b> — 남은 예산 $0.20. 설정에서 상한을 올리거나 테마를 줄이세요.</div>
+      <button class="btn pri full dis">분석 시작</button>`:`<button class="btn pri full" data-go="SC-21">분석 시작 · ≈$${est.toFixed(2)}</button>`}
+    <div class="tiny" style="text-align:center;margin-top:8px">1~3분 걸립니다. 앱을 나가도 계속되고 끝나면 알림이 옵니다.</div>
+  </div></div>`, '테마 선택');
+};
+
+S['SC-21'] = () => phone(`${bar('분석 중',{back:'SC-17'})}
+<div class="scr">
+  <div class="spin"></div>
+  <div style="text-align:center;font-weight:700">사업성을 분석하고 있습니다</div>
+  <div class="small muted" style="text-align:center;margin-bottom:14px">로컬 소형 모델 문서 검토 외 1개 · 경과 1분 12초</div>
+  <div class="box">
+    <div class="step done"><div class="c">✓</div><div><b class="small">자료 준비</b><div class="tiny">리포트 지표·근거 18건·최근 카드·내 기준 (코드)</div></div></div>
+    <div class="step now"><div class="c">2</div><div><b class="small">기회 분야 정리 + 평가표</b><div class="tiny">gpt-6.2-sol 추론 중…</div></div></div>
+    <div class="step"><div class="c">3</div><div><b class="small">근거·관문 검사</b><div class="tiny">코드 — 수요 2건·출처 2종·라이선스</div></div></div>
+    <div class="step"><div class="c">4</div><div><b class="small">반대 검토</b><div class="tiny">1위 분야만</div></div></div>
+    <div class="step"><div class="c">5</div><div><b class="small">의뢰서 작성</b><div class="tiny">기준 3.5 이상일 때만</div></div></div>
+  </div>
+  <div class="row sb small"><span class="muted">지금까지 비용</span><b>$0.14</b></div>
+  <button class="btn full" style="margin-top:12px">분석 취소 (사용한 비용은 기록됨)</button>
+</div>`);
+
+S['SC-22'] = () => sc22('', st['SC-22']);
+const sc22 = (overlay, state) => {
+  const nv = state==='사업성 미달';
+  const list = nv ? oppsNV : opps;
+  return phone(`${bar('분석 결과',{back:'SC-27',right:`<button class="ib">${I.share}</button>`})}
+  <div class="scr">
+    <div class="tiny" style="margin-bottom:6px">${nv?'11.15 · 전화 응대 음성 에이전트':'11.22 · 로컬 소형 모델 문서 검토 · 에이전트 실행 기록·관측'} · gpt-6.2-sol · ${nv?'$0.19':'$0.41'}</div>
+    ${nv?`<div class="box warn"><b>이번 분석은 의뢰 없음 — 사업성 미달</b>
+      <div class="small" style="margin-top:4px">가장 가까운 분야 <b>3.2</b>(기준 3.5). 소규모 식당은 월 구독 지불 근거가 없고(지불 의사 2), 예약 앱 업체가 같은 기능을 넣고 있습니다.</div>
+      <div class="small" style="margin-top:6px"><b>다시 볼 조건:</b> 유료 전화 응대 서비스 불만 글 2건 이상</div></div>`
+    :`<div class="box ok" data-go="SC-24" style="cursor:pointer"><b>개발 의뢰 1건</b><span style="float:right">›</span>
+      <div class="small" style="margin-top:4px"><b>사내 문서 로컬 검토 설치형 도구</b> — 3.8점. 외부 전송 금지 팀의 검토 요청이 구체적이고, 경쟁 제품은 클라우드형뿐입니다.</div></div>`}
+    <div class="sec">검토한 분야 <span>점수 순 · 5점 만점</span></div>
+    <div class="list">${list.map(o=>`<div class="li" data-go="${o.req?'SC-24':'SC-23'}" data-opp="${o.id}">
+      <div class="score ${o.req?'hi':''}">${o.s.toFixed(1)}</div>
+      <div class="grow"><div style="font-weight:600;font-size:13.5px;line-height:1.3">${o.name}</div>
+      <div class="tiny">${o.req?'<b style="color:var(--accent)">의뢰 →</b>':o.gateFail?`관문 탈락: ${o.gateFail}`:`가장 약함: ${o.weak}`}</div></div>
+      <span class="small ${o.req?'':'muted'}">${o.req?'의뢰서':'간단 보기'}</span><span class="chev">›</span></div>`).join('')}</div>
+    <div class="tiny" style="margin-top:10px">간단 보기는 저장된 심사 내용이라 추가 비용이 없습니다. 점수는 평가표 6항목의 가중 합(코드 계산), 각 항목 점수와 근거는 AI 판단입니다.</div>
+  </div>`, 'trend', overlay);
+};
+
+S['SC-23'] = () => { const o = opps[1]; return sc22(`
+  <div class="sheet-bg"><div class="sheet">
+    <div class="grab"></div>
+    <div class="row sb"><div style="font-size:16px;font-weight:700;line-height:1.3">${o.name}</div><div class="score">${o.s}</div></div>
+    <div class="small muted" style="margin:2px 0 10px">${o.who}</div>
+    ${o.sc.map(([n,v,why])=>`<div style="margin:7px 0"><div class="row small"><span style="width:70px">${n}</span><div class="bar ${v<=2?'low':''}"><i style="width:${v*20}%"></i></div><b style="width:16px;text-align:right">${v}</b></div>${why?`<div class="tiny" style="margin-left:78px">${why}</div>`:''}</div>`).join('')}
+    <div class="box soft small" style="margin-top:10px"><div><b>관문</b> ${o.gate}</div><div style="margin-top:4px"><b>무엇이 바뀌면 의뢰 가능</b> ${o.change}</div></div>
+    <div class="small" style="margin:8px 0 4px"><b>근거</b></div>
+    <div class="sig">에이전트 비용 폭주 경험 공유<div class="src">HN · 156점 ↗</div></div>
+    <div class="sig">tracelane — 에이전트 호출 추적<div class="src">GitHub · ★1.4k · MIT ↗</div></div>
+    <div class="row" style="gap:8px;margin-top:12px"><button class="btn grow" data-go="SC-26">추가 질문 <span class="costy">≈$0.03</span></button><button class="btn grow">이 분야 지켜보기</button></div>
+  </div></div>`, '의뢰 1건'); };
+
+S['SC-24'] = () => sc24('');
+const sc24 = (overlay) => { const o = opps[0]; return phone(`${bar('개발 의뢰서',{back:'SC-22',right:`<button class="ib">${I.share}</button>`})}
+<div class="scr">
+  <div class="tiny">11.22 · 의뢰인: AI 사업 발굴 (gpt-6.2-sol) · <b style="color:var(--accent)">검토 중</b></div>
+  <div style="font-size:19px;font-weight:700;line-height:1.3;margin:4px 0">${o.name}</div>
+  <div class="small muted">외부 LLM에 문서를 보낼 수 없는 팀을 위해, 노트북·사내 서버에서 소형 모델로 문서를 검토만 해 주는 설치형 도구</div>
+  <div class="box soft" style="margin-top:10px"><div class="row sb"><b>사업성 ${o.s} / 5</b><span class="tiny">기준 3.5 · 반대 검토 통과</span></div>
+    ${o.sc.map(([n,v])=>`<div class="row small" style="margin:4px 0"><span style="width:70px">${n}</span><div class="bar"><i style="width:${v*20}%"></i></div><b>${v}</b></div>`).join('')}</div>
+  ${[
+    ['1. 배경·왜 지금','관련 테마 이번 주 12건(+180%), 출처 3종. 3B급 모델로 노트북 검토가 가능해졌다(docsieve ★2.1k, 하루 +312).'],
+    ['2. 목표 고객과 문제',o.who+'. "사내 문서를 외부 LLM에 안 보내고 검토할 방법" 요청(HN 214점, 댓글 96)과 보관 정책 때문에 SaaS 도입이 막힌 사례.'],
+    ['3. 반대 검토','"기업 영업 없이 팀이 찾아올까?" → 무료 개인판 + 팀 라이선스, 개발자 커뮤니티 배포로 대응.'],
+    ['4. MVP 범위','• 마크다운·위키 문서 검토 규칙 5종 • 로컬 모델 자동 설치 • VS Code 확장 • 검토 결과 보고서<br><span class="tiny">하지 않을 것: 글 대신 쓰기, 클라우드 동기화, 팀 관리 화면</span>'],
+    ['5. 기술 제안','docsieve(Apache-2.0)를 재료로, 3B 양자화 모델, Kotlin/TS 확장. 운영비 거의 0(사용자 기기 실행).'],
+    ['6. 수익화 가설','개인 무료 · 팀 월 $8/인 · 연간 라이선스 (AI 판단, 검증 필요)'],
+    ['7. 검증 계획','2주: 랜딩 페이지 + HN 원글 댓글 작성자 대상 대기자 모집. <b>중단 기준</b>: 2주 안에 팀 단위 문의 5건 미만.'],
+    ['8. 일정','1주 규칙 엔진 · 2주 모델 설치 · 3주 VS Code 확장 · 4주 베타'],
+    ['9. 완료 기준','3개 팀이 자체 문서로 설치·검토 성공, 검토 1건 30초 이내'],
+    ['10. 위험·확인 필요','대형 업체 온프레미스 출시 · 소형 모델 검토 품질(커뮤니티 주장뿐)'],
+  ].map(([h,b])=>`<div class="blk"><div class="bt">${h}</div><div class="small">${b}</div></div>`).join('')}
+  <div class="blk"><div class="bt">근거 원문</div>
+    <div class="sig">Ask HN: 사내 문서를 외부 LLM에 안 보내고 검토할 방법?<div class="src">HN · 214점 ↗</div></div>
+    <div class="sig">docsieve/docsieve<div class="src">GitHub · ★2.1k · Apache-2.0 ↗</div></div></div>
+</div>
+<div class="respbar"><button class="btn pri" data-go="SC-25" data-st="수락">수락</button><button class="btn" data-go="SC-26">질문</button><button class="btn" data-go="SC-25" data-st="거절">거절</button><button class="btn" data-go="SC-25" data-st="보류">보류</button></div>`, null, overlay); };
+
+S['SC-25'] = () => {
+  const s = st['SC-25'];
+  let sheet;
+  if (s==='거절') sheet = `<div style="font-size:17px;font-weight:700;margin-bottom:4px">거절 이유</div><div class="small muted" style="margin-bottom:12px">다음 분석 요청 때 참고합니다.</div>
+    ${['시장 작음','이미 있음','너무 큼','내 분야 아님','근거 약함','기타'].map((c,i)=>`<span class="chip ${i===2?'on':''}">${c}</span>`).join('')}
+    <div class="inputbar" style="border:none;padding:4px 0 12px"><div class="in">메모 (선택)</div></div><button class="btn pri full">거절하기</button>`;
+  else if (s==='보류') sheet = `<div style="font-size:17px;font-weight:700;margin-bottom:8px">보류</div><div class="small muted" style="margin-bottom:12px">4주 뒤(12월 20일) 리포트에 다시 보여 드립니다. 그 사이 관련 신호는 계속 쌓입니다.</div><button class="btn pri full">보류하기</button>`;
+  else sheet = `<div style="font-size:17px;font-weight:700;margin-bottom:8px">의뢰를 수락합니다</div>
+    <div class="small" style="margin-bottom:6px">• 이 분야를 <b>추적 탭</b>에 올려 매일 신호를 모읍니다</div>
+    <div class="small" style="margin-bottom:6px">• 매주 리포트에 <b>진행 중 의뢰의 시장 변화</b> 칸이 생깁니다(0원)</div>
+    <div class="small" style="margin-bottom:14px">• 의뢰서는 분석 기록에 <b>진행 중</b>으로 보관됩니다</div>
+    <button class="btn pri full">수락하기</button>`;
+  return sc24(`<div class="sheet-bg"><div class="sheet"><div class="grab"></div>${sheet}</div></div>`);
+};
+
+S['SC-26'] = () => phone(`${bar('추가 질문',{back:'SC-24'})}
+<div class="scr">
+  <div class="box soft small">맥락: <b>사내 문서 로컬 검토 설치형 도구</b> 심사 기록·근거 18건 · gpt-6.2-sol(추론 medium)</div>
+  <div class="bubble me">팀 월 $8이면 경쟁 제품 대비 어떤 위치야?</div>
+  <div class="bubble ai">근거 안에서는 클라우드형 경쟁 제품 1개(가격 비공개)만 확인됩니다. 가격 비교 근거가 없어 판단을 보류합니다. 검증 계획의 랜딩 페이지에서 $5·$8·$12 세 가지로 대기자 전환율을 비교해 보는 것을 권합니다.
+    <div class="tiny" style="margin-top:6px">AI 판단 · 근거: HN 132점(경쟁 제품) ↗ · 이 답 $0.02</div></div>
+  <div class="bubble me">1인으로 4주 일정이 현실적이야?</div>
+  <div class="bubble ai">MVP 4항목 중 VS Code 확장과 모델 자동 설치가 가장 큽니다. 둘 중 하나를 2단계로 미루면 4주가 현실적입니다.
+    <div class="tiny" style="margin-top:6px">AI 판단 · 이 답 $0.02</div></div>
+</div>
+<div class="inputbar"><div class="in">질문 입력 · 질문당 ≈$0.02~0.05</div><button class="btn pri">보내기</button></div>`, null);
+
+S['SC-27'] = () => phone(`${bar('트렌드')}
+<div class="scr">
+  ${segs('분석 기록')}
+  <div class="box row" style="cursor:pointer" data-go="SC-24"><div class="grow"><div class="tiny">진행 중 의뢰</div><b>사내 문서 로컬 검토 설치형 도구</b><div class="small muted">수락 11.23 · 이번 주 관련 신호 +4</div></div><span class="chev">›</span></div>
+  <div class="sec">지난 분석 <span>이번 달 $1.48 / $5.00</span></div>
+  <div class="list">${history.map((h,i)=>`<div class="li" data-go="SC-22" data-st="${i===1?'사업성 미달':'의뢰 1건'}">
+    <div style="width:38px" class="tiny">${h.d}</div>
+    <div class="grow"><div style="font-weight:600;font-size:13.5px">${h.t}</div><div class="tiny">${h.r} · ${h.st}</div></div>
+    <div class="tiny">${h.cost}</div><span class="chev">›</span></div>`).join('')}</div>
+  <div class="tiny" style="margin-top:12px">기록을 다시 여는 것은 0원입니다.</div>
+</div>`);
+
+S['SC-28'] = () => phone(`${bar('분석 설정',{back:'SC-17'})}
+<div class="scr">
+  <div class="sec">리포트 (자동 · 0원)</div>
+  <div class="row sb small" style="padding:6px 0"><span>주간 리포트</span><b>매주 일요일 07:00</b></div>
+  <div class="row sb small" style="padding:6px 0"><span>메일로도 받기</span><div class="toggle on"></div></div>
+  <div class="row sb small" style="padding:6px 0"><span>◆ 기준 — 증가율 / 수요 / 출처</span><b>×1.5 / 1 / 2</b></div>
+  <div class="row sb small" style="padding:6px 0"><span>AI 주제 묶기 (sol low, 소액)</span><div class="toggle"></div></div>
+  <div class="sec">사업성 분석 (요청형)</div>
+  <div class="row sb small" style="padding:6px 0"><span>모델</span><b>gpt-6.2-sol ›</b></div>
+  <div class="row sb small" style="padding:6px 0"><span>추론 강도</span><b>high</b></div>
+  <div class="row sb small" style="padding:6px 0"><span>반대 검토 기본값</span><div class="toggle on"></div></div>
+  <div class="row sb small" style="padding:6px 0"><span>의뢰 기준점</span><b>3.5 / 5</b></div>
+  <div class="row sb small" style="padding:6px 0"><span>요청 1건 상한</span><b>$1.00</b></div>
+  <div class="row sb small" style="padding:6px 0"><span>월 상한</span><b>$5.00</b></div>
+  <div class="sec">평가표 가중치</div>
+  ${[['수요 강도',25],['지불 의사',20],['시기',15],['경쟁 공백',15],['1인 실현성',15],['방어력',10]].map(([n,v])=>`<div class="row small" style="margin:6px 0"><span style="width:76px">${n}</span><div class="bar"><i style="width:${v*3}%"></i></div><b style="width:34px;text-align:right">${v}%</b></div>`).join('')}
+  <div class="sec">프롬프트</div>
+  <div class="small muted">분석 정리·평가 / 반대 검토 / 의뢰서 / 추가 질문 — SC-15에서 수정</div>
+</div>`, 'settings');
+
+S['N-02'] = () => `<div class="noti">
+  <div class="tiny" style="margin:0 4px 8px">잠금 화면 알림 (누르면 해당 화면)</div>
+  <div class="n" data-go="SC-17"><div class="row sb tiny"><span>AI 아이디어 수집기</span><span>일 07:02</span></div><b class="small">이번 주 트렌드 리포트</b><div class="small muted">뜨는 테마 3 · 분석 후보 ◆2 · 과열 1</div></div>
+  <div class="n" data-go="SC-22"><div class="row sb tiny"><span>AI 아이디어 수집기</span><span>방금</span></div><b class="small">사업성 분석 완료 — 개발 의뢰 1건</b><div class="small muted">사내 문서 로컬 검토 설치형 도구 (3.8) · $0.41</div></div>
+  <div class="n" data-go="SC-22" data-st="사업성 미달"><div class="row sb tiny"><span>AI 아이디어 수집기</span><span>11.15</span></div><b class="small">사업성 분석 완료 — 의뢰 없음</b><div class="small muted">최고 3.2(기준 3.5) · 검토 분야 3개 보기</div></div>
+  <div class="n" data-go="SC-20" data-st="예산 초과"><div class="row sb tiny"><span>AI 아이디어 수집기</span><span>11.28</span></div><b class="small">분석 월 상한 80% 사용</b><div class="small muted">$4.00 / $5.00</div></div>
+</div>`;
+
+S['M-02'] = () => `<div class="mail">
+  <div class="mh">받는 사람: 나 · 일요일 07:02<b>[기술 트렌드] 11월 4주 — 뜨는 테마 3 · 분석 후보 ◆2</b></div>
+  <div class="mb">
+    <div class="box soft small">• 가장 뜬 테마: 전화 응대 음성 에이전트 ×3.8<br>• 가장 빠른 저장소: docsieve/docsieve 하루 +312★<br>• 과열 경고: Gemini 설정 검사기 — 같은 이름 저장소 96개</div>
+    <h4>뜨는 테마</h4>
+    <table class="tbl"><tr><th>테마</th><th class="r">이번 주</th><th class="r">증가</th><th class="r">출처</th><th class="r">수요</th><th class="r">시장</th></tr>
+      ${themes.map(t=>`<tr><td>${t.mark?'◆ ':''}${t.name}${t.hot?' (과열)':''}</td><td class="r">${t.w[3]}</td><td class="r">${t.g==null?'신규':'+'+t.g+'%'}</td><td class="r">${t.src.length}</td><td class="r">${t.demand}</td><td class="r">${t.market}</td></tr>`).join('')}</table>
+    <h4>지는 테마</h4>
+    <div class="small">${falling.map(t=>`${t.name} ${t.g}%`).join(' · ')}</div>
+    <h4>빠르게 크는 저장소</h4>
+    <table class="tbl"><tr><th>저장소</th><th class="r">하루</th><th>언어</th><th>라이선스</th></tr>${repos.slice(0,5).map(r=>`<tr><td>${r.n}</td><td class="r">+${r.day}</td><td>${r.lang}</td><td>${r.lic}</td></tr>`).join('')}</table>
+    <h4>진행 중 의뢰</h4><div class="small">사내 문서 로컬 검토 설치형 도구 — 이번 주 관련 신호 +4 (수요 1 · 기술 3)</div>
+    <p style="margin-top:18px"><a class="cta" data-go="SC-17">앱에서 테마 고르고 분석 요청하기</a></p>
+    <div class="tiny">이 메일은 코드로 만든 리포트입니다(LLM 비용 0원). 데이터 28일 · 수집 실패 없음.</div>
+  </div></div>`;
+
+S['M-03'] = () => `<div class="mail">
+  <div class="mh">받는 사람: 나 · 11.22 21:14<b>[사업성 분석] 로컬 소형 모델 문서 검토 외 1 — 개발 의뢰 1건</b></div>
+  <div class="mb">
+    <div class="box ok small"><b>개발 의뢰: 사내 문서 로컬 검토 설치형 도구 (3.8 / 5)</b><br>외부 전송 금지 팀의 검토 요청이 구체적이고 경쟁 제품은 클라우드형뿐입니다. 반대 검토 통과.</div>
+    <h4>검토한 분야 (점수 순)</h4>
+    <table class="tbl">${opps.map(o=>`<tr><td class="r" style="width:40px"><b>${o.s}</b></td><td>${o.name}</td><td class="tiny">${o.req?'의뢰':o.gateFail?'관문 탈락: '+o.gateFail:'가장 약함: '+o.weak}</td></tr>`).join('')}</table>
+    <h4>의뢰서 요약</h4>
+    <div class="small"><b>MVP</b> 검토 규칙 5종 · 로컬 모델 자동 설치 · VS Code 확장 · 보고서<br><b>검증</b> 2주 랜딩 + 대기자, 팀 문의 5건 미만이면 중단<br><b>일정</b> 1인 4주</div>
+    <p style="margin-top:18px"><a class="cta" data-go="SC-24">앱에서 의뢰서 전문 보고 응답하기</a></p>
+    <div class="tiny">gpt-6.2-sol · 호출 3회 · $0.41 · 낮은 분야의 간단 보기는 앱에서 0원으로 볼 수 있습니다.</div>
+  </div></div>`;
+
+/* ───────── 설명 패널 ───────── */
+const info = {
+  'UX-0':{p:'전체 구조와 규칙을 한 장에.',d:['하단 탭에 트렌드 추가(5개)','비용 표시·점진 공개·판단/안내 구분 규칙','새 화면 목록과 비용'],q:['하단 탭 5개가 많으면 트렌드를 오늘 탭 안 세그먼트로 넣는 안도 가능']},
+  'UX-1':{p:'알림 → 메일 → 앱의 3겹 전달.',d:['바깥일수록 짧게, 행동은 앱에서만','주간 흐름(0원)과 요청 흐름(비용) 분리','응답이 어디로 돌아가는지']},
+  'SC-01':{p:'리포트가 왔다는 것을 매일 보는 화면에서 알린다.',d:['맨 위 파란 띠: 뜨는 테마 수·◆ 후보 수·과열 수','누르면 SC-17'],next:['SC-17'],cost:'0원'},
+  'SC-17':{p:'이번 주 기술 트렌드를 훑고, 분석할 테마를 고른다.',d:['요약 3줄(코드 템플릿)','테마 줄: 이름·◆/과열·건수·출처·수요·시장·4주 추이·증가율','지는 테마','선택 상태: 체크 → 하단 요청 버튼에 추정 비용'],next:['SC-19 테마 상세','SC-20 분석 요청'],cost:'0원 (요청 버튼만 비용)',states:['기본','테마 선택','데이터 부족']},
+  'SC-18':{p:'오픈소스 쪽 흐름: 누가 무엇을 만들고 있나.',d:['하루 스타 증가 순 저장소(언어·라이선스·포크 비율)','언어·라이선스 분포 막대','과열(복제 급증) 경고'],cost:'0원'},
+  'SC-19':{p:'요청 전에 숫자와 근거를 직접 확인한다.',d:['4주 막대 그래프','지표 표(값 + 뜻)','수요·기술·시장 근거 원문','관련 카드'],next:['SC-20'],cost:'0원 (요청 버튼만 비용)'},
+  'SC-20':{p:'돈이 드는 순간 — 무엇을, 얼마에, 어떤 모델로 돌리는지 확인.',d:['범위: 선택 테마 / 이번 주 전체','반대 검토 켜기·끄기(추가 비용 표시)','모델·호출 수·추정 비용·이번 달 사용량','중복 분석 안내, 상한 초과 시 버튼 막힘'],next:['SC-21'],cost:'≈$0.41 (샘플)',states:['선택 테마','이번 주 전체','이미 분석함','예산 초과']},
+  'SC-21':{p:'추론 high는 오래 걸리므로 진행 단계를 보여 준다.',d:['5단계 진행(코드 단계/LLM 단계 구분)','지금까지 비용','나가도 계속, 완료 알림'],next:['SC-22'],cost:'진행 중'},
+  'SC-22':{p:'결론 먼저, 그다음 점수 순 목록.',d:['맨 위 판단 칸: 의뢰(초록) / 사업성 미달(주황 + 이유 + 다시 볼 조건)','검토 분야 한 줄: 점수·이름·가장 약한 항목 또는 관문 탈락','의뢰 분야 → 의뢰서, 나머지 → 간단 보기'],next:['SC-23','SC-24'],cost:'0원 (저장분)',states:['의뢰 1건','사업성 미달']},
+  'SC-23':{p:'낮은 분야를 필요할 때만 짧게 본다.',d:['평가표 6항목 막대 + 한 줄 근거','관문 결과, 무엇이 바뀌면 의뢰 가능한가','근거 링크','추가 질문(비용) / 지켜보기'],next:['SC-26'],cost:'0원 (추가 질문만 비용)'},
+  'SC-24':{p:'의뢰인이 나에게 보내는 문서.',d:['사업성 점수 요약','배경·고객·반대 검토·MVP·기술·수익화·검증·일정·완료 기준·위험','근거 원문','하단 응답 4버튼'],next:['SC-25','SC-26'],cost:'0원'},
+  'SC-25':{p:'응답은 다음 분석과 추적으로 이어진다.',d:['수락: 추적 등록·리포트 칸 생성 안내','거절: 이유 칩(다음 분석 피드백)','보류: 4주 뒤 다시'],cost:'0원',states:['수락','거절','보류']},
+  'SC-26':{p:'의뢰서·심사 기록을 맥락으로 묻는다.',d:['맥락 표시','답마다 비용·근거·AI 판단 꼬리표','근거 없으면 "판단 보류"'],cost:'질문당 ≈$0.02~0.05'},
+  'SC-27':{p:'지난 분석과 진행 중 의뢰를 모아 본다.',d:['진행 중 의뢰 카드(관련 신호 수)','지난 분석: 날짜·대상·결과·응답·비용','이번 달 사용량'],cost:'0원'},
+  'SC-28':{p:'리포트와 분석 비용을 스스로 조절.',d:['리포트 일정·메일·◆ 기준·AI 주제 묶기','모델·추론 강도·반대 검토·기준점·상한','평가표 가중치'],cost:'0원'},
+  'N-02':{p:'짧게 알리고 해당 화면으로 보낸다.',d:['주간 리포트 도착','분석 완료(의뢰 / 미달)','예산 80% 경고']},
+  'M-02':{p:'앱을 안 열어도 이번 주 흐름을 읽을 수 있게.',d:['요약 3줄, 뜨는·지는 테마 표, 저장소 표, 진행 중 의뢰','분석 요청은 앱으로 연결'],cost:'0원'},
+  'M-03':{p:'분석 결과를 기록으로 남긴다.',d:['판단(의뢰/미달)','검토 분야 점수 순','의뢰서 요약 → 앱에서 응답'],cost:'0원'},
+};
+const defaults = {'SC-17':'테마 선택','SC-20':'선택 테마','SC-22':'의뢰 1건','SC-25':'수락'};
+
+function nav(){
+  let g='', h='';
+  for (const s of screens){ if (s.g!==g){ g=s.g; h+=`<h3>${g}</h3>`; } h+=`<a data-go="${s.id}" class="${s.id===cur?'on':''}"><span class="id">${s.id}</span>${s.name}</a>`; }
+  document.getElementById('map').innerHTML = h;
+}
+function side(){
+  const s = screens.find(x=>x.id===cur), i = info[cur]||{};
+  document.getElementById('info').innerHTML = `<div class="sid">${cur}</div><h2>${s.name}</h2>
+  <h4>목적</h4><div>${i.p||''}</div>
+  ${i.d?`<h4>전달하는 정보</h4><ul>${i.d.map(x=>`<li>${x}</li>`).join('')}</ul>`:''}
+  ${i.states?`<h4>상태</h4><div class="states">${i.states.map(x=>`<button data-st-only="${x}" class="${(st[cur]||defaults[cur])===x?'on':''}">${x}</button>`).join('')}</div>`:''}
+  ${i.next?`<h4>다음 화면</h4><div class="small">${i.next.join(' · ')}</div>`:''}
+  ${i.cost?`<h4>비용</h4><div class="${i.cost.startsWith('0')?'cost0':'costy'}">${i.cost}</div>`:''}
+  ${i.q?`<h4>검토 포인트</h4><ul>${i.q.map(x=>`<li>${x}</li>`).join('')}</ul>`:''}
+  <h4>안내</h4><div class="small muted">데이터·비용은 가상 샘플입니다. sol 단가 확인 전이라 비용은 예시입니다.</div>`;
+}
+function render(){
+  if (!st[cur] && defaults[cur]) st[cur] = defaults[cur];
+  document.getElementById('stage').innerHTML = S[cur]();
+  nav(); side();
+}
+document.addEventListener('click', e => {
+  const pick = e.target.closest('[data-pick]');
+  if (pick){ e.stopPropagation(); const id = pick.dataset.pick; sel.has(id)?sel.delete(id):(sel.size<3&&sel.add(id)); render(); return; }
+  const only = e.target.closest('[data-st-only]');
+  if (only){ st[cur] = only.dataset.stOnly; render(); return; }
+  const go = e.target.closest('[data-go]');
+  if (go){ cur = go.dataset.go; if (go.dataset.st) st[cur] = go.dataset.st; render(); document.getElementById('stage').scrollTop = 0; }
+});
+const tb = document.getElementById('themeBtn');
+tb.onclick = () => { const d = document.documentElement.dataset.theme==='dark'; document.documentElement.dataset.theme = d?'light':'dark'; tb.textContent = d?'다크 모드':'라이트 모드'; };
+render();
+</script>
+</body>
+</html>
