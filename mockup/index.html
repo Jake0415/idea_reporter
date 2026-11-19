@@ -1,0 +1,584 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 아이디어 수집기 — 와이어프레임</title>
+<style>
+:root{
+  --bg:#f3f4f6; --panel:#ffffff; --line:#d1d5db; --line2:#e5e7eb; --ink:#111827; --ink2:#4b5563; --ink3:#9ca3af;
+  --box:#f9fafb; --accent:#2563eb; --accent-soft:#dbeafe; --warn:#b45309; --warn-soft:#fef3c7; --bad:#b91c1c; --bad-soft:#fee2e2;
+  --ok:#047857; --ok-soft:#d1fae5; --l:#7c3aed; --l-soft:#ede9fe;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,"Malgun Gothic","Apple SD Gothic Neo",sans-serif}
+button{font:inherit;cursor:pointer}
+header.top{display:flex;align-items:center;gap:12px;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--line)}
+header.top h1{font-size:16px;margin:0}
+header.top .meta{color:var(--ink2);font-size:12px}
+header.top .sp{flex:1}
+.pill{display:inline-block;font-size:11px;padding:1px 7px;border-radius:999px;border:1px solid var(--line);background:var(--box);color:var(--ink2);white-space:nowrap}
+.pill.mvp{background:var(--accent-soft);border-color:#bfdbfe;color:#1e40af}
+.pill.l{background:var(--l-soft);border-color:#ddd6fe;color:var(--l)}
+.pill.new{background:var(--warn-soft);border-color:#fde68a;color:var(--warn)}
+.layout{display:grid;grid-template-columns:250px 1fr 360px;gap:0;height:calc(100vh - 49px)}
+nav#map{overflow:auto;border-right:1px solid var(--line);background:var(--panel);padding:10px}
+nav#map h3{font-size:11px;color:var(--ink3);margin:14px 6px 4px;text-transform:none;letter-spacing:.02em}
+nav#map a{display:flex;align-items:center;gap:6px;padding:5px 8px;border-radius:6px;color:var(--ink);text-decoration:none;font-size:13px}
+nav#map a:hover{background:var(--box)}
+nav#map a.on{background:var(--accent-soft);color:#1e3a8a;font-weight:600}
+nav#map a .id{font-family:ui-monospace,Consolas,monospace;font-size:11px;color:var(--ink3);min-width:44px}
+nav#map a .dot{width:6px;height:6px;border-radius:50%;background:#f59e0b;margin-left:auto;display:none}
+nav#map a.noted .dot{display:block}
+main{overflow:auto;display:flex;justify-content:center;align-items:flex-start;padding:24px}
+.phone{width:390px;height:800px;background:var(--panel);border:10px solid #1f2937;border-radius:36px;display:flex;flex-direction:column;overflow:hidden;position:relative;box-shadow:0 8px 30px rgba(0,0,0,.12)}
+.status{height:26px;display:flex;align-items:center;justify-content:space-between;padding:0 18px;font-size:11px;color:var(--ink2);flex:none}
+.appbar{display:flex;align-items:center;gap:8px;padding:8px 14px;border-bottom:1px solid var(--line2);flex:none;min-height:46px}
+.appbar .t{font-weight:700;font-size:16px;flex:1}
+.appbar .back{border:none;background:none;font-size:20px;padding:0 4px;color:var(--ink)}
+.appbar .act{border:1px solid var(--line);background:var(--box);border-radius:8px;padding:3px 9px;font-size:12px}
+.scr{flex:1;overflow:auto;padding:12px 14px 20px}
+.tabs{display:flex;border-top:1px solid var(--line);flex:none;background:var(--panel)}
+.tabs button{flex:1;border:none;background:none;padding:8px 0 10px;font-size:11px;color:var(--ink3);display:flex;flex-direction:column;align-items:center;gap:2px}
+.tabs button .ic{width:22px;height:22px;border:2px solid currentColor;border-radius:6px}
+.tabs button.on{color:var(--accent);font-weight:700}
+.box{border:1px solid var(--line);border-radius:10px;background:var(--panel);padding:10px 12px;margin-bottom:10px}
+.box.soft{background:var(--box)}
+.box.warn{background:var(--warn-soft);border-color:#fcd34d;color:#78350f}
+.box.bad{background:var(--bad-soft);border-color:#fca5a5;color:#7f1d1d}
+.box.ok{background:var(--ok-soft);border-color:#6ee7b7;color:#064e3b}
+.box.info{background:var(--accent-soft);border-color:#93c5fd;color:#1e3a8a}
+.row{display:flex;align-items:center;gap:8px}
+.row.sb{justify-content:space-between}
+.muted{color:var(--ink2)} .small{font-size:12px} .tiny{font-size:11px;color:var(--ink3)}
+.h{font-weight:700;font-size:15px;margin:2px 0 4px}
+.sec{font-size:12px;color:var(--ink3);margin:16px 2px 6px;font-weight:600}
+.funnel{display:flex;align-items:center;gap:4px;font-size:12px;flex-wrap:wrap}
+.funnel b{font-size:14px}
+.card{border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:10px;background:var(--panel);cursor:pointer;transition:border-color .15s}
+.card:hover{border-color:var(--accent)}
+.card .title{font-weight:700;font-size:14px;line-height:1.35}
+.card .one{color:var(--ink2);font-size:12px;margin:3px 0 6px}
+.chips{display:flex;flex-wrap:wrap;gap:4px}
+.chip{font-size:11px;border:1px solid var(--line);border-radius:999px;padding:1px 8px;background:var(--box);color:var(--ink2);white-space:nowrap}
+.chip.cat{background:#eef2ff;border-color:#c7d2fe;color:#3730a3}
+.chip.badge{background:var(--warn-soft);border-color:#fde68a;color:var(--warn)}
+.chip.sel{background:var(--accent);border-color:var(--accent);color:#fff}
+.star{border:none;background:none;font-size:18px;color:var(--ink3);padding:0 2px;line-height:1}
+.star.on{color:#f59e0b}
+.btn{border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:7px 12px;font-size:13px}
+.btn.pri{background:var(--accent);color:#fff;border-color:var(--accent)}
+.btn.full{width:100%}
+.btn.ghost{background:none}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.field{margin-bottom:10px}
+.field label{display:block;font-size:12px;color:var(--ink2);margin-bottom:3px}
+.input{width:100%;border:1px solid var(--line);border-radius:8px;padding:7px 9px;background:var(--panel);font:inherit;color:var(--ink)}
+.input.ph{color:var(--ink3)}
+.list .li{display:flex;align-items:center;gap:8px;padding:10px 2px;border-bottom:1px solid var(--line2);cursor:pointer}
+.list .li:last-child{border-bottom:none}
+.list .li .grow{flex:1;min-width:0}
+.list .li .chev{color:var(--ink3)}
+.blk{border-top:1px solid var(--line2);padding:10px 0}
+.blk .bt{font-size:12px;font-weight:700;color:var(--ink2);margin-bottom:4px}
+.sig{border:1px solid var(--line2);border-radius:8px;padding:7px 9px;margin:6px 0;background:var(--box);font-size:12px}
+.sig .src{color:var(--ink3);font-size:11px}
+.quote{border-left:3px solid var(--line);padding-left:8px;margin:4px 0;color:var(--ink2);font-size:12px}
+.bar{height:6px;border-radius:3px;background:var(--line2);overflow:hidden}
+.bar i{display:block;height:100%;background:var(--accent)}
+.steps{display:flex;gap:4px;margin-bottom:12px}
+.steps i{flex:1;height:4px;border-radius:2px;background:var(--line2)}
+.steps i.on{background:var(--accent)}
+.toggle{width:36px;height:20px;border-radius:10px;background:var(--line);position:relative;flex:none}
+.toggle.on{background:var(--accent)}
+.toggle::after{content:"";position:absolute;width:16px;height:16px;border-radius:50%;background:#fff;top:2px;left:2px;transition:left .15s}
+.toggle.on::after{left:18px}
+.tbl{width:100%;border-collapse:collapse;font-size:12px}
+.tbl td,.tbl th{border-bottom:1px solid var(--line2);padding:5px 4px;text-align:left}
+.tbl th{color:var(--ink3);font-weight:600}
+.sheet-bg{position:absolute;inset:0;background:rgba(17,24,39,.35);display:flex;align-items:flex-end;z-index:5}
+.sheet{background:var(--panel);width:100%;border-radius:16px 16px 0 0;padding:14px 16px 20px}
+.sheet .grab{width:40px;height:4px;border-radius:2px;background:var(--line);margin:0 auto 10px}
+.toast{position:absolute;left:50%;bottom:70px;transform:translateX(-50%);background:#111827;color:#fff;border-radius:8px;padding:7px 12px;font-size:12px;display:flex;gap:12px;align-items:center;z-index:6;white-space:nowrap}
+.toast u{color:#93c5fd;cursor:pointer;text-decoration:none}
+.ph-img{border:1px dashed var(--line);border-radius:8px;height:60px;display:flex;align-items:center;justify-content:center;color:var(--ink3);font-size:12px;background:repeating-linear-gradient(45deg,#fafafa,#fafafa 6px,#f3f4f6 6px,#f3f4f6 12px)}
+.fade{animation:fade .35s ease both}
+@keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+aside#info{overflow:auto;border-left:1px solid var(--line);background:var(--panel);padding:14px 16px}
+aside#info h2{font-size:16px;margin:4px 0 2px}
+aside#info .sid{font-family:ui-monospace,Consolas,monospace;color:var(--ink3);font-size:12px}
+aside#info h4{font-size:12px;color:var(--ink3);margin:14px 0 4px}
+aside#info ul{margin:0;padding-left:18px}
+aside#info li{margin:2px 0}
+aside#info .states{display:flex;flex-wrap:wrap;gap:4px}
+aside#info .states button{border:1px solid var(--line);background:var(--box);border-radius:999px;padding:2px 9px;font-size:12px}
+aside#info .states button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+aside#info textarea{width:100%;min-height:110px;border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit;font-size:13px;resize:vertical}
+aside#info .q{background:var(--warn-soft);border:1px solid #fde68a;border-radius:8px;padding:6px 9px;font-size:12px;color:#78350f;margin:4px 0}
+aside#info code{font-family:ui-monospace,Consolas,monospace;font-size:12px;background:var(--box);padding:0 3px;border-radius:3px}
+aside#info .navs a{color:var(--accent);cursor:pointer;margin-right:8px;font-size:12px}
+.mail{width:600px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:0;overflow:hidden}
+.mail .mh{padding:12px 16px;border-bottom:1px solid var(--line2);font-size:12px;color:var(--ink2)}
+.mail .mb{padding:16px 20px}
+.noti{width:390px}
+.noti .n{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:10px 12px;margin-bottom:10px;box-shadow:0 2px 8px rgba(0,0,0,.06);cursor:pointer}
+@media (max-width:1100px){.layout{grid-template-columns:200px 1fr}aside#info{display:none}}
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>AI 아이디어 수집기 — 와이어프레임 v1</h1>
+  <span class="meta">화면 안의 버튼·탭·카드를 눌러 이동 · 오른쪽 패널에서 상태 전환·검토 메모</span>
+  <span class="sp"></span>
+  <span class="pill mvp">MVP</span><span class="pill l">나중(L)</span><span class="pill new">이번에 새로 정의</span>
+  <button class="btn" id="exportNotes">검토 메모 복사</button>
+</header>
+<div class="layout">
+  <nav id="map"></nav>
+  <main id="stage"></main>
+  <aside id="info"></aside>
+</div>
+
+<script>
+/* ===================== 샘플 데이터 (가상) ===================== */
+const CATS = {"dev-tools":"개발 도구","workflow-automation":"업무 자동화","content-creation":"콘텐츠 제작","voice-conversation":"음성·대화","data-search":"데이터·검색","education":"교육·학습","commerce-marketing":"커머스·마케팅","personal-productivity":"개인 생산성","health-life":"건강·생활","other":"기타"};
+const CARDS = [
+  {id:"c1", title:"로컬 LLM으로 회의록을 요약하는 사내 설치형 앱", one:"녹음 파일을 PC 안에서만 처리해 요약·할 일을 뽑아 주는 데스크톱 앱", cat:"workflow-automation", badges:["여러 곳에서 화제"], tags:["meeting-notes","local-llm","privacy"],
+   why:"양자화된 경량 모델이 노트북에서도 돌기 시작했고(기술), 회의록 SaaS 가격·보안 불만 글이 이번 주 두 곳에서 올라왔다(수요).",
+   problem:"보안 규정 때문에 클라우드 회의록 서비스를 못 쓰는 20~100명 규모 회사의 팀장이 회의 정리에 매주 2~3시간을 쓴다.",
+   tech:[{t:"경량 음성 인식 + 4bit 양자화 모델 공개",s:"GitHub · ★2,464 · MIT",n:"노트북 CPU에서 실시간에 가까운 처리"}],
+   demand:[{t:"\"보안 때문에 회의록 툴을 못 써요\"",s:"Reddit r/SaaS · 추천 180",n:"같은 상황 댓글 다수",q:[["dev_kim","우리 회사도 외부 업로드 금지라 결국 손으로 정리함"],["ops_lee","(반대) 요즘은 온프레미스 옵션 주는 곳도 있음"]]}],
+   comp:[{t:"클라우드 회의록 서비스 A",s:"Product Hunt · 추천 420",n:"빈틈: 설치형 없음, 인당 월 과금"}],
+   hist:["11월 13일 카드 '오프라인 음성 메모 정리'와 같은 문제"],
+   effort:"1인 3주", diff:"완전 오프라인 + 1회 구매형", risk:"노트북 사양별 처리 속도 편차", valid:"사내 보안팀 있는 지인 회사 3곳에 2주 시범 설치, 주간 사용 횟수 측정",
+   caveats:["처리 속도는 업체 주장(독립 측정 없음)"], links:4, score:8.4},
+  {id:"c2", title:"소상공인용 고객 문의 1차 응대 봇 (오픈소스 에이전트 기반)", one:"카카오톡·인스타 DM 문의를 FAQ와 예약표로 먼저 답해 주는 봇", cat:"commerce-marketing", badges:["급상승"], tags:["customer-support","ai-agent","smb"],
+   why:"에이전트 프레임워크가 공개 하루 만에 HN 300점을 넘었고, 같은 날 '문의 답장에 밤을 샌다'는 자영업자 글이 올라왔다.",
+   problem:"1~3인 매장 사장이 영업 중 DM 문의에 바로 답하지 못해 예약을 놓친다.",
+   tech:[{t:"오픈소스 에이전트 프레임워크 v1",s:"HN · 300점 · Apache-2.0",n:"도구 호출·대화 기록 내장"}],
+   demand:[{t:"\"영업 끝나고 DM 답장만 1시간\"",s:"Reddit r/smallbusiness · 추천 95",n:"",q:[["cafe_owner","예약 문의가 제일 많고 답이 늦으면 바로 다른 곳 감"]]}],
+   comp:[], hist:[], effort:"1인 4주", diff:"매장 예약표 연동 + 한국어 메신저", risk:"메신저 API 정책 제한", valid:"동네 매장 5곳에 수동 응대 대행(사람이 봇 흉내)으로 2주 수요 확인",
+   caveats:["근거가 출처 하나씩뿐"], links:3, score:7.6},
+  {id:"c3", title:"AI로 옮긴 코드가 원본 수정사항을 놓치는지 알려주는 감시 도구", one:"원본 저장소의 버그·보안 수정을 따라가지 못한 '번역 포크'를 찾아 알려 줌", cat:"dev-tools", badges:[], tags:["code-migration","security","dependency"],
+   why:"AI 에이전트로 옮긴 대형 오픈소스 클론이 3주 만에 원본 수정 200여 건을 놓쳤다는 글이 화제였다.",
+   problem:"AI로 다른 언어로 옮긴 라이브러리를 쓰는 팀이 원본의 보안 수정이 반영됐는지 알 수 없다.",
+   tech:[{t:"코드 대응 관계를 찾는 오픈소스 도구",s:"GitHub · ★880 · MIT",n:"함수 단위 대응 추정"}],
+   demand:[], comp:[{t:"의존성 취약점 알림 서비스 B",s:"Product Hunt · 추천 150",n:"빈틈: '번역 포크'는 추적 못 함"}],
+   hist:[], effort:"1인 3주", diff:"번역 포크 전용 비교", risk:"번역된 코드 대응 정확도", valid:"공개된 번역 포크 3개를 골라 수동 비교 리포트 → 관리자 반응 확인",
+   caveats:["원본 수정 건수는 블로그 글 기준"], links:3, score:7.2},
+  {id:"c4", title:"연구실 슬랙으로 매일 논문·모델 소식을 골라 보내는 다이제스트", one:"연구 주제 키워드로 arXiv·HF 소식을 골라 한 줄 요약해 보내 줌", cat:"data-search", badges:["연속 등장"], tags:["research-digest","arxiv","slack-bot"],
+   why:"단백질 서열 학습 소식이 3일 중 2일 등장했고, 연구실 정보 공유가 번거롭다는 글이 있었다.",
+   problem:"대학원 연구실이 새 논문·모델을 각자 찾아 공유하느라 중복이 많고 놓치는 것도 많다.",
+   tech:[{t:"단백질 서열로 학습한 모델 공개",s:"HN · 165점",n:"연구 분야별 모델 증가"}],
+   demand:[{t:"\"연구실 논문 공유 어떻게 하세요?\"",s:"HN 댓글",n:"",q:[["phd_park","슬랙 채널에 링크만 쌓여서 아무도 안 읽음"]]}],
+   comp:[], hist:["11월 18일 항목 '연구용 모델 공개'와 연결"], effort:"1인 2주", diff:"연구실 단위 + 주제 키워드 학습", risk:"연구실이 돈을 낼지", valid:"연구실 3곳에 2주 무료 제공, 클릭률·해지 의사 확인",
+   caveats:[], links:3, score:6.9},
+  {id:"c5", title:"회계 감사 질문을 미리 만들어 주는 실사 체크리스트 도우미", one:"재무제표 항목별로 놓치기 쉬운 확인 질문을 뽑아 주는 도구", cat:"workflow-automation", badges:[], tags:["audit","checklist","finance"],
+   why:"AI 에이전트가 감사 실험에서 사람보다 좋은 질문을 했다는 기사가 HN 1위였다.",
+   problem:"작은 회계법인 주니어가 실사 질문 목록을 만드는 데 시간이 오래 걸리고 빠뜨림이 생긴다.",
+   tech:[], demand:[{t:"감사 실험 기사 댓글의 실무자 의견",s:"HN · 356점",n:"",q:[["cpa_choi","질문 목록 초안만 있어도 반나절은 줄어듦"],["skeptic9","(반대) 책임 문제 때문에 결국 다 다시 봐야 함"]]}],
+   comp:[], hist:[], effort:"1인 3주", diff:"한국 회계 기준 맞춤", risk:"책임 소재 때문에 도입 거부", valid:"회계사 5명 인터뷰 + 질문 목록 샘플 평가",
+   caveats:["기술 신호가 없어 '근거 부족' 경고 대상"], links:2, score:6.5, invalid:true},
+];
+const state = {screen:"SC-01", st:{}, stars:{c2:true}, notInterested:{}, sheet:null, toast:null, setupStep:1, filters:{star:false}, expandedLinks:false};
+
+/* ===================== 화면 정의 ===================== */
+const SCREENS = [
+ {g:"시작", id:"SC-00", name:"첫 실행 설정", mvp:true,
+  purpose:"처음 한 번 필요한 값만 받고 첫 실행까지 안내한다.",
+  feats:["F-31 첫 실행 설정","F-25 AI 공급자 키 등록·확인 (하나 이상 필수)","F-24 메일 설정·테스트 발송","F-21 내 기준"],
+  data:["SecretProvider(Keystore): ANTHROPIC/OPENAI 키","LlmProvider.listModels() — 키 확인","Mailer — 테스트 발송","criteria"],
+  states:["1 AI 키","1 키 확인 실패","2 메일","3 내 기준","4 첫 실행"],
+  entry:["앱 최초 실행", "SC-11에서 모든 AI 키를 지운 경우"],
+  open:["내 기준 4문항의 기본값(미정)","Gmail 외 메일 계정 지원 여부"]},
+ {g:"오늘 탭", id:"SC-01", name:"오늘의 카드", mvp:true, tab:"today",
+  purpose:"오늘 받을 아이디어를 한눈에 본다.",
+  feats:["F-04 오늘의 카드 목록(분류·점수·배지)","F-03 실행 깔때기·상태","F-02 지금 실행(같은 날이면 교체)","F-06 ★ 관심","F-29 알림 진입"],
+  data:["IdeaStore(오늘 카드)","RunReport(깔때기·비용·실패 출처)","FeedbackStore","배지: 코드 계산(design §7-1 ⑤)"],
+  states:["기본","실행 전(어제 카드)","실행 중","출처 실패","예산 초과","키 확인 실패","카드 0개"],
+  entry:["하단 탭 오늘","실행 완료 알림"],
+  open:["실패 알림 정책(매번/연속 2회)","카드 0개일 때 어제 카드를 보여줄지"]},
+ {g:"오늘 탭", id:"SC-02", name:"카드 상세", mvp:true, tab:"today", back:"SC-01",
+  purpose:"아이디어를 판단하는 데 필요한 근거를 한 화면에 모은다.",
+  feats:["F-05 카드 상세 블록(menu §5)","F-06 ★","F-07 관심 없음 + 이유","F-10 근거 원문 열기","F-08 메모(L)","F-09 공유(L)","F-11 더 파고들기(L)"],
+  data:["IdeaCard","SignalRef → Item","FeedbackStore","HistorySearch(과거 언급)"],
+  states:["기본","관심 없음 이유 선택","근거 링크 펼침","확인 필요 있음"],
+  entry:["SC-01·SC-03 카드","메일 링크 ideacollector://card/{id}"],
+  open:["메모·공유를 MVP에 넣을지"]},
+ {g:"보관함 탭", id:"SC-03", name:"지난 카드", mvp:true, tab:"archive",
+  purpose:"지난 카드를 다시 찾고 비교한다.",
+  feats:["F-12 날짜별 보관함","F-13 필터·검색(★만, 분류, 태그, 글자)"],
+  data:["IdeaStore","FeedbackStore","HistorySearch(FTS)"],
+  states:["기본","★만","검색 결과 없음"],
+  entry:["하단 탭 보관함"], open:["관심 없음 카드 기본 숨김이 맞는지"]},
+ {g:"보관함 탭", id:"SC-04", name:"반복 주제", mvp:false, tab:"archive", back:"SC-03",
+  purpose:"며칠째 계속 나오는 주제를 본다.",
+  feats:["F-14 반복 주제(topicKey 이력)"],
+  data:["TopicHistory(topicKey, topicLabel, runDate)","IdeaStore"],
+  states:["기본"], entry:["SC-03 상단 '반복 주제'"], open:["MVP 이후"]},
+ {g:"수집함 탭", id:"SC-05", name:"오늘 수집 항목", mvp:false, tab:"inbox",
+  purpose:"오늘 모은 원자료와 통과·탈락 이유를 본다(기준 조정용).",
+  feats:["F-15 수집함(통과/탈락 이유)","F-16 '다음엔 포함' 표시"],
+  data:["ItemStore + DropReason + ClassifiedItem"],
+  states:["통과","탈락"], entry:["(L) 하단 탭 수집함 — MVP에서는 숨김"], open:["MVP에서 설정 > 실행 상세 안에 넣을지"]},
+ {g:"설정 탭", id:"SC-06", name:"설정 홈", mvp:true, tab:"settings", isNew:true,
+  purpose:"설정 메뉴의 입구. (menu.md에 번호 없던 화면 — 이번에 SC-06으로 정의)",
+  feats:["설정 묶음: 수집 / 아이디어 / 운영 / AI 공급자 / 정보"],
+  data:["각 하위 화면 요약값(키 연결 상태, 다음 실행 시각, 이번 달 비용)"],
+  states:["기본","키 확인 실패"], entry:["하단 탭 설정"], open:[]},
+ {g:"설정 탭", id:"SC-07", name:"출처 관리", mvp:true, tab:"settings", back:"SC-06",
+  purpose:"출처를 켜고 끄고, 출처별 품질을 본다.",
+  feats:["F-17 출처 관리 + 출처 통계","F-18 RSS 추가(L)"],
+  data:["SourceConfig(Room 덮어쓰기)","SourceStats(하루 평균·통과율·평균 점수)"],
+  states:["기본"], entry:["SC-06 > 출처 관리"], open:["3단계 출처(HF·Reddit·PH)의 키 등록 위치"]},
+ {g:"설정 탭", id:"SC-07a", name:"출처 상세", mvp:true, tab:"settings", back:"SC-07",
+  purpose:"출처 하나의 검색 조건과 기준을 바꾸고 연결을 시험한다.",
+  feats:["F-17 검색어·최소 점수·최대 건수·기간·프로필 배정","F-19 연결 테스트"],
+  data:["HnConfig / GitHubConfig …","SourceAdapter.fetch() 1회"],
+  states:["기본","연결 테스트 성공","연결 테스트 실패"], entry:["SC-07 출처 줄"], open:[]},
+ {g:"설정 탭", id:"SC-08", name:"신호 프로필", mvp:false, tab:"settings", back:"SC-06",
+  purpose:"기술·수요·경쟁 프로필의 임계값과 평가표를 본다.",
+  feats:["F-20 신호 프로필(임계값·후보 상한·평가표)"],
+  data:["ProfileConfig + match.md + analysis.md"],
+  states:["기본"], entry:["SC-06 > 신호 프로필"], open:["평가표 직접 수정 허용 범위"]},
+ {g:"설정 탭", id:"SC-09", name:"내 기준·카드 구성", mvp:true, tab:"settings", back:"SC-06",
+  purpose:"카드 작성에 쓰는 내 기준과 카드 구성 규칙을 정한다.",
+  feats:["F-21 내 기준","F-22 카드 구성(카드 수·분류별 상한·태그 상한·피드백 반영 수)"],
+  data:["criteria","PipelineConfig","categories.json(고정 10개)"],
+  states:["기본"], entry:["SC-06 > 내 기준","SC-00 3단계"], open:["내 기준 4문항 기본값(미정)"]},
+ {g:"설정 탭", id:"SC-10", name:"실행 기록", mvp:true, tab:"settings", back:"SC-06",
+  purpose:"날짜별 실행 결과와 비용을 본다.",
+  feats:["F-27 실행 기록·월 비용"],
+  data:["RunReport 목록"], states:["기본"], entry:["SC-06 > 실행 기록","SC-01 실패 띠"], open:[]},
+ {g:"설정 탭", id:"SC-10a", name:"실행 상세", mvp:true, tab:"settings", back:"SC-10",
+  purpose:"한 번의 실행을 단계·출처·AI 호출 단위로 본다.",
+  feats:["F-27 단계별 건수·출처 결과·LLM 호출(공급자·모델·토큰·비용·대체 사용)"],
+  data:["RunReport.stages / sources / dropCounts / llmCalls"],
+  states:["성공","일부 실패"], entry:["SC-10 줄","실행 실패 알림"], open:["탈락 항목 목록을 여기서 보여줄지(SC-05 대체)"]},
+ {g:"설정 탭", id:"SC-11", name:"AI 공급자·모델", mvp:true, tab:"settings", back:"SC-06",
+  purpose:"Claude·OpenAI 키와 단계별 모델, 예산을 관리한다.",
+  feats:["F-25 AI 공급자 키 등록·확인·삭제","F-26 단계별 모델·대체 공급자·일일 예산·가격표","F-32 보충 검색(L)"],
+  data:["SecretProvider","LlmProvider.listModels()","StageModel","ModelCatalog 가격표"],
+  states:["둘 다 연결","Claude만","키 확인 실패","키 등록 시트"], entry:["SC-06 > AI 공급자"], open:["OpenAI 기본 모델 이름(구현 시 확인)"]},
+ {g:"설정 탭", id:"SC-11b", name:"일정·메일·출처 키", mvp:true, tab:"settings", back:"SC-06", isNew:true,
+  purpose:"실행 일정, 메일, 출처 키, 백업. (menu.md SC-11의 나머지 묶음을 별도 화면으로 분리)",
+  feats:["F-23 실행 일정","F-24 메일·테스트 발송","F-25 출처 키(GitHub·Reddit·PH)","F-28 백업(L)"],
+  data:["WorkScheduler","Mailer","SecretProvider"],
+  states:["기본","배터리 최적화 안내"], entry:["SC-06 > 일정·메일"], open:["조건 미충족 날 처리(4단계에서 정의)"]},
+ {g:"설정 탭", id:"SC-12", name:"정보", mvp:true, tab:"settings", back:"SC-06", isNew:true,
+  purpose:"버전과 오픈소스 고지(Horizon MIT 등).",
+  feats:["버전","오픈소스 고지"], data:["THIRD_PARTY_NOTICES"], states:["기본"], entry:["SC-06 > 정보"], open:[]},
+ {g:"앱 밖", id:"MAIL", name:"메일 리포트", mvp:true,
+  purpose:"매일 받는 요약본 메일. 판단은 앱에서 한다.",
+  feats:["F-30 메일 리포트(menu §6)"],
+  data:["HtmlRenderer","RunReport","IdeaCard"],
+  states:["기본","출처 실패 포함"], entry:["매일 첫 성공 실행 후 1회"], open:[]},
+ {g:"앱 밖", id:"NOTI", name:"알림", mvp:true,
+  purpose:"실행 완료·실패·키 문제를 알린다.",
+  feats:["F-29 알림(완료→SC-01, 실패→SC-10a, 키 문제→SC-11)"],
+  data:["RunReport"], states:["기본"], entry:["시스템 알림"], open:["실패 알림 정책"]},
+];
+const byId = Object.fromEntries(SCREENS.map(s=>[s.id,s]));
+const curState = id => state.st[id] || byId[id].states[0];
+
+/* ===================== 공통 조각 ===================== */
+const esc = s => String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const chipCat = c => `<span class="chip cat">${CATS[c]}</span>`;
+const badges = c => c.badges.map(b=>`<span class="chip badge">${b}</span>`).join("");
+function appbar(title, opts={}){
+  const back = opts.back ? `<button class="back" data-nav="${opts.back}" aria-label="뒤로">‹</button>` : "";
+  return `<div class="appbar">${back}<div class="t">${title}</div>${opts.right||""}</div>`;
+}
+function tabs(active){
+  const t=[["today","오늘","SC-01"],["archive","보관함","SC-03"],["settings","설정","SC-06"]];
+  return `<div class="tabs">${t.map(([k,l,to])=>`<button class="${k===active?"on":""}" data-nav="${to}"><span class="ic"></span>${l}</button>`).join("")}</div>`;
+}
+function phone(inner, tab){
+  return `<div class="phone" id="phone"><div class="status"><span>7:02</span><span>●●● 5G 82%</span></div>${inner}${tab?tabs(tab):""}${sheetHtml()}${toastHtml()}</div>`;
+}
+function cardRow(c, i){
+  const ni = state.notInterested[c.id];
+  return `<div class="card fade" style="animation-delay:${i*60}ms;${ni?"opacity:.5":""}" data-nav="SC-02" data-card="${c.id}">
+    <div class="row sb" style="align-items:flex-start"><div class="title">${i+1}. ${esc(c.title)}</div>
+    <button class="star ${state.stars[c.id]?"on":""}" data-star="${c.id}" aria-label="관심">★</button></div>
+    <div class="one">${esc(c.one)}</div>
+    <div class="chips">${chipCat(c.cat)}${badges(c)}<span class="chip">AI ${c.score}</span>${ni?`<span class="chip">관심 없음</span>`:""}</div></div>`;
+}
+function sheetHtml(){
+  if(state.sheet==="ni"){
+    const rs=[["already-exists","이미 있음"],["too-big","너무 큼"],["not-my-field","내 분야 아님"],["weak-evidence","근거 약함"],["other","기타(직접 입력)"]];
+    return `<div class="sheet-bg" data-close><div class="sheet"><div class="grab"></div>
+      <div class="h">관심 없음 — 이유를 골라 주세요</div><div class="tiny" style="margin-bottom:8px">다음 날 카드 작성에 반영됩니다</div>
+      <div class="chips" style="gap:6px">${rs.map(([k,l])=>`<button class="chip" style="padding:5px 10px;font-size:13px" data-ni="${k}">${l}</button>`).join("")}</div>
+      <button class="btn ghost full" style="margin-top:12px" data-close>취소</button></div></div>`;
+  }
+  if(state.sheet==="key"){
+    return `<div class="sheet-bg" data-close><div class="sheet"><div class="grab"></div>
+      <div class="h">OpenAI 키 등록</div>
+      <div class="field"><label>API 키</label><div class="input ph">sk-… 붙여 넣기</div></div>
+      <div class="tiny" style="margin-bottom:10px">기기 보안 저장소(Keystore)에만 저장 · 등록 후 끝 4자리만 표시 · 바로 모델 목록을 불러와 확인</div>
+      <button class="btn pri full" data-toast="키 확인 완료 — 모델 12개를 불러왔습니다" data-close-after>확인하고 저장</button></div></div>`;
+  }
+  if(state.sheet==="rerun"){
+    return `<div class="sheet-bg" data-close><div class="sheet"><div class="grab"></div>
+      <div class="h">오늘 카드를 새 결과로 바꿉니다</div>
+      <div class="small muted" style="margin-bottom:10px">이전 결과는 실행 기록에 남습니다. 메일은 오늘 이미 보냈으므로 다시 보내지 않습니다. 예상 비용 약 $0.15</div>
+      <div class="row"><button class="btn ghost" style="flex:1" data-close>취소</button><button class="btn pri" style="flex:1" data-setstate="SC-01:실행 중" data-close-after>실행</button></div></div></div>`;
+  }
+  return "";
+}
+function toastHtml(){ return state.toast ? `<div class="toast">${esc(state.toast)}<u data-undo>되돌리기</u></div>` : ""; }
+
+/* ===================== 화면 렌더러 ===================== */
+const R = {};
+R["SC-00"] = s => {
+  const step = s.startsWith("1")?1:s.startsWith("2")?2:s.startsWith("3")?3:4;
+  const st = `<div class="steps">${[1,2,3,4].map(i=>`<i class="${i<=step?"on":""}"></i>`).join("")}</div>`;
+  let body="";
+  if(step===1){
+    body = `${st}<div class="h">1. AI 공급자 키</div><div class="small muted" style="margin-bottom:10px">Claude 또는 OpenAI 중 하나 이상이 필요합니다. 내 키로 직접 호출하며 비용은 각 공급자에 청구됩니다.</div>
+    <div class="box"><div class="row sb"><b>Claude (Anthropic)</b>${s.includes("실패")?`<span class="chip" style="color:var(--bad)">확인 실패</span>`:`<span class="chip" style="color:var(--ok)">연결됨 ··· a1b2</span>`}</div>
+    ${s.includes("실패")?`<div class="box bad small" style="margin:8px 0 0">키가 올바르지 않거나 폐기되었습니다. 콘솔에서 새 키를 발급해 주세요.</div>`:`<div class="tiny">모델 9개 확인 · 방금</div>`}</div>
+    <div class="box"><div class="row sb"><b>OpenAI</b><span class="chip">없음</span></div><button class="btn full" style="margin-top:8px" data-sheet="key">키 등록</button></div>
+    <div class="field"><label>GitHub 토큰 (선택)</label><div class="input ph">없으면 검색 호출 한도가 낮습니다</div></div>
+    <button class="btn pri full" ${s.includes("실패")?"disabled":""} data-setstate="SC-00:2 메일">다음</button>`;
+  } else if(step===2){
+    body = `${st}<div class="h">2. 결과 받을 메일</div>
+    <div class="field"><label>받는 주소</label><div class="input">me@example.com</div></div>
+    <div class="field"><label>보내는 계정 (Gmail)</label><div class="input">sender@gmail.com</div></div>
+    <div class="field"><label>앱 비밀번호</label><div class="input ph">16자리 앱 비밀번호</div><div class="tiny">Google 계정 > 보안 > 2단계 인증 > 앱 비밀번호</div></div>
+    <button class="btn full" data-toast="테스트 메일을 보냈습니다">테스트 발송</button>
+    <div class="row" style="margin-top:10px"><button class="btn ghost" style="flex:1" data-setstate="SC-00:1 AI 키">이전</button><button class="btn pri" style="flex:1" data-setstate="SC-00:3 내 기준">다음</button></div>`;
+  } else if(step===3){
+    body = `${st}<div class="h">3. 내 기준</div><div class="small muted" style="margin-bottom:10px">카드 작성에 그대로 들어갑니다. 건너뛰면 기본값을 씁니다.</div>${criteriaForm()}
+    <div class="row" style="margin-top:10px"><button class="btn ghost" style="flex:1" data-setstate="SC-00:4 첫 실행">건너뛰기</button><button class="btn pri" style="flex:1" data-setstate="SC-00:4 첫 실행">다음</button></div>`;
+  } else {
+    body = `${st}<div class="h">4. 첫 실행</div>
+    <div class="box soft small">매일 <b>07:00</b>, Wi-Fi·충전 중일 때 자동 실행합니다. 첫 결과는 지금 만들 수 있습니다.<br>예상: 1~3분, 약 $0.15</div>
+    <div class="box warn small">배터리 최적화 예외를 허용해야 매일 실행이 안정적입니다. <u>설정 열기</u></div>
+    <button class="btn pri full" data-nav="SC-01" data-setstate="SC-01:실행 중">지금 첫 실행</button>`;
+  }
+  return phone(appbar("시작하기")+`<div class="scr">${body}</div>`);
+};
+function criteriaForm(){
+  return `<div class="field"><label>개발 범위</label><div class="chips"><span class="chip sel">1인</span><span class="chip">2~3인</span></div><div class="chips" style="margin-top:4px"><span class="chip">2주</span><span class="chip sel">4주</span><span class="chip">8주</span></div></div>
+  <div class="field"><label>대상 고객 (여러 개)</label><div class="chips"><span class="chip sel">개발자</span><span class="chip sel">소규모 사업자</span><span class="chip">일반 소비자</span><span class="chip">기업</span><span class="chip">교육</span></div></div>
+  <div class="field"><label>관심 분야</label><div class="input">업무 자동화, 개발 도구</div></div>
+  <div class="field"><label>제외 분야</label><div class="input">하드웨어, 대규모 학습, 의료 진단</div></div>
+  <div class="field"><label>수익화 방식</label><div class="chips"><span class="chip sel">구독</span><span class="chip">1회 구매</span><span class="chip">API 과금</span><span class="chip">광고</span></div></div>`;
+}
+R["SC-01"] = s => {
+  let top = `<div class="box soft"><div class="row sb"><b>11월 19일 (수)</b><span class="tiny">07:03 실행 · $0.14</span></div>
+    <div class="funnel muted" style="margin-top:4px">수집 <b>412</b> → 후보 <b>18</b> → 카드 <b>5</b></div></div>`;
+  let banner = "";
+  let cards = CARDS.filter(c=>!c.invalid);
+  if(s==="실행 전(어제 카드)") top = `<div class="box soft"><div class="row sb"><b>어제 카드 · 11월 18일</b><span class="tiny">다음 실행 07:00</span></div><div class="tiny">오늘 실행 전입니다</div></div>`;
+  if(s==="실행 중") banner = `<div class="box info"><div class="row sb"><b>실행 중 · 분류 중…</b><span class="tiny">2/4</span></div><div class="bar" style="margin-top:6px"><i style="width:55%"></i></div><div class="tiny" style="margin-top:4px">수집 ✓ · 거르기 ✓ · 분류 중 · 작성</div></div>`;
+  if(s==="출처 실패") banner = `<div class="box warn small" data-nav="SC-10a" style="cursor:pointer">⚠ Reddit 수집 실패(시간 초과) — 나머지 출처로 만들었습니다 ›</div>`;
+  if(s==="예산 초과") { banner = `<div class="box warn small">일일 예산($0.50)을 넘어 카드 3개만 만들었습니다. <u data-nav="SC-11">예산 변경</u></div>`; cards=cards.slice(0,3); }
+  if(s==="키 확인 실패") banner = `<div class="box bad small" data-nav="SC-11" style="cursor:pointer">Claude 키 확인 실패 — OpenAI로 대신 실행했습니다. 키를 확인해 주세요 ›</div>`;
+  if(s==="카드 0개") { cards=[]; banner=`<div class="box soft small">오늘은 조건(기술 신호 + 수요/경쟁 신호)을 채운 아이디어가 없습니다. 수집 412건 중 후보 6건.<br><u data-nav="SC-10a">실행 상세 보기</u></div>`; }
+  const runBtn = `<button class="act" ${s==="실행 중"?"disabled":""} data-sheet="rerun">지금 실행</button>`;
+  return phone(appbar("오늘의 아이디어",{right:runBtn})+`<div class="scr">${top}${banner}${cards.map(cardRow).join("")}</div>`,"today");
+};
+R["SC-02"] = s => {
+  if(s==="관심 없음 이유 선택" && !state.sheet) state.sheet="ni";
+  const c = CARDS.find(x=>x.id===(state.card||"c1"));
+  const sig = (arr,kind)=>arr.map(x=>`<div class="sig"><div><b>${esc(x.t)}</b></div><div class="src">${esc(x.s)} · <u>원문</u>${kind==="d"?" · <u>토론</u>":""}</div>${x.n?`<div>${esc(x.n)}</div>`:""}${(x.q||[]).map(([a,t])=>`<div class="quote"><b>${esc(a)}</b>: ${esc(t)}</div>`).join("")}</div>`).join("");
+  const blk = (t,html,show=true)=> show?`<div class="blk"><div class="bt">${t}</div>${html}</div>`:"";
+  const caveats = s==="확인 필요 있음" ? ["근거가 출처 하나뿐","처리 속도는 업체 주장"] : c.caveats;
+  const right = `<button class="star ${state.stars[c.id]?"on":""}" data-star="${c.id}">★</button>`;
+  const links = state.expandedLinks || s==="근거 링크 펼침";
+  return phone(appbar("카드 상세",{back:"SC-01",right})+`<div class="scr">
+    <div class="h" style="font-size:17px">${esc(c.title)}</div>
+    <div class="muted small" style="margin-bottom:6px">${esc(c.one)}</div>
+    <div class="chips" style="margin-bottom:6px">${chipCat(c.cat)}${badges(c)}${c.tags.map(t=>`<span class="chip">#${t}</span>`).join("")}</div>
+    ${blk("오늘 고른 이유",`<div class="small">${esc(c.why)}</div>`)}
+    ${blk("문제",`<div class="small">${esc(c.problem)}</div>`)}
+    ${blk("기술 신호",sig(c.tech) || `<div class="tiny">없음 — 카드 조건 미달(검증에서 제외 대상)</div>`)}
+    ${blk("수요 신호",sig(c.demand,"d"),c.demand.length>0)}
+    ${blk("경쟁 제품",sig(c.comp),c.comp.length>0)}
+    ${blk("과거 언급",c.hist.map(h=>`<div class="small">· ${esc(h)}</div>`).join(""),c.hist.length>0)}
+    ${blk("실행 판단",`<table class="tbl"><tr><th>기간</th><td>${c.effort}</td></tr><tr><th>차별점</th><td>${esc(c.diff)}</td></tr><tr><th>가장 큰 위험</th><td>${esc(c.risk)}</td></tr><tr><th>2주 검증</th><td>${esc(c.valid)}</td></tr></table>`)}
+    ${blk("확인 필요",caveats.map(x=>`<div class="box warn small" style="margin:4px 0;padding:5px 9px">${esc(x)}</div>`).join(""),caveats.length>0)}
+    <div class="blk"><div class="row sb" style="cursor:pointer" data-togglelinks><div class="bt" style="margin:0">근거 링크 ${c.links}</div><span class="tiny">${links?"접기 ▲":"펼치기 ▼"}</span></div>
+      ${links?`<div class="small muted" style="margin-top:6px">${Array.from({length:c.links},(_,i)=>`<div>· 수집 항목 ${i+1} — 출처 · 시각 · <u>원문</u></div>`).join("")}<div class="tiny" style="margin-top:4px">인용 검증을 통과한, 이번 실행에서 수집된 URL만 표시</div></div>`:""}</div>
+    <div class="row" style="margin-top:12px"><button class="btn" style="flex:1" data-sheet="ni">관심 없음</button><button class="btn pri" style="flex:1" data-star="${c.id}">${state.stars[c.id]?"★ 관심 해제":"★ 관심"}</button></div>
+    <div class="row" style="margin-top:6px"><button class="btn ghost small" style="flex:1" disabled>메모 (L)</button><button class="btn ghost small" style="flex:1" disabled>공유 (L)</button><button class="btn ghost small" style="flex:1" disabled>더 파고들기 (L)</button></div>
+  </div>`,"today");
+};
+R["SC-03"] = s => {
+  const days = [["11월 19일","수집 412 → 카드 5",CARDS.slice(0,4)],["11월 18일","수집 388 → 카드 5",CARDS.slice(1,3)],["11월 17일","수집 401 → 카드 4",CARDS.slice(3,4)]];
+  const onlyStar = s==="★만";
+  const empty = s==="검색 결과 없음";
+  const list = empty ? `<div class="box soft small" style="text-align:center;padding:24px">"블록체인"에 맞는 카드가 없습니다</div>` :
+    days.map(([d,f,cs])=>{ const xs = onlyStar? cs.filter(c=>state.stars[c.id]) : cs; if(!xs.length) return ""; return `<div class="sec">${d} · <span style="font-weight:400">${f}</span></div>${xs.map((c,i)=>cardRow(c,i)).join("")}`;}).join("");
+  return phone(appbar("보관함",{right:`<button class="act" data-nav="SC-04">반복 주제</button>`})+`<div class="scr">
+    <div class="input ${empty?"":"ph"}" style="margin-bottom:8px">${empty?"블록체인":"🔍 제목·설명·태그 검색"}</div>
+    <div class="chips" style="margin-bottom:6px"><button class="chip ${onlyStar?"sel":""}" data-setstate="SC-03:${onlyStar?"기본":"★만"}">★만</button><span class="chip">분류 ▾</span><span class="chip">태그 ▾</span><span class="chip sel">관심 없음 숨김</span></div>
+    ${list}</div>`,"archive");
+};
+R["SC-04"] = () => phone(appbar("반복 주제",{back:"SC-03",right:`<span class="pill l">L</span>`})+`<div class="scr">
+  <div class="tiny" style="margin-bottom:8px">최근 30일 · 2번 이상 나온 주제</div>
+  ${[["로컬 회의록 정리","meeting-notes-pain",6,"11/02","11/19",[1,0,1,1,0,1,1,1]],["Gemini 4 시리즈","gemini-4",5,"10/29","11/18",[1,0,0,1,0,1,0,1]],["AI 코드 번역 포크","ai-code-port",3,"11/12","11/19",[0,0,0,0,1,0,1,1]]].map(([l,k,n,a,b,h])=>`<div class="box"><div class="row sb"><b>${l}</b><span class="chip">${n}회</span></div><div class="tiny">${k} · ${a} ~ ${b} · 관련 카드 2</div><div class="row" style="gap:2px;margin-top:6px">${h.map(x=>`<i style="flex:1;height:14px;border-radius:2px;background:${x?"var(--accent)":"var(--line2)"}"></i>`).join("")}</div></div>`).join("")}
+  </div>`,"archive");
+R["SC-05"] = s => {
+  const pass = s==="통과";
+  const rows = pass ? [["hn","AI agents ask better questions than…","356","통과 · 수요 8.1"],["github","DIYgod/pinky","★2464","통과 · 기술 7.4"]] :
+    [["github","…/Gemini-Config-Checker- 외 20개","★473","스팸 묶음"],["hn","GTA 6 Review: It Is a Masterpiece","65","무관(NOT_RELEVANT)"],["hn","Attackers Used Optimizely to A/B Test…","54","임계값 미달 4.2"],["github","…/ai--manus2.0 외 8개","★310","스팸 묶음"]];
+  return phone(appbar("오늘 수집 항목",{right:`<span class="pill l">L</span>`})+`<div class="scr">
+    <div class="chips" style="margin-bottom:8px"><button class="chip ${pass?"sel":""}" data-setstate="SC-05:통과">통과 25</button><button class="chip ${!pass?"sel":""}" data-setstate="SC-05:탈락">탈락 100</button><span class="chip">출처 ▾</span></div>
+    <div class="list">${rows.map(([src,t,sc,r])=>`<div class="li"><div class="grow"><div class="small"><b>${esc(t)}</b></div><div class="tiny">${src} · ${sc}</div></div><span class="chip ${pass?"":"badge"}">${r}</span></div>`).join("")}</div>
+    ${!pass?`<div class="tiny" style="margin-top:8px">탈락 항목을 길게 눌러 "다음엔 포함" 표시 → 출처 기준 조정 참고</div>`:""}</div>`,"settings");
+};
+R["SC-06"] = s => {
+  const g = (t,items)=>`<div class="sec">${t}</div><div class="box" style="padding:2px 12px"><div class="list">${items.map(([l,sub,to,tag])=>`<div class="li" data-nav="${to}"><div class="grow"><div>${l} ${tag||""}</div><div class="tiny">${sub}</div></div><span class="chev">›</span></div>`).join("")}</div></div>`;
+  return phone(appbar("설정")+`<div class="scr">
+    ${s==="키 확인 실패"?`<div class="box bad small" data-nav="SC-11" style="cursor:pointer">Claude 키 확인 실패 — 키를 다시 등록해 주세요 ›</div>`:""}
+    ${g("AI 공급자",[["AI 공급자·모델",s==="키 확인 실패"?"Claude 확인 실패 · OpenAI 연결됨":"Claude 연결됨 · OpenAI 연결됨 · 예산 $0.50/일","SC-11"]])}
+    ${g("수집",[["출처 관리","5개 중 2개 켜짐 · 오늘 125건","SC-07"],["신호 프로필","기술 6.0 · 수요 6.0 · 경쟁 5.0","SC-08",`<span class="pill l">L</span>`],["오늘 수집 항목","통과 25 · 탈락 100","SC-05",`<span class="pill l">L</span>`]])}
+    ${g("아이디어",[["내 기준·카드 구성","1인 4주 · 개발자·소규모 사업자 · 하루 5개","SC-09"]])}
+    ${g("운영",[["실행 기록","이번 달 $2.31 (추정)","SC-10"],["일정·메일·출처 키","매일 07:00 · me@example.com","SC-11b"]])}
+    ${g("정보",[["정보","버전 0.1 · 오픈소스 고지","SC-12"]])}
+  </div>`,"settings");
+};
+R["SC-07"] = () => {
+  const src=[["Hacker News","켜짐","하루 10 · 통과율 60% · 평균 6.4","hn"],["GitHub","켜짐","하루 115 · 통과율 13% · 평균 6.9 · 스팸 많음","gh"],["Hugging Face","꺼짐 · 3단계","—"],["Reddit","꺼짐 · 키 필요","—"],["Product Hunt","꺼짐 · 토큰 필요","—"]];
+  return phone(appbar("출처 관리",{back:"SC-06"})+`<div class="scr"><div class="tiny" style="margin-bottom:6px">최근 30일 통계</div>
+    <div class="box" style="padding:2px 12px"><div class="list">${src.map(([n,on,st,k])=>`<div class="li" ${k?`data-nav="SC-07a"`:""}><div class="toggle ${on==="켜짐"?"on":""}"></div><div class="grow"><div>${n}</div><div class="tiny">${on} · ${st}</div></div>${k?`<span class="chev">›</span>`:""}</div>`).join("")}</div></div>
+    <button class="btn full" disabled>+ RSS 피드 추가 (L)</button></div>`,"settings");
+};
+R["SC-07a"] = s => phone(appbar("Hacker News",{back:"SC-07"})+`<div class="scr">
+  <div class="field"><label>검색어</label><div class="chips">${["LLM","AI agent","Show HN AI","GPT","Claude","open source model"].map(q=>`<span class="chip">${q} ✕</span>`).join("")}<span class="chip">+ 추가</span></div></div>
+  <div class="row"><div class="field" style="flex:1"><label>최소 점수</label><div class="input">20</div></div><div class="field" style="flex:1"><label>최대 건수</label><div class="input">60</div></div><div class="field" style="flex:1"><label>기간(시간)</label><div class="input">24</div></div></div>
+  <div class="field"><label>프로필 배정</label><div class="chips"><span class="chip sel">기술</span><span class="chip sel">수요</span><span class="chip sel">경쟁</span></div><div class="tiny">여러 개면 1차 분류가 그중에서 고릅니다</div></div>
+  <button class="btn full" data-setstate="SC-07a:연결 테스트 성공">연결 테스트</button>
+  ${s==="연결 테스트 성공"?`<div class="box ok small" style="margin-top:8px">10건 받음 · 1.2초<br>1. AI agents ask better questions than KPMG…<br>2. Energy-Based Reasoners: 385x more efficient…<br>3. Claude was trained on protein sequences…</div>`:""}
+  ${s==="연결 테스트 실패"?`<div class="box bad small" style="margin-top:8px">실패: HTTP 429 (호출 한도) — 잠시 후 다시 시도</div>`:""}
+  <button class="btn ghost full" style="margin-top:8px">기본값으로 되돌리기</button></div>`,"settings");
+R["SC-08"] = () => phone(appbar("신호 프로필",{back:"SC-06",right:`<span class="pill l">L</span>`})+`<div class="scr">
+  ${[["기술 신호","1인 개발자가 지금 재료로 쓸 수 있나?","6.0","8"],["수요 신호","AI로 풀 수 있는 반복되는 불편이 있나?","6.0","8"],["경쟁 제품","수요를 증명하면서 빈틈이 있나?","5.0","4"]].map(([n,q,t,m])=>`<div class="box"><div class="h">${n}</div><div class="small muted">${q}</div><div class="row" style="margin-top:8px"><div class="field" style="flex:1;margin:0"><label>임계값</label><div class="input">${t}</div></div><div class="field" style="flex:1;margin:0"><label>후보 상한</label><div class="input">${m}</div></div></div><button class="btn ghost small" style="margin-top:6px">평가표 보기</button></div>`).join("")}
+  </div>`,"settings");
+R["SC-09"] = () => phone(appbar("내 기준·카드 구성",{back:"SC-06"})+`<div class="scr">
+  <div class="sec" style="margin-top:0">내 기준</div>${criteriaForm()}
+  <div class="sec">카드 구성</div>
+  <div class="row"><div class="field" style="flex:1"><label>하루 카드 수</label><div class="input">5</div></div><div class="field" style="flex:1"><label>분류별 최대</label><div class="input">2</div></div></div>
+  <div class="row"><div class="field" style="flex:1"><label>같은 대표 태그 후보 최대</label><div class="input">2</div></div><div class="field" style="flex:1"><label>반영할 최근 피드백</label><div class="input">10</div></div></div>
+  <div class="tiny">분류 목록(고정 10개): ${Object.values(CATS).join(" · ")}</div>
+  <button class="btn pri full" style="margin-top:10px" data-toast="저장했습니다 — 다음 실행부터 반영">저장</button></div>`,"settings");
+R["SC-10"] = () => phone(appbar("실행 기록",{back:"SC-06"})+`<div class="scr">
+  <div class="box soft"><div class="row sb"><b>이번 달 $2.31</b><span class="tiny">추정 · 예산 $15.00</span></div><div class="bar" style="margin-top:6px"><i style="width:15%"></i></div></div>
+  <div class="box" style="padding:2px 12px"><div class="list">${[["11/19 07:03","성공","412→18→5","$0.14"],["11/18 09:41","일부 실패","388→15→5","$0.13"],["11/18 07:02","교체됨","380→16→5","$0.15"],["11/17 07:05","성공","401→14→4","$0.12"]].map(([d,r,f,c])=>`<div class="li" data-nav="SC-10a"><div class="grow"><div class="row sb"><b class="small">${d}</b><span class="tiny">${c}</span></div><div class="tiny">${r} · ${f}</div></div><span class="chev">›</span></div>`).join("")}</div></div>
+  <div class="tiny">같은 날 다시 실행하면 이전 결과는 "교체됨"으로 남습니다</div></div>`,"settings");
+R["SC-10a"] = s => phone(appbar("실행 상세 · 11/19",{back:"SC-10"})+`<div class="scr">
+  ${s==="일부 실패"?`<div class="box warn small">Reddit 시간 초과(45초) — 나머지로 계속</div>`:""}
+  <div class="sec" style="margin-top:0">단계</div>
+  <table class="tbl"><tr><th>단계</th><th>입력</th><th>출력</th><th>시간</th></tr>${[["수집","—","412","3.1s"],["거르기","412","150","0.1s"],["중복·본 글","150","80","0.0s"],["분류","80","52","14s"],["추리기","52","18","0.0s"],["보강","18","18","6s"],["작성","18","5","41s"],["검증","5","5","0.0s"]].map(r=>`<tr>${r.map(x=>`<td>${x}</td>`).join("")}</tr>`).join("")}</table>
+  <div class="sec">출처</div>
+  <table class="tbl"><tr><th>출처</th><th>건수</th><th>결과</th></tr><tr><td>HN</td><td>10</td><td>성공</td></tr><tr><td>GitHub</td><td>115</td><td>성공 (스팸 99)</td></tr>${s==="일부 실패"?`<tr><td>Reddit</td><td>0</td><td style="color:var(--bad)">시간 초과</td></tr>`:""}</table>
+  <div class="sec">탈락 이유</div><div class="chips">${[["스팸 묶음",99],["무관",22],["임계값 미달",30],["주제 합침",4],["상한 초과",8]].map(([k,v])=>`<span class="chip">${k} ${v}</span>`).join("")}</div>
+  <div class="sec">AI 호출</div>
+  <table class="tbl"><tr><th>단계</th><th>공급자·모델</th><th>토큰(입/출)</th><th>비용</th></tr><tr><td>분류×4</td><td>Claude · haiku-5-5</td><td>38k/6k</td><td>$0.007</td></tr><tr><td>작성</td><td>Claude · opus-5-5</td><td>14k/5k</td><td>$0.156</td></tr>${s==="일부 실패"?`<tr><td>작성(대체)</td><td>OpenAI · (모델)</td><td>14k/5k</td><td>$0.12</td></tr>`:""}</table>
+  <div class="tiny" style="margin-top:6px">인용 검증: 근거 1개 제거(수집 목록에 없는 URL) · 비용은 가격표 기준 추정</div></div>`,"settings");
+R["SC-11"] = s => {
+  if(s==="키 등록 시트" && !state.sheet) state.sheet="key";
+  const claudeBad = s==="키 확인 실패"; const openai = s!=="Claude만";
+  const prov = (n,st,last4,models)=>`<div class="box"><div class="row sb"><b>${n}</b>${st==="ok"?`<span class="chip" style="color:var(--ok)">연결됨 ··· ${last4}</span>`:st==="bad"?`<span class="chip" style="color:var(--bad)">확인 실패</span>`:`<span class="chip">없음</span>`}</div>
+    <div class="tiny">${st==="ok"?`모델 ${models}개 · 마지막 확인 07:03`:st==="bad"?"인증 실패 — 키가 만료되었거나 폐기됨":"키를 등록하면 연동됩니다"}</div>
+    <div class="row" style="margin-top:6px">${st==="none"?`<button class="btn small" data-sheet="key">키 등록</button>`:`<button class="btn small" data-sheet="key">교체</button><button class="btn small" data-toast="다시 확인했습니다">다시 확인</button><button class="btn small ghost">삭제</button>`}</div></div>`;
+  return phone(appbar("AI 공급자·모델",{back:"SC-06"})+`<div class="scr">
+    <div class="sec" style="margin-top:0">공급자 키 — 하나 이상 필요</div>
+    ${prov("Claude (Anthropic)",claudeBad?"bad":"ok","a1b2",9)}${prov("OpenAI",openai?"ok":"none","c3d4",12)}
+    <div class="sec">단계별 모델</div>
+    <div class="box"><div class="field"><label>1차 분류 (싸고 빠른 모델)</label><div class="input">Claude · claude-haiku-5-5 ▾</div></div>
+    <div class="field" style="margin:0"><label>카드 작성 (좋은 모델)</label><div class="input">Claude · claude-opus-5-5 ▾</div></div></div>
+    <div class="box"><div class="row sb"><div><div>대체 공급자 사용</div><div class="tiny">${openai?"실패·거절 시 다른 공급자로 1회 재시도":"두 키가 모두 있어야 사용 가능"}</div></div><div class="toggle ${openai?"on":""}"></div></div></div>
+    <div class="box"><div class="row sb"><div>일일 예산</div><div class="input" style="width:90px">$0.50</div></div><div class="tiny" style="margin-top:4px">넘으면 그때까지 만든 결과만 보냅니다</div></div>
+    <div class="box"><div class="row sb"><div>가격표</div><span class="tiny">모델별 100만 토큰당 입력/출력 ›</span></div></div>
+    <div class="box" style="opacity:.6"><div class="row sb"><div>보충 검색 <span class="pill l">L</span></div><div class="toggle"></div></div></div>
+  </div>`,"settings");
+};
+R["SC-11b"] = s => phone(appbar("일정·메일·출처 키",{back:"SC-06"})+`<div class="scr">
+  <div class="sec" style="margin-top:0">실행 일정</div>
+  <div class="box"><div class="row sb"><div>매일 실행 시각</div><div class="input" style="width:80px">07:00</div></div>
+  <div class="row sb" style="margin-top:8px"><div>Wi-Fi에서만</div><div class="toggle on"></div></div><div class="row sb" style="margin-top:8px"><div>충전 중에만</div><div class="toggle"></div></div>
+  <div class="tiny" style="margin-top:6px">안드로이드 절전 때문에 몇십 분 늦어질 수 있습니다</div></div>
+  ${s==="배터리 최적화 안내"?`<div class="box warn small">이 기기는 배터리 최적화가 켜져 있어 실행이 건너뛰어질 수 있습니다. <u>예외 허용</u></div>`:""}
+  <div class="sec">메일</div>
+  <div class="box"><div class="field"><label>받는 주소</label><div class="input">me@example.com</div></div><div class="field"><label>보내는 계정</label><div class="input">sender@gmail.com · 앱 비밀번호 저장됨</div></div>
+  <div class="row"><button class="btn small" data-toast="테스트 메일을 보냈습니다">테스트 발송</button><span class="sp" style="flex:1"></span>메일 받기 <div class="toggle on"></div></div></div>
+  <div class="sec">출처 키</div>
+  <div class="box" style="padding:2px 12px"><div class="list">${[["GitHub 토큰","저장됨 ··· 9f1c"],["Reddit","없음 · 3단계"],["Product Hunt","없음 · 3단계"]].map(([n,v])=>`<div class="li"><div class="grow"><div>${n}</div><div class="tiny">${v}</div></div><span class="chev">›</span></div>`).join("")}</div></div>
+  <div class="sec">백업 <span class="pill l">L</span></div><div class="row"><button class="btn small" disabled>내보내기</button><button class="btn small" disabled>가져오기</button></div></div>`,"settings");
+R["SC-12"] = () => phone(appbar("정보",{back:"SC-06"})+`<div class="scr"><div class="box"><b>AI 아이디어 수집기</b><div class="tiny">버전 0.1.0</div></div>
+  <div class="box"><b>오픈소스 고지</b><div class="small muted">Horizon (MIT) — 설계 참고 · OkHttp (Apache-2.0) · kotlinx.serialization (Apache-2.0) · Anthropic Java SDK · OpenAI Java SDK …</div></div></div>`,"settings");
+R["MAIL"] = s => `<div class="mail"><div class="mh">보낸 사람 sender@gmail.com · 받는 사람 me@example.com<br><b style="color:var(--ink);font-size:14px">[AI 아이디어] 11월 19일 — 카드 5개 (수집 412 → 후보 18)</b></div><div class="mb">
+  ${s==="출처 실패 포함"?`<div class="box warn small">⚠ Reddit 수집 실패 — 나머지 출처로 만들었습니다</div>`:""}
+  <div class="small muted">수집 412 → 후보 18 → 카드 5</div>
+  <div class="sec">목차</div>${CARDS.filter(c=>!c.invalid).map((c,i)=>`<div class="small">${i+1}. ${esc(c.title)} <span class="chip cat">${CATS[c.cat]}</span> ${badges(c)}</div>`).join("")}
+  ${CARDS.filter(c=>!c.invalid).slice(0,2).map((c,i)=>`<div class="box" style="margin-top:12px"><div class="h">${i+1}. ${esc(c.title)}</div><div class="small muted">${esc(c.one)}</div><div class="small" style="margin-top:6px"><b>오늘 고른 이유</b> ${esc(c.why)}</div><div class="small"><b>핵심 근거</b> ${esc((c.tech[0]||c.demand[0]).t)} · ${esc((c.demand[0]||c.comp[0]||c.tech[0]).t)}</div><div class="small"><b>가장 큰 위험</b> ${esc(c.risk)}</div><div style="margin-top:6px"><u style="color:var(--accent)" data-nav="SC-02" data-card="${c.id}">앱에서 보기 ›</u></div></div>`).join("")}
+  <div class="tiny" style="margin-top:6px">… 카드 3~5 같은 형식</div>
+  <div class="tiny" style="border-top:1px solid var(--line2);margin-top:14px;padding-top:8px">오늘 비용 $0.14 · 이번 달 $2.31 (추정) · 실행 1분 05초 · HTML + 일반 텍스트 동시 발송</div></div></div>`;
+R["NOTI"] = () => `<div class="noti"><div class="tiny" style="margin-bottom:8px">알림 (누르면 해당 화면으로)</div>
+  <div class="n" data-nav="SC-01"><b class="small">AI 아이디어</b><div class="small">오늘의 카드 5개가 준비됐습니다 · 수집 412 → 카드 5</div></div>
+  <div class="n" data-nav="SC-10a"><b class="small">AI 아이디어 · 실행 실패</b><div class="small">Reddit 시간 초과 · 일부 출처로 실행했습니다</div></div>
+  <div class="n" data-nav="SC-11"><b class="small">AI 아이디어 · 키 확인 필요</b><div class="small">Claude 키 인증에 실패했습니다. 키를 확인해 주세요</div></div></div>`;
+
+/* ===================== 지도·패널·이벤트 ===================== */
+const notesKey = "wf-notes-v1";
+let notes = {}; try{ notes = JSON.parse(localStorage.getItem(notesKey)||"{}"); }catch(e){}
+function saveNotes(){ try{ localStorage.setItem(notesKey, JSON.stringify(notes)); }catch(e){} }
+function renderMap(){
+  const groups=[...new Set(SCREENS.map(s=>s.g))];
+  document.getElementById("map").innerHTML = groups.map(g=>`<h3>${g}</h3>${SCREENS.filter(s=>s.g===g).map(s=>`<a href="#${s.id}" class="${s.id===state.screen?"on":""} ${notes[s.id]?"noted":""}" data-nav="${s.id}"><span class="id">${s.id}</span>${s.name} ${s.mvp?"":`<span class="pill l">L</span>`}${s.isNew?`<span class="pill new">새</span>`:""}<span class="dot"></span></a>`).join("")}`).join("")
+   + `<h3>범례</h3><div class="tiny" style="padding:0 8px">주황 점 = 검토 메모 있음<br>샘플 데이터는 가상입니다</div>`;
+}
+function renderInfo(){
+  const s=byId[state.screen]; const cur=curState(s.id);
+  const backlinks = SCREENS.filter(x=>x.back===s.id).map(x=>x.id);
+  document.getElementById("info").innerHTML = `
+   <div class="sid">${s.id} · ${s.g}</div><h2>${s.name}</h2>
+   <div>${s.mvp?`<span class="pill mvp">MVP</span>`:`<span class="pill l">나중(L)</span>`} ${s.isNew?`<span class="pill new">이번에 새로 정의</span>`:""}</div>
+   <h4>목적</h4><div>${esc(s.purpose)}</div>
+   <h4>상태 (눌러서 전환)</h4><div class="states">${s.states.map(x=>`<button class="${x===cur?"on":""}" data-setstate="${s.id}:${x}">${x}</button>`).join("")}</div>
+   <h4>기능</h4><ul>${s.feats.map(f=>`<li>${esc(f)}</li>`).join("")}</ul>
+   <h4>데이터·연동 (backend)</h4><ul>${s.data.map(f=>`<li><code>${esc(f)}</code></li>`).join("")}</ul>
+   <h4>진입 경로</h4><ul>${s.entry.map(f=>`<li>${esc(f)}</li>`).join("")}</ul>
+   ${s.back||backlinks.length?`<h4>연결 화면</h4><div class="navs">${s.back?`<a data-nav="${s.back}">← ${s.back} ${byId[s.back].name}</a>`:""}${backlinks.map(b=>`<a data-nav="${b}">→ ${b} ${byId[b].name}</a>`).join("")}</div>`:""}
+   ${s.open.length?`<h4>미정·확인할 점</h4>${s.open.map(q=>`<div class="q">${esc(q)}</div>`).join("")}`:""}
+   <h4>검토 메모 (이 브라우저에 저장)</h4><textarea id="note" placeholder="수정할 점, 빼거나 더할 기능…">${esc(notes[s.id]||"")}</textarea>
+   <div class="tiny">상단 "검토 메모 복사"로 전체 메모를 마크다운으로 복사해 전달할 수 있습니다.</div>`;
+  document.getElementById("note").addEventListener("input",e=>{ notes[s.id]=e.target.value; if(!e.target.value) delete notes[s.id]; saveNotes(); renderMap(); });
+}
+function render(){
+  const s=byId[state.screen];
+  document.getElementById("stage").innerHTML = R[s.id](curState(s.id));
+  renderMap(); renderInfo();
+  try{ history.replaceState(null,"","#"+s.id); }catch(e){}
+}
+let toastTimer=null, undo=null;
+function closeSheet(){ state.sheet=null; const s=byId[state.screen]; if(/시트|이유 선택/.test(curState(s.id))) state.st[s.id]=s.states[0]; }
+function showToast(msg, undoFn){ state.toast=msg; undo=undoFn||null; render(); clearTimeout(toastTimer); toastTimer=setTimeout(()=>{state.toast=null;render();},2600); }
+document.addEventListener("click", e=>{
+  const t = e.target.closest("[data-star],[data-ni],[data-undo],[data-sheet],[data-close],[data-togglelinks],[data-setstate],[data-toast],[data-nav]");
+  if(!t) return;
+  if(t.dataset.star!==undefined){ e.stopPropagation(); const id=t.dataset.star; state.stars[id]=!state.stars[id]; showToast(state.stars[id]?"★ 관심에 추가했습니다":"관심을 해제했습니다",()=>{state.stars[id]=!state.stars[id];}); return; }
+  if(t.dataset.ni){ const id=state.card||"c1"; state.notInterested[id]=t.dataset.ni; closeSheet(); showToast("관심 없음으로 표시했습니다 · 다음 날 반영",()=>{delete state.notInterested[id];}); return; }
+  if(t.dataset.undo!==undefined){ if(undo) undo(); state.toast=null; render(); return; }
+  if(t.dataset.sheet){ state.sheet=t.dataset.sheet; render(); return; }
+  if(t.dataset.togglelinks!==undefined){ state.expandedLinks=!state.expandedLinks; render(); return; }
+  if(t.dataset.close!==undefined && (e.target===t || t.tagName==="BUTTON")){ closeSheet(); render(); return; }
+  if(t.dataset.toast){ const m=t.dataset.toast; if(t.dataset.closeAfter!==undefined) closeSheet(); showToast(m); return; }
+  if(t.dataset.setstate){ const [id,st]=t.dataset.setstate.split(/:(.+)/); if(t.dataset.closeAfter!==undefined) closeSheet(); state.st[id]=st; if(t.dataset.nav) state.screen=t.dataset.nav; else if(id!==state.screen && !byId[state.screen].states.includes(st)) {} render(); return; }
+  if(t.dataset.nav){ e.preventDefault(); if(t.dataset.card) state.card=t.dataset.card; state.screen=t.dataset.nav; state.sheet=null; state.expandedLinks=false; render(); document.getElementById("stage").scrollTop=0; }
+});
+document.getElementById("exportNotes").addEventListener("click",()=>{
+  const md = "# 와이어프레임 검토 메모\n\n" + SCREENS.filter(s=>notes[s.id]).map(s=>`## ${s.id} ${s.name}\n${notes[s.id]}\n`).join("\n");
+  const done = ()=>showToast(Object.keys(notes).length?"검토 메모를 복사했습니다":"아직 메모가 없습니다");
+  try{ navigator.clipboard.writeText(md).then(done,done); }catch(e){ done(); }
+});
+const h = location.hash.slice(1); if(byId[h]) state.screen=h;
+render();
+</script>
+</body>
+</html>

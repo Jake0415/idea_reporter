@@ -1,6 +1,7 @@
 # 메뉴·기능 설계 — AI 아이디어 수집기
 
 > 데이터 흐름·타입은 [design.md](design.md). 이 문서는 사용자가 보는 기능·메뉴·화면·메일의 기준이다.
+> 클릭 가능한 와이어프레임: [mockup/index.html](../mockup/index.html) (`node mockup/serve.mjs` → http://localhost:5179). 와이어프레임에서 새로 정의한 화면: **SC-06 설정 홈**, **SC-11b 일정·메일·출처 키**(SC-11에서 분리), **SC-12 정보**. SC-11은 "AI 공급자·모델"만 담는다.
 > 화면 번호(SC-xx)와 기능 번호(F-xx)는 코드·커밋에서 그대로 쓴다.
 
 ## 1. Horizon 데모 분석 (2026-11-19 브리핑)
