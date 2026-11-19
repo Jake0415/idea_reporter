@@ -1,4 +1,6 @@
-# 디자인 토큰 — "feed" 톤 (초안, 확정 전)
+# 디자인 토큰 — "feed" 톤
+
+> **2026-11-19 결정: 테마 A 피드로 진행.** 카드 레이아웃은 기본 "1 피드 카드"로 두고, 아래 "확정이 필요한 것"은 계속 검토한다. B·C·D 샘플은 비교 기록으로 남긴다.
 
 > 인스타그램풍의 깔끔한 피드 톤. 출처: Astryx 테마 편집기로 만든 `feed` 테마(neutral 기반) — `mockup/astryx-review/themes/feed/feed.settings.json`, 빌드 결과 `src/themes/feed/feed.css`.
 > 시안: `cd mockup/astryx-review` → `npx vite --port 5180` (SC-01 오늘·SC-02 상세·SC-03 보관함·SC-11 AI 공급자, 라이트/다크 전환).
