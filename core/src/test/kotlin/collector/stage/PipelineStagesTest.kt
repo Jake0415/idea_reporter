@@ -42,6 +42,52 @@ class PipelineStagesTest {
         tags = listOf("meeting-notes")
     )
 
+    @Test fun demandMinimumOverridesProfileAndTagCaps() {
+        val limit = config.copy(maxCandidatesPerTag = 1, profiles = config.profiles +
+            ("demand-signal" to PipelineConfig.Selection(5.0, 0)))
+        val signals = listOf(signal(item(1), score = 9.0),
+            signal(item(2), score = 8.0, profile = "demand-signal"),
+            signal(item(3), score = 5.0, profile = "demand-signal"),
+            signal(item(4), score = 4.9, profile = "demand-signal"),
+            signal(item(5), score = 6.0, profile = "demand-signal"))
+
+        val selected = Selector(limit).select(signals)
+        assertEquals(listOf("hn:1", "hn:2", "hn:5"), selected.kept.map { it.item.key })
+        assertEquals(listOf("hn:1", "hn:2"), Selector(limit).select(signals.take(2)).kept.map { it.item.key })
+        assertEquals(listOf("hn:1"), Selector(limit.copy(minDemandCandidates = 0)).select(signals).kept.map { it.item.key })
+        assertEquals(DropReason.BELOW_PROFILE_THRESHOLD, selected.dropped.single { it.item.key == "hn:4" }.reason)
+        assertEquals(DropReason.OVER_QUOTA, selected.dropped.single { it.item.key == "hn:3" }.reason)
+    }
+
+    @Test fun demandMinimumPreservesDemandInAHigherScoringTechTopic() {
+        val limit = config.copy(minDemandCandidates = 1, profiles = config.profiles +
+            ("demand-signal" to PipelineConfig.Selection(5.0, 0)))
+        val tech = signal(item(1), score = 9.0)
+        val demand = signal(item(2), score = 6.0, topic = tech.classification.topicKey, profile = "demand-signal")
+
+        val selected = Selector(limit).select(listOf(tech, demand))
+
+        assertEquals(demand.item.key, selected.kept.single().item.key)
+        assertEquals(listOf(tech.item.url), selected.kept.single().item.mergedUrls)
+        assertEquals(listOf(tech), selected.groups[demand.item.key])
+        assertEquals(1, selected.thresholdPassedByProfile["demand-signal"])
+    }
+
+    @Test fun mergedDemandIsPromotedOnlyWhenNeededAndKeepsTopicRank() {
+        val tech = signal(item(1), score = 10.0)
+        val demand = signal(item(2), score = 6.0, topic = tech.classification.topicKey, profile = "demand-signal")
+        val otherTech = signal(item(3), score = 9.0, tag = "other")
+        val otherDemand = signal(item(4), score = 7.0, topic = otherTech.classification.topicKey, profile = "demand-signal")
+        val standalone = signal(item(5), score = 8.0, profile = "demand-signal", tag = "standalone")
+        val signals = listOf(tech, demand, otherTech, otherDemand)
+        fun keys(target: Int, inputs: List<Signal>) =
+            Selector(config.copy(minDemandCandidates = target)).select(inputs).kept.map { it.item.key }
+
+        assertEquals(listOf("hn:1", "hn:3"), keys(0, signals))
+        assertEquals(listOf("hn:1", "hn:3", "hn:5"), keys(1, signals + standalone))
+        assertEquals(listOf("hn:1", "hn:4", "hn:5"), keys(2, signals + standalone))
+    }
+
     @Test fun `분류는 25건씩 묶고 파싱 1회 재시도 후 누락과 none을 기록한다`() = runTest {
         val inputs = (1..26).map { item(it) }
         val prompts = PromptResolver(FilePromptStore(directory))
@@ -171,18 +217,20 @@ class PipelineStagesTest {
         val first = item(1, "github")
         val second = item(2, "github")
         val expected = card(first, second).let { it.copy(demandSignals = emptyList(), competitors = it.demandSignals) }
-        val inputs = listOf(first, second)
+        val inputs = listOf(first, second, item(3, "github"), item(4, "github"))
         val tokenLimits = mutableListOf<Int>()
         val fake = object : LlmProvider {
             override val id = ProviderId.ANTHROPIC
             override suspend fun listModels() = emptyList<ModelInfo>()
             override suspend fun complete(req: LlmRequest): LlmResult {
                 val body = when (req.schemaName) {
-                    "classify" -> """{"items":${Json.encodeToJsonElement(inputs.map { signal(it).classification })}}"""
+                    "classify" -> """{"items":${Json.encodeToJsonElement(inputs.mapIndexed { index, input ->
+                        signal(input, score = listOf(11.0, 8.0, -1.0, 7.0)[index]).classification
+                    })}}"""
                     "generate" -> {
                         tokenLimits += req.maxOutputTokens
                         if (tokenLimits.size == 1) throw LlmServiceException(reason = "truncated")
-                        """{"cards":${Json.encodeToJsonElement(listOf(expected))}}"""
+                        """{"cards":${Json.encodeToJsonElement(listOf(expected, expected.copy(title = "Duplicate card")))}}"""
                     }
                     else -> error("예상하지 않은 단계")
                 }
@@ -203,8 +251,14 @@ class PipelineStagesTest {
         assertEquals(2, tokenLimits.size)
         assertEquals(tokenLimits[0] * 3 / 2, tokenLimits[1])
         assertEquals(expected.title, result.cards.single().title)
-        assertEquals(1, result.report.stages.single { it.stage == "generate" }.output)
+        assertEquals(2, result.report.stages.single { it.stage == "generate" }.output)
         assertEquals(1, result.report.stages.single { it.stage == "validate" }.output)
+        assertTrue(result.report.issues.any { "Duplicate card" in it })
+        val metrics = Json.encodeToJsonElement(result).jsonObject.getValue("metrics").jsonObject
+        assertEquals(JsonPrimitive(2), metrics["scoreClampWarnings"])
+        val counts = metrics.getValue("profiles").jsonObject
+        assertEquals(Json.parseToJsonElement("""{"classified":4,"thresholdPassed":3,"selected":2}"""), counts["tech-signal"])
+        assertEquals(Json.parseToJsonElement("""{"classified":0,"thresholdPassed":0,"selected":0}"""), counts["demand-signal"])
     }
 
     @Test fun `가짜 인용을 지우고 근거 부족 카드와 분류 상한 초과 카드는 버린다`() {
@@ -212,13 +266,64 @@ class PipelineStagesTest {
         val demand = item(2)
         val original = card(tech, demand)
         val fake = SignalRef(tech.key, "https://invented.example", "가짜")
-        val citations = CitationValidator(listOf(signal(tech.copy(mergedUrls = listOf("https://example.com/merged"))),
-            signal(demand, profile = "demand-signal")))
+        val otherDemand = item(3)
+        val excessDemand = item(4)
+        val techWithAlias = tech.copy(mergedUrls = listOf("https://example.com/merged"))
+        val citations = CitationValidator(listOf(signal(techWithAlias)) +
+            listOf(demand, otherDemand, excessDemand).map { signal(it, profile = "demand-signal") })
         assertEquals(original, citations.validate(original.copy(techSignals = original.techSignals + fake)))
         assertNull(citations.validate(original.copy(techSignals = listOf(fake))))
         assertNotNull(citations.validate(original.copy(techSignals = listOf(fake.copy(url = "https://example.com/merged")))))
-        val copies = (1..4).map { original.copy(id = it.toString(), category = if (it == 1) "unknown" else original.category) }
-        assertEquals(listOf("2", "3"), CardValidator(config, setOf("dev-tools")).validate(copies, citations).map { it.id })
+        val copies = listOf(
+            original.copy(id = "1", category = "unknown"),
+            original.copy(id = "2"),
+            original.copy(id = "3", techSignals = listOf(fake.copy(url = "https://example.com/merged"))),
+            card(tech, otherDemand).copy(id = "5"),
+            card(tech, excessDemand).copy(id = "6")
+        )
+        val duplicates = mutableListOf<String>()
+        val validated = CardValidator(config, setOf("dev-tools")).validate(copies, citations) { duplicates += it.id }
+        assertEquals(listOf("2", "5"), validated.map { it.id })
+        assertEquals(listOf("3"), duplicates)
+    }
+
+    @Test fun `cards with different demand sets survive evidence containment`() {
+        val tech = item(1)
+        val demand = item(2)
+        val extraDemand = item(3)
+        val second = card(tech, demand).copy(id = "second")
+        val first = second.copy(id = "first", demandSignals = second.demandSignals +
+            SignalRef(extraDemand.key, extraDemand.url, "추가 수요"))
+        val citations = CitationValidator(listOf(signal(tech), signal(demand, profile = "demand-signal"),
+            signal(extraDemand, profile = "demand-signal")))
+        val duplicates = mutableListOf<String>()
+        val validated = CardValidator(config, setOf("dev-tools")).validate(listOf(first, second), citations) {
+            duplicates += it.id
+        }
+        assertEquals(listOf(first.id, second.id), validated.map { it.id })
+        assertTrue(duplicates.isEmpty())
+    }
+
+    @Test fun `기술 근거 순서를 바꾸고 근거를 추가한 중복 카드는 제외하고 경고한다`() {
+        val techA = item(1)
+        val techB = item(2)
+        val demand = item(3)
+        val competitor = item(4)
+        val original = card(techA, demand)
+        val first = original.copy(techSignals = original.techSignals + SignalRef(techB.key, techB.url, "기술"))
+        val second = first.copy(
+            id = "duplicate",
+            techSignals = first.techSignals.reversed(),
+            competitors = listOf(SignalRef(competitor.key, competitor.url, "경쟁 근거"))
+        )
+        val citations = CitationValidator(listOf(signal(techA), signal(techB),
+            signal(demand, profile = "demand-signal"), signal(competitor, profile = "market-signal")))
+        val duplicates = mutableListOf<String>()
+        val validated = CardValidator(config, setOf("dev-tools")).validate(listOf(first, second), citations) {
+            duplicates += it.id
+        }
+        assertEquals(listOf(first.id), validated.map { it.id })
+        assertEquals(listOf(second.id), duplicates)
     }
 
     @Test fun `인용은 근거 유형과 항목 URL 쌍을 검사하고 같은 원본의 재사용을 제외한다`() {

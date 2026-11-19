@@ -140,6 +140,9 @@ private suspend fun runMain(args: Array<String>) {
             val rendered = publishOrArchiveFailure(out, history, renderer, result, keepUnseen)
             println("${rendered?.subject ?: "카드 0개"} · 추적 ${result.trackingUpdates.size}건 · " +
                 String.format(Locale.ROOT, "추정 USD %.6f", result.report.costUsd))
+            result.metrics.profiles.forEach { (profile, counts) ->
+                println("$profile · 분류 ${counts.classified}건 · 임계값 통과 ${counts.thresholdPassed}건 · 최종 후보 ${counts.selected}건")
+            }
             result.report.failedSources.forEach { println("출처 실패 · ${it.source} · ${it.error}") }
             result.report.issues.forEach { println("· $it") }
             if (rendered == null) println("기존 카드 결과 유지 · 새 실행은 out/runs/에 보관")
@@ -220,7 +223,7 @@ internal fun publishRun(
             history.archivedCost(day.withDayOfMonth(1), day.minusDays(1))
         renderer.render(result, monthCost, todayCost)
     }
-    val output = result.copy(metrics = emptyList(), trackClassified = emptyMap())
+    val output = result.copy(metrics = result.metrics.copy(snapshots = emptyList()), trackClassified = emptyMap())
     val files = buildMap {
         if (rendered == null) {
             put(archiveFile(out, result.report), outputJson.encodeToString(result.copy(trackClassified = emptyMap())))
@@ -230,7 +233,7 @@ internal fun publishRun(
             put(out.resolve("$day.txt"), rendered.text)
             put(current, outputJson.encodeToString(output))
         }
-        put(out.resolve("metrics.json"), history.metricsContent(result.metrics, Instant.parse(result.report.startedAt)))
+        put(out.resolve("metrics.json"), history.metricsContent(result.metrics.snapshots, Instant.parse(result.report.startedAt)))
         put(out.resolve("tracked.json"), outputJson.encodeToString(result.tracked))
         put(history.stateFile(day.toString()), outputJson.encodeToString(output.copy(
             items = emptyList(), dropped = emptyList(), cards = emptyList()

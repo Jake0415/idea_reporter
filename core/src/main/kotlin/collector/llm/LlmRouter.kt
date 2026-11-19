@@ -28,7 +28,8 @@ class LlmRouter(
     private val providers = providers.associateBy { it.id }
 
     suspend fun complete(stage: String, request: LlmRequest, promptId: String, promptVersion: String,
-                         promptVersions: Map<String, String> = emptyMap(), fallbackOnInvalidJson: Boolean = true): LlmResult {
+                         promptVersions: Map<String, String> = emptyMap(), fallbackOnInvalidJson: Boolean = true,
+                         allowFallback: Boolean = true): LlmResult {
         val defaultTier = when (stage) {
             "classify", "track" -> ModelTier.FAST
             "generate" -> ModelTier.STRONG
@@ -44,7 +45,7 @@ class LlmRouter(
         }
         val tier = catalog.requirePrice(primary.provider, primary.model).tier
         val alternate = providers.keys.firstOrNull { it != primary.provider }
-            ?.takeIf { fallback && stageFallback[stage] != false }
+            ?.takeIf { allowFallback && fallback && stageFallback[stage] != false }
             ?.let { catalog.defaultModel(it, tier) }
 
         val first = try {
@@ -66,11 +67,7 @@ class LlmRouter(
         }
         if (first != null && (!first.refused || alternate == null)) return first
         checkNotNull(alternate)
-        return try {
-            attempt(request, call.copy(provider = alternate.provider, model = alternate.model, fallbackUsed = true))
-        } catch (e: BudgetExceededException) {
-            first ?: throw e
-        }
+        return attempt(request, call.copy(provider = alternate.provider, model = alternate.model, fallbackUsed = true))
     }
 
     private suspend fun attempt(request: LlmRequest, call: LlmCall): LlmResult {

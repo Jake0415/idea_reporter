@@ -35,7 +35,8 @@ data class PipelineResult(
     val cards: List<IdeaCard> = emptyList(),
     val trackingUpdates: List<TrackingUpdate> = emptyList(),
     val topics: List<TopicHistory> = emptyList(),
-    val metrics: List<MetricSnapshot> = emptyList(),
+    @kotlinx.serialization.Serializable(with = RunMetricsSerializer::class)
+    val metrics: RunMetrics = RunMetrics(),
     val tracked: List<TrackedIdea> = emptyList(),
     val trackingOnlyKeys: Set<String> = emptySet(),
     val trackClassified: Map<String, TrackClassification> = emptyMap()

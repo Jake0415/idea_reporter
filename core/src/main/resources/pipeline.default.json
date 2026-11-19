@@ -7,12 +7,13 @@
   "classifyBatchSize": 25,
   "profiles": {
     "tech-signal":   { "threshold": 6.0, "maxCandidates": 8 },
-    "demand-signal": { "threshold": 6.0, "maxCandidates": 8 },
+    "demand-signal": { "threshold": 5.0, "maxCandidates": 8 },
     "market-signal": { "threshold": 5.0, "maxCandidates": 4 }
   },
   "ideaCount": 5,
   "maxCardsPerCategory": 2,
   "maxCandidatesPerTag": 2,
+  "minDemandCandidates": 2,
   "recentTopicDays": 14,
   "recentCardDays": 7,
   "badges": { "hnPointsPerHour": 10, "githubStarsPerDay": 100, "streakDays": 3, "streakMin": 2 },

@@ -41,16 +41,17 @@ class LlmRouterTest {
         assertEquals("auth", guard.calls.single().error)
     }
 
-    @Test fun returnsRefusalWhenItsCostBlocksFallback() = runTest {
+    @Test fun reportsBudgetExceededWhenRefusalCostBlocksFallback() = runTest {
         val refusal = result(ProviderId.ANTHROPIC, "claude-haiku-5-5").copy(refused = true)
         val primary = Fake(ProviderId.ANTHROPIC) { refusal }
         val budget = CostGuard(0.01)
         val router = LlmRouter(listOf(primary, alternate), budget)
-        assertSame(refusal, router.complete("classify", request, "classify", "default"))
+        assertFailsWith<BudgetExceededException> { router.complete("classify", request, "classify", "default") }
         assertFailsWith<BudgetExceededException> { router.complete("classify", request, "classify", "default") }
         assertEquals(1, primary.requests)
         assertEquals(0, alternate.requests)
         assertEquals(refusal.costUsd, budget.calls.single().costUsd)
+        assertEquals("refused", budget.calls.single().error)
     }
 
     @Test fun budgetBlocksFurtherCallsAndResetsOnNextDay() = runTest {

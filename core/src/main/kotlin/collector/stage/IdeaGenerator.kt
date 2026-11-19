@@ -129,19 +129,43 @@ class CitationValidator(signals: List<Signal>, merged: Map<String, List<Signal>>
     }
 
     fun citedSignals(card: IdeaCard): List<Signal> =
-        (card.techSignals + card.demandSignals + card.competitors).mapNotNull(::original).distinctBy { it.item.key }
+        citedSignals(card.techSignals + card.demandSignals + card.competitors)
+
+    internal fun citedSignals(refs: List<SignalRef>): List<Signal> =
+        refs.mapNotNull(::original).distinctBy { it.item.key }
 }
 
 class CardValidator(private val config: PipelineConfig, private val categories: Set<String>) {
-    fun validate(cards: List<IdeaCard>, citations: CitationValidator): List<IdeaCard> {
+    private data class Evidence(val itemIds: Set<String>, val demandIds: Set<String>, val techTopics: Set<String>)
+
+    fun validate(cards: List<IdeaCard>, citations: CitationValidator,
+                 onDuplicate: (IdeaCard) -> Unit = {}): List<IdeaCard> {
         val counts = mutableMapOf<String, Int>()
+        val acceptedEvidence = mutableListOf<Evidence>()
         return cards.mapNotNull { card ->
             if (card.category !in categories || card.tags.isEmpty() || card.tags.any(String::isBlank) ||
                 listOf(card.title, card.oneLiner, card.whyToday, card.problem, card.effort,
                     card.differentiation, card.biggestRisk, card.validationPlan).any(String::isBlank)) return@mapNotNull null
+            val validated = citations.validate(card) ?: return@mapNotNull null
+            val evidence = Evidence(
+                itemIds = citations.citedSignals(validated).map { it.item.key }.toSet(),
+                demandIds = citations.citedSignals(validated.demandSignals).map { it.item.key }.toSet(),
+                techTopics = citations.citedSignals(validated.techSignals).map { it.classification.topicKey }.toSet()
+            )
+            if (acceptedEvidence.any { prior ->
+                evidence.itemIds == prior.itemIds ||
+                    (evidence.demandIds.isNotEmpty() && evidence.demandIds == prior.demandIds &&
+                        evidence.techTopics.any { it in prior.techTopics })
+            }) {
+                onDuplicate(card)
+                return@mapNotNull null
+            }
             val count = counts.getOrDefault(card.category, 0)
             if (count >= config.maxCardsPerCategory) return@mapNotNull null
-            citations.validate(card)?.also { counts[card.category] = count + 1 }
-        }.take(config.ideaCount)
+            if (acceptedEvidence.size >= config.ideaCount) return@mapNotNull null
+            counts[card.category] = count + 1
+            acceptedEvidence += evidence
+            validated
+        }
     }
 }

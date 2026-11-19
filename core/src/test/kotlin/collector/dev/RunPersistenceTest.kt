@@ -82,10 +82,27 @@ class RunPersistenceTest {
             if (idOf(req) == invalid.key) """{"items":[]}""" to 0.5 else classify(req) to 0.0
         }, tracking = listOf(tracking), budget = 0.5).run(sources())
         assertEquals(setOf(tracking.key), result.trackingOnlyKeys)
-        assertEquals(DropReason.CLASSIFY_FAILED, result.dropped.first { it.item.key == invalid.key }.reason)
+        assertEquals(DropReason.BUDGET_EXCEEDED, result.dropped.first { it.item.key == invalid.key }.reason)
         assertEquals(DropReason.BUDGET_EXCEEDED, result.dropped.first { it.item.key == blocked.key }.reason)
+        assertEquals(result.dropped.count { it.reason == DropReason.BUDGET_EXCEEDED },
+            result.report.dropCounts[DropReason.BUDGET_EXCEEDED])
         seen.markSeen(itemsToMarkSeen(result), day)
         assertEquals(listOf(invalid, blocked, tracking), seen.filterUnseen(normal + tracking, day.plusDays(1)))
+    }
+
+    @Test fun profileMetricsCountOnlyClassifiedCardInputs() = runTest {
+        val tracking = item("github", "only", "tracking only", rawScore = 100, publishedAt = now)
+        val tracked = JsonFileTrackedStore(out.resolve("tracked.json"))
+        tracked.save(listOf(TrackedIdea("idea", "card", "추적", "dev-tools", listOf("tracking"), emptyList(),
+            TrackedIdea.Status.TRACKING, now.minusSeconds(86_400), null, 0.0, TrackedIdea.Trend.FLAT)))
+        val result = pipeline(now, FileHistorySearch(out, config.historyDays), JsonFileSeenStore(out.resolve("seen.json")),
+            listOf(first), agent { req ->
+                (if (req.schemaName == "generate") """{"cards":[]}""" else classify(req)) to 0.0
+            }, tracking = listOf(tracking)).run(sources())
+
+        assertEquals(setOf(tracking.key), result.trackingOnlyKeys)
+        assertEquals(setOf(first.key, tracking.key), result.classified.map { it.item.key }.toSet())
+        assertEquals(1, result.metrics.profiles.getValue("tech-signal").classified)
     }
 
     @Test fun conflictingLockIsRejectedAndReleasedAfterException() = runTest {
@@ -143,23 +160,36 @@ class RunPersistenceTest {
             listOf(first.key), 0.5, TrackedIdea.Trend.UP)
         val topic = TopicHistory("topic", "주제", day.toString(), listOf(first.key))
         val metric = MetricSnapshot(first.key, first.rawScore, now.plusSeconds(1))
+        val profileMetrics = mapOf("tech-signal" to ProfileMetrics(3, 2, 1))
         val empty = original.copy(cards = emptyList(), tracked = listOf(tracked), trackingUpdates = listOf(update),
-            topics = listOf(topic), metrics = listOf(metric), report = original.report.copy(startedAt = now.plusSeconds(1).toString()))
+            topics = listOf(topic), metrics = RunMetrics(listOf(metric), profileMetrics),
+            report = original.report.copy(startedAt = now.plusSeconds(1).toString()))
         assertNull(publishRun(out, FileHistorySearch(out, 30), renderer, empty))
         val reopened = FileHistorySearch(out, 30)
         assertEquals(listOf(card), current().cards)
         assertEquals(listOf(tracked), JsonFileTrackedStore(out.resolve("tracked.json")).load())
         assertEquals(listOf(metric), reopened.metrics(now))
+        assertEquals(profileMetrics, archived().single().metrics.profiles)
         val state = reopened.stateRuns(day.plusDays(1), 1).single()
         assertEquals(listOf(update), state.trackingUpdates)
         assertEquals(listOf(topic), state.topics)
+    }
+
+    @Test fun readsLegacySnapshotArrayInRunJson() {
+        val run = PipelineResult(emptyList(), emptyList(), RunReport(day.toString(), now.toString(),
+            emptyList(), emptyList(), emptyMap(), 0))
+        val snapshot = MetricSnapshot(first.key, first.rawScore, now)
+        val legacy = JsonObject(outputJson.encodeToJsonElement(run).jsonObject +
+            ("metrics" to outputJson.encodeToJsonElement(listOf(snapshot))))
+        val decoded = outputJson.decodeFromJsonElement<PipelineResult>(legacy)
+        assertEquals(listOf(snapshot), decoded.metrics.snapshots)
     }
 
     @Test fun restoresReportsAndMetricsWhenTrackedSaveFails() = runTest {
         val renderer = HtmlRenderer(emptyList())
         val original = PipelineResult(emptyList(), emptyList(), RunReport(day.toString(), now.toString(),
             emptyList(), emptyList(), emptyMap(), 0), cards = listOf(card),
-            metrics = listOf(MetricSnapshot(first.key, 10, now)))
+            metrics = RunMetrics(snapshots = listOf(MetricSnapshot(first.key, 10, now))))
         publishRun(out, FileHistorySearch(out, 30), renderer, original)
         val names = listOf("$day.json", "$day.html", "$day.txt", "metrics.json", "seen.json", "state/$day.json", "track-classified.json")
         val saved = names.associateWith { out.resolve(it).takeIf(File::isFile)?.readText() }
@@ -167,7 +197,7 @@ class RunPersistenceTest {
         if (tracked.isFile) assertTrue(tracked.delete())
         assertTrue(tracked.mkdir())
         val replacement = original.copy(cards = listOf(card.copy(title = "교체")),
-            metrics = listOf(MetricSnapshot(first.key, 20, now.plusSeconds(1))),
+            metrics = RunMetrics(snapshots = listOf(MetricSnapshot(first.key, 20, now.plusSeconds(1)))),
             report = original.report.copy(startedAt = now.plusSeconds(1).toString()))
         assertFailsWith<java.io.IOException> {
             publishRun(out, FileHistorySearch(out, 30), renderer, replacement)

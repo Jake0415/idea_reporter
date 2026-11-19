@@ -44,13 +44,92 @@ class ClassificationTest {
         assertTrue(result.dropped.all { it.reason == DropReason.CLASSIFY_FAILED })
     }
 
-    @Test fun `후보에 없는 프로필과 잘못된 주제 키를 분류 실패로 기록한다`() = runTest {
+    @Test fun `검사별 분류 실패 사유를 기록한다`() = runTest {
         val result = classifier { _, keys ->
-            listOf(row(keys[0]).copy(profile = "market-signal"), row(keys[1]).copy(topicKey = "Bad key"))
-        }.classify((1..2).map(::item), emptyList(), emptyList())
+            keys.map { key ->
+                when (key) {
+                    "hn:1" -> row(key).copy(profile = "market-signal")
+                    "hn:2" -> row(key).copy(profile = "unknown")
+                    "hn:3" -> row(key).copy(score = null)
+                    else -> row(key).copy(topicKey = "/".repeat(45))
+                }
+            }
+        }.classify((1..4).map(::item), emptyList(), emptyList())
 
         assertTrue(result.signals.isEmpty())
-        assertEquals(listOf(DropReason.CLASSIFY_FAILED, DropReason.CLASSIFY_FAILED), result.dropped.map { it.reason })
+        assertEquals(List(4) { DropReason.CLASSIFY_FAILED }, result.dropped.map { it.reason })
+        assertEquals(listOf("후보에 없는 프로필(market-signal)", "알 수 없는 프로필(unknown)",
+            "점수 없음/범위 밖(null)", "주제 키 형식(${"/".repeat(40)})"), result.dropped.map { it.detail })
+    }
+
+    @Test fun `주제 키를 정규화한 후 이전 주제 이름을 적용한다`() = runTest {
+        val result = classifier { _, keys ->
+            listOf(row(keys[0]).copy(topicKey = " -- BAd _./ Key -- "),
+                row(keys[1]).copy(topicKey = "A".repeat(59) + "/B"))
+        }.classify((1..2).map(::item), listOf(TopicHistory("bad-key", "Previous", "2026-11-19", emptyList())),
+            emptyList())
+
+        assertEquals(listOf("bad-key", "a".repeat(59)), result.signals.map { it.classification.topicKey })
+        assertEquals("Previous", result.signals.first().classification.topicLabel)
+        assertTrue(result.dropped.isEmpty())
+    }
+
+    @Test fun `누락 항목과 후보 밖 응답을 함께 한 번 재요청한다`() = runTest {
+        val requested = mutableListOf<List<String>>()
+        val result = classifier { request, keys ->
+            requested += keys
+            if (requested.size == 1) listOf(row(keys[0]), row(keys[1]).copy(profile = "market-signal"))
+            else {
+                val inputs = Json.parseToJsonElement(request.user).jsonObject.getValue("items").jsonArray
+                assertEquals(List(2) { listOf("tech-signal", "none") }, inputs.map {
+                    it.jsonObject.getValue("candidates").jsonArray.map { candidate -> candidate.jsonPrimitive.content }
+                })
+                keys.map(::row)
+            }
+        }.classify((1..3).map(::item), emptyList(), emptyList())
+
+        assertEquals(listOf(listOf("hn:1", "hn:2", "hn:3"), listOf("hn:2", "hn:3")), requested)
+        assertEquals(listOf("hn:1", "hn:2", "hn:3"), result.signals.map { it.item.key })
+        assertTrue(result.dropped.isEmpty())
+    }
+
+    @Test fun `후보 밖 프로필의 재요청이 예산에 막히면 예산 초과를 기록한다`() = runTest {
+        val result = classifier(costUsd = 0.5) { _, keys ->
+            listOf(row(keys[0]), row(keys[1]).copy(profile = "market-signal"))
+        }.classify((1..2).map(::item), emptyList(), emptyList())
+
+        assertEquals("hn:1", result.signals.single().item.key)
+        assertEquals(DropReason.BUDGET_EXCEEDED, result.dropped.single().reason)
+    }
+
+    @Test fun recoveryKeepsRequestFailureOrOriginalCandidateReason() = runTest {
+        for ((failure, detail) in listOf(
+            "timeout" to "모델 호출 실패 (timeout)",
+            "refused" to "응답 거절",
+            "invalid_json" to "JSON 응답 오류",
+            null to "후보에 없는 프로필(market-signal)"
+        )) {
+            var calls = 0
+            val result = classifier { _, keys ->
+                if (++calls == 1) listOf(row(keys.single()).copy(profile = "market-signal"))
+                else if (failure == "refused") null
+                else if (failure != null) throw LlmServiceException(reason = failure)
+                else emptyList()
+            }.classify(listOf(item(1)), emptyList(), emptyList())
+
+            assertEquals(2, calls)
+            assertEquals(DropReason.CLASSIFY_FAILED, result.dropped.single().reason)
+            assertEquals(detail, result.dropped.single().detail)
+        }
+    }
+
+    @Test fun `범위 밖 점수를 양쪽 경계로 보정하고 정상 점수는 유지한다`() = runTest {
+        val result = classifier { _, keys ->
+            keys.zip(listOf(-1.0, 11.0, 8.0)).map { (key, score) -> row(key).copy(score = score) }
+        }.classify((1..3).map(::item), emptyList(), emptyList())
+
+        assertEquals(listOf(0.0, 10.0, 8.0), result.signals.map { it.classification.score })
+        assertTrue(result.dropped.isEmpty())
     }
 
     @Test fun `본문 표본은 크기 한도 안에서 처음 중간 끝을 유지한다`() {
@@ -194,6 +273,26 @@ class ClassificationTest {
         assertEquals(DropReason.CLASSIFY_FAILED, result.dropped.single().reason)
     }
 
+    @Test fun missingRowRetryBlockedByBudgetPreservesCompletedRows() = runTest {
+        val result = classifier(costUsd = 0.5) { _, keys -> listOf(row(keys.first())) }
+            .classify((1..2).map(::item), emptyList(), emptyList())
+
+        assertEquals(listOf("hn:1"), result.signals.map { it.item.key })
+        assertEquals("hn:2", result.dropped.single().item.key)
+        assertEquals(DropReason.BUDGET_EXCEEDED, result.dropped.single().reason)
+    }
+
+    @Test fun truncatedBatchSplitBlockedByBudgetPreservesCompletedRows() = runTest {
+        val result = classifier(costUsd = 0.5) { _, keys ->
+            if (keys.size > 1) throw LlmServiceException(reason = "truncated")
+            listOf(row(keys.single()))
+        }.classify((1..2).map(::item), emptyList(), emptyList())
+
+        assertEquals(listOf("hn:1"), result.signals.map { it.item.key })
+        assertEquals("hn:2", result.dropped.single().item.key)
+        assertEquals(DropReason.BUDGET_EXCEEDED, result.dropped.single().reason)
+    }
+
     @Test fun firebaseFailureKeepsAlgoliaCommentOrder() = runTest {
         val requests = AtomicInteger()
         val children = (1..6).joinToString(",") { """{"id":$it,"author":"a","text":"Comment $it"}""" }
@@ -217,21 +316,23 @@ class ClassificationTest {
 
     private fun row(key: String) = ClassifiedItem(key, "tech-signal", 8.0, "reason", "summary", emptyList(), "topic", "Topic")
 
-    private fun classifier(output: (LlmRequest, List<String>) -> List<ClassifiedItem>): Classifier {
+    private fun classifier(costUsd: Double = 0.0, output: (LlmRequest, List<String>) -> List<ClassifiedItem>?): Classifier {
         val fake = object : LlmProvider {
             override val id = ProviderId.ANTHROPIC
             override suspend fun listModels() = emptyList<ModelInfo>()
             override suspend fun complete(req: LlmRequest): LlmResult {
                 val keys = Json.parseToJsonElement(req.user).jsonObject.getValue("items").jsonArray
                     .map { it.jsonObject.getValue("itemId").jsonPrimitive.content }
-                return LlmResult("""{"items":${Json.encodeToJsonElement(output(req, keys))}}""", id, req.model, 0, 0, 0, 0.0)
+                val rows = output(req, keys)
+                return LlmResult("""{"items":${Json.encodeToJsonElement(rows)}}""", id, req.model, 0, 0, 0, costUsd,
+                    refused = rows == null)
             }
         }
         val alternate = object : LlmProvider {
             override val id = ProviderId.OPENAI
             override suspend fun listModels() = emptyList<ModelInfo>()
             override suspend fun complete(req: LlmRequest): LlmResult =
-                throw AssertionError("잘린 분류 요청은 공급자를 바꾸어 반복하지 않는다.")
+                throw AssertionError("이 분류 요청은 공급자를 바꾸어 반복하지 않는다.")
         }
         return Classifier(PipelineConfig.defaults, profiles, PromptResolver(FilePromptStore(directory)),
             LlmRouter(listOf(fake, alternate), CostGuard(0.5)))

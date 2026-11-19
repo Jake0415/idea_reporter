@@ -21,6 +21,7 @@ internal fun array(element: JsonObject) = buildJsonObject {
 internal val string = type("string")
 internal val strings = array(string)
 internal const val TRUNCATED_RESPONSE = "모델 호출 실패 (truncated)"
+internal const val BUDGET_LIMIT = "비용 상한"
 
 internal sealed interface Response<out T> {
     data class Ok<T>(val value: T) : Response<T>
@@ -29,19 +30,19 @@ internal sealed interface Response<out T> {
 
 internal suspend inline fun <reified T> structuredCall(
     router: LlmRouter, stage: String, prompts: List<ResolvedPrompt>, system: String,
-    user: JsonObject, schema: JsonObject, tokens: Int, retryInvalid: Boolean = false
+    user: JsonObject, schema: JsonObject, tokens: Int, retryInvalid: Boolean = false, allowFallback: Boolean = true
 ): Response<T> {
     repeat(if (retryInvalid) 2 else 1) {
         try {
             val response = router.complete(stage, LlmRequest("", system, user.toString(), schema, stage, tokens, Effort.LOW),
                 prompts.first().promptId, prompts.first().version, prompts.associate { it.promptId to it.version },
-                fallbackOnInvalidJson = false)
+                fallbackOnInvalidJson = false, allowFallback = allowFallback)
             if (response.refused) return Response.Failed("응답 거절")
             return Response.Ok(Json.decodeFromString<T>(response.json))
         } catch (e: CancellationException) {
             throw e
         } catch (_: BudgetExceededException) {
-            return Response.Failed("비용 상한")
+            return Response.Failed(BUDGET_LIMIT)
         } catch (e: LlmServiceException) {
             if (e.reason == "truncated") return Response.Failed(TRUNCATED_RESPONSE)
             if (e.reason != "invalid_json") return Response.Failed("모델 호출 실패 (${e.reason})")

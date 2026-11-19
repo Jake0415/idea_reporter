@@ -8,7 +8,9 @@ import collector.prompt.PromptResolver
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
 
-data class ClassificationResult(val signals: List<Signal>, val dropped: List<DroppedItem>)
+data class ClassificationResult(
+    val signals: List<Signal>, val dropped: List<DroppedItem>, val scoreClampWarnings: Int = 0
+)
 
 class Classifier(
     private val config: PipelineConfig, private val profiles: ProfileLoader.ProfileSet,
@@ -22,9 +24,20 @@ class Classifier(
         val system = resolved.joinToString("\n\n") { "${it.promptId}\n${it.text}" }
         val signals = mutableListOf<Signal>()
         val dropped = mutableListOf<DroppedItem>()
+        var scoreClampWarnings = 0
         suspend fun classifyBatch(batch: List<Item>, splitDepth: Int) {
             val candidates = batch.associate { it.key to it.profileHint.ifEmpty { profiles.ids } }
-            suspend fun request(batch: List<Item>, retryInvalid: Boolean): Response<Output> {
+            fun outsideCandidates(row: ClassifiedItem, key: String): Boolean =
+                row.profile != "none" && row.profile !in candidates.getValue(key)
+
+            fun profileIssue(row: ClassifiedItem, key: String): String? = when {
+                row.profile == "none" -> null
+                row.profile !in config.profiles -> "알 수 없는 프로필(${row.profile})"
+                outsideCandidates(row, key) -> "후보에 없는 프로필(${row.profile})"
+                else -> null
+            }
+
+            suspend fun request(batch: List<Item>, retry: Boolean): Response<Output> {
                 val user = buildJsonObject {
                     put("items", JsonArray(batch.map { item ->
                         val hints = candidates.getValue(item.key)
@@ -36,7 +49,7 @@ class Classifier(
                             putHnContext(hnContexts[item.key])
                             put("rawScore", item.rawScore)
                             put("alsoSeenIn", Json.encodeToJsonElement(item.alsoSeenIn))
-                            put("candidates", Json.encodeToJsonElement(hints))
+                            put("candidates", Json.encodeToJsonElement(if (retry) (hints + "none").distinct() else hints))
                             if (item.trackHint.isNotEmpty()) put("trackHint", Json.encodeToJsonElement(item.trackHint))
                         }
                     }))
@@ -52,9 +65,9 @@ class Classifier(
                     }))
                 }
                 return structuredCall<Output>(router, "classify", resolved, system, user, outputSchema,
-                    batch.size * 400 + 128, retryInvalid = retryInvalid)
+                    batch.size * 400 + 128, retryInvalid = !retry, allowFallback = !retry)
             }
-            val result = request(batch, retryInvalid = true)
+            val result = request(batch, retry = false)
             if (result == Response.Failed(TRUNCATED_RESPONSE) && batch.size > 1 && splitDepth < 2) {
                 val midpoint = batch.size / 2
                 classifyBatch(batch.subList(0, midpoint), splitDepth + 1)
@@ -62,42 +75,57 @@ class Classifier(
                 return
             }
             val byId = (result as? Response.Ok)?.value?.items.orEmpty().groupBy { it.externalId }
-            val unresolved = if (result is Response.Ok) batch.filter { byId[it.key]?.size != 1 } else emptyList()
-            val retried = if (unresolved.isEmpty()) emptyMap() else
-                (request(unresolved, retryInvalid = false) as? Response.Ok)?.value?.items.orEmpty().groupBy { it.externalId }
+            val accepted = byId.mapValues { (key, rows) ->
+                rows.singleOrNull()?.takeIf { key in candidates && !outsideCandidates(it, key) }
+            }
+            val unresolved = if (result is Response.Ok) batch.filter { accepted[it.key] == null } else emptyList()
+            val retryResult = if (unresolved.isEmpty()) null else request(unresolved, retry = true)
+            val retried = (retryResult as? Response.Ok)?.value?.items.orEmpty().groupBy { it.externalId }
+            val budgetBlocked = result == Response.Failed(BUDGET_LIMIT) || retryResult == Response.Failed(BUDGET_LIMIT)
             val trackedIds = tracked.map { it.id }.toSet()
             val recentLabels = topics.associate { it.topicKey to it.topicLabel }
             for (item in batch) {
-                val row = (byId[item.key]?.singleOrNull() ?: retried[item.key]?.singleOrNull())?.let {
-                    it.copy(trackedIdeaIds = it.trackedIdeaIds.filter(trackedIds::contains).distinct(),
-                        topicLabel = recentLabels[it.topicKey] ?: it.topicLabel)
+                val row = accepted[item.key] ?: retried[item.key]?.singleOrNull()
+                val originalIssue = byId[item.key]?.singleOrNull()?.let { profileIssue(it, item.key) }
+                if (row == null) {
+                    val detail = if (budgetBlocked) BUDGET_LIMIT else
+                        (retryResult as? Response.Failed)?.reason ?: (result as? Response.Failed)?.reason
+                        ?: originalIssue ?: "분류 응답에 항목 누락 또는 중복"
+                    val reason = if (budgetBlocked) DropReason.BUDGET_EXCEEDED else DropReason.CLASSIFY_FAILED
+                    dropped += DroppedItem(item, reason, detail)
+                    continue
                 }
-                when {
-                    row == null -> {
-                        val detail = (result as? Response.Failed)?.reason ?: "분류 응답에 항목 누락 또는 중복"
-                        val reason = if (detail == "비용 상한") DropReason.BUDGET_EXCEEDED else DropReason.CLASSIFY_FAILED
-                        dropped += DroppedItem(item, reason, detail)
-                    }
-                    row.profile == "none" -> {
-                        signals += Signal(item, row, hnContext = hnContexts[item.key])
-                        dropped += DroppedItem(item, DropReason.NOT_RELEVANT, row.reason)
-                    }
-                    row.profile !in candidates.getValue(item.key) || row.profile !in config.profiles ||
-                        row.score == null || row.score !in 0.0..10.0 || !topicKey.matches(row.topicKey) ->
-                        dropped += DroppedItem(item, DropReason.CLASSIFY_FAILED, "프로필, 점수 또는 주제 키 오류")
-                    else -> signals += Signal(item, row, hnContext = hnContexts[item.key])
+                val normalizedKey = if (row.profile == "none") row.topicKey else
+                    row.topicKey.lowercase().replace(topicKeySeparators, "-").trim('-').take(60).trimEnd('-')
+                val detail = if (row.profile == "none") null else profileIssue(row, item.key) ?: when {
+                    row.score == null -> "점수 없음/범위 밖(${row.score})"
+                    normalizedKey.isEmpty() -> "주제 키 형식(${row.topicKey.take(40)})"
+                    else -> null
                 }
+                if (detail != null) {
+                    dropped += DroppedItem(item, DropReason.CLASSIFY_FAILED, originalIssue ?: detail)
+                    continue
+                }
+                val score = row.score?.let {
+                    if (it !in 0.0..10.0) scoreClampWarnings++
+                    it.coerceIn(0.0, 10.0)
+                }
+                signals += Signal(item, row.copy(score = score, topicKey = normalizedKey,
+                    topicLabel = recentLabels[normalizedKey] ?: row.topicLabel,
+                    trackedIdeaIds = row.trackedIdeaIds.filter(trackedIds::contains).distinct()),
+                    hnContext = hnContexts[item.key])
+                if (row.profile == "none") dropped += DroppedItem(item, DropReason.NOT_RELEVANT, row.reason)
             }
         }
         for (batch in items.chunked(config.classifyBatchSize)) classifyBatch(batch, 0)
-        return ClassificationResult(signals, dropped)
+        return ClassificationResult(signals, dropped, scoreClampWarnings)
     }
 
     internal fun maxSnippetChars(item: Item): Int = item.profileHint.ifEmpty { profiles.ids }
         .mapNotNull { profiles[it]?.config?.content?.classifyMaxChars }
         .minOrNull() ?: profiles.default.config.content.classifyMaxChars
 
-    private val topicKey = Regex("[a-z0-9]+(?:-[a-z0-9]+)*")
+    private val topicKeySeparators = Regex("[^a-z0-9]+")
 
     @Serializable private data class Output(val items: List<ClassifiedItem>)
 

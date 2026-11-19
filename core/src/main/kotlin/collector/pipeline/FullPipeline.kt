@@ -143,8 +143,10 @@ class FullPipeline(
                     active.associate { it.id to (it.id in signal.classification.trackedIdeaIds) })
             }
             val dropped = result.dropped.toMutableList()
+            var scoreClampWarnings = result.scoreClampWarnings
             for ((unevaluated, items) in pending) {
                 val evaluation = classifier.classify(items, recent, unevaluated, contexts)
+                scoreClampWarnings += evaluation.scoreClampWarnings
                 dropped += evaluation.dropped.filter { it.reason != DropReason.NOT_RELEVANT }
                 for (signal in evaluation.signals) {
                     val cached = cache.getValue(signal.item.key)
@@ -160,7 +162,7 @@ class FullPipeline(
                 if (classification.profile == "none") dropped += DroppedItem(item, DropReason.NOT_RELEVANT, classification.reason)
                 Signal(item, classification, hnContext = contexts[item.key])
             }
-            ClassificationResult(result.signals + cachedSignals, dropped)
+            ClassificationResult(result.signals + cachedSignals, dropped, scoreClampWarnings)
         }
         val cardSignals = classified.signals.filter { it.item.key in cardKeys && it.classification.profile != "none" }
         val selected = stage("select", cardSignals.size, { it: SelectionResult -> it.kept.size }) { selector.select(cardSignals) }
@@ -197,7 +199,7 @@ class FullPipeline(
         val validator = CardValidator(config, generator.categories.map { it.id }.toSet())
         val citations = CitationValidator(enriched, selected.groups)
         suspend fun validate(cards: List<IdeaCard>) = stage("validate", cards.size, { it: List<IdeaCard> -> it.size }) {
-            validator.validate(cards, citations).map {
+            validator.validate(cards, citations) { issues += "중복 카드 제외 (${it.title})" }.map {
                 it.copy(badges = badgeCalculator.badges(citations.citedSignals(it), priorTopics + topics, snapshots, now, today))
             }
         }
@@ -248,12 +250,19 @@ class FullPipeline(
             }
         }
         val dropped = base.dropped + classified.dropped + selected.dropped
+        val classifiedCounts = cardSignals.groupingBy { it.classification.profile }.eachCount()
+        val selectedCounts = selected.kept.groupingBy { it.classification.profile }.eachCount()
+        val profileMetrics = config.profiles.keys.associateWith { profile ->
+            ProfileMetrics(classifiedCounts[profile] ?: 0, selected.thresholdPassedByProfile[profile] ?: 0,
+                selectedCounts[profile] ?: 0)
+        }
         onStage("deliver")
         stages += StageResult("deliver", cards.size, cards.size, 0)
         return base.copy(
             items = input.map { enrichedById[it.key]?.item ?: it }, dropped = dropped, classified = signals,
             cards = cards, trackingUpdates = updates, topics = topics,
-            metrics = collected.distinctBy { it.key }.map { MetricSnapshot(it.key, it.rawScore, now) },
+            metrics = RunMetrics(collected.distinctBy { it.key }.map { MetricSnapshot(it.key, it.rawScore, now) },
+                profileMetrics, classified.scoreClampWarnings),
             tracked = trackedAfter, trackClassified = cache, trackingOnlyKeys = input.map { it.key }.toSet() - cardKeys,
             report = base.report.copy(stages = stages, llmCalls = costs.drainCalls(), cardCount = cards.size,
                 trackingUpdateCount = updates.size, dropCounts = dropped.groupingBy { it.reason }.eachCount(),

@@ -2,7 +2,7 @@
   "id": "demand-signal",
   "name": "수요 신호",
   "description": "사람들이 원하는 것: 불편, 요청, 기존 도구에 대한 불만",
-  "threshold": 6.0,
+  "threshold": 5.0,
   "maxCandidates": 8,
   "content": {
     "classifyMaxChars": 1500,

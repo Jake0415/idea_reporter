@@ -20,7 +20,8 @@ data class PipelineConfig(
     val feedbackExamples: Int,
     val historyDays: Int,
     val supplementSearch: Search,
-    val dailyBudgetUsd: Double
+    val dailyBudgetUsd: Double,
+    val minDemandCandidates: Int = 2
 ) {
     @Serializable data class Models(val classify: StageModel, val generate: StageModel, val fallback: Boolean)
     @Serializable data class Selection(val threshold: Double, val maxCandidates: Int)
