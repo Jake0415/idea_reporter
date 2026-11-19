@@ -8,6 +8,10 @@ body { background: #e5e7eb; font-family: system-ui, "Malgun Gothic", sans-serif;
 .review-bar { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
 .review-bar button { border: 1px solid #cbd5e1; background: #fff; border-radius: 999px; padding: 4px 12px; font-size: 13px; cursor: pointer; }
 .review-bar button.on { background: #111827; color: #fff; border-color: #111827; }
+.review-note { font-size: 13px; color: #374151; text-align: center; max-width: 900px; }
+.compare { display: flex; gap: 20px; flex-wrap: wrap; justify-content: center; }
+.compare-item { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.compare-item .review-note { max-width: 390px; }
 .phone { width: 390px; height: 800px; border: 10px solid #111; border-radius: 36px; overflow: hidden; display: flex; flex-direction: column; background: var(--color-background-body); transform: translateZ(0); }
 .phone-body { flex: 1; min-height: 0; overflow: auto; }
 .story { display: flex; gap: 14px; overflow-x: auto; padding: 4px 2px 2px; scrollbar-width: none; }

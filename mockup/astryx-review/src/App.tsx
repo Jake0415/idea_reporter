@@ -67,10 +67,56 @@ const TOPICS = [
 
 type Screen = 'today' | 'detail' | 'archive' | 'settings';
 type Mode = 'light' | 'dark';
+type Layout = 'feed' | 'compact' | 'focus';
+type Slug = keyof typeof themes;
+
+const THEME_INFO: Record<Slug, {name: string; note: string}> = {
+  feed: {name: 'A 피드', note: '흰 바탕·파랑 포인트·얇은 테두리 — 인스타그램풍'},
+  mono: {name: 'B 모노', note: '흑백·제목 세리프·각진 모서리 — 신문/에디토리얼'},
+  soft: {name: 'C 소프트', note: '회색 바탕+흰 카드·둥근 모서리·인디고 — 금융앱풍'},
+  sunset: {name: 'D 선셋', note: '크림 바탕·코럴 포인트·큰 모서리 — 따뜻한 소비자앱'},
+};
+const LAYOUT_INFO: Record<Layout, {name: string; note: string}> = {
+  feed: {name: '1 피드 카드', note: '카드마다 제목·설명·배지'},
+  compact: {name: '2 촘촘한 목록', note: '한 화면에 5개 모두, 설명 생략'},
+  focus: {name: '3 한 장씩', note: '큰 카드 1장 + 넘기기, 이유·문제까지 미리 보기'},
+};
 
 export default function App() {
+  const [view, setView] = useState<'single' | 'compare'>('single');
+  const [slug, setSlug] = useState<Slug>(defaultThemeSlug);
+  const [layout, setLayout] = useState<Layout>('feed');
   const [mode, setMode] = useState<Mode>('light');
   const [screen, setScreen] = useState<Screen>('today');
+  const seg = <T extends string>(cur: T, set: (v: T) => void, items: [T, string][]) =>
+    items.map(([v, l]) => <button key={v} className={cur === v ? 'on' : ''} onClick={() => set(v)}>{l}</button>);
+
+  return (
+    <div className="review">
+      <div className="review-bar">
+        {seg(view, setView, [['single', '한 대 보기'], ['compare', '테마 4종 비교']])}
+        <span style={{width: 12}} />
+        {seg(mode, setMode, [['light', '라이트'], ['dark', '다크']])}
+      </div>
+      {view === 'single' && <div className="review-bar">{seg(slug, setSlug, (Object.keys(THEME_INFO) as Slug[]).map(s => [s, THEME_INFO[s].name]))}</div>}
+      <div className="review-bar">{seg(layout, setLayout, (Object.keys(LAYOUT_INFO) as Layout[]).map(l => [l, LAYOUT_INFO[l].name]))}</div>
+      {view === 'single' && <div className="review-bar">{seg(screen, setScreen, [['today', 'SC-01 오늘'], ['detail', 'SC-02 상세'], ['archive', 'SC-03 보관함'], ['settings', 'SC-11 AI 공급자']])}</div>}
+      <div className="review-note">
+        {view === 'single' ? `${THEME_INFO[slug].name}: ${THEME_INFO[slug].note}` : '같은 화면(SC-01 오늘)을 테마 4종으로 나란히'} · 레이아웃 {LAYOUT_INFO[layout].name}: {LAYOUT_INFO[layout].note}
+      </div>
+      {view === 'single'
+        ? <PhoneApp key={`${screen}`} slug={slug} mode={mode} layout={layout} initialScreen={screen} />
+        : <div className="compare">{(Object.keys(THEME_INFO) as Slug[]).map(s => (
+            <div key={s} className="compare-item"><div className="review-note"><b>{THEME_INFO[s].name}</b> — {THEME_INFO[s].note}</div>
+              <PhoneApp slug={s} mode={mode} layout={layout} initialScreen="today" /></div>
+          ))}</div>}
+    </div>
+  );
+}
+
+function PhoneApp({slug, mode, layout, initialScreen}: {slug: Slug; mode: Mode; layout: Layout; initialScreen: Screen}) {
+  const [screen, setScreen] = useState<Screen>(initialScreen);
+  const [focusIdx, setFocusIdx] = useState(0);
   const [backTo, setBackTo] = useState<Screen>('today');
   const [ideaId, setIdeaId] = useState('c1');
   const [stars, setStars] = useState<Record<string, boolean>>({c2: true});
@@ -85,24 +131,10 @@ export default function App() {
   const open = (id: string, from: Screen) => { setIdeaId(id); setBackTo(from); setScreen('detail'); };
   const toggleStar = (id: string) => setStars(s => ({...s, [id]: !s[id]}));
 
-  const review = (
-    <div className="review-bar">
-      {(['today', 'detail', 'archive', 'settings'] as Screen[]).map(s => (
-        <button key={s} className={screen === s ? 'on' : ''} onClick={() => setScreen(s)}>
-          {{today: 'SC-01 오늘', detail: 'SC-02 상세', archive: 'SC-03 보관함', settings: 'SC-11 AI 공급자'}[s]}
-        </button>
-      ))}
-      <span style={{width: 12}} />
-      {(['light', 'dark'] as Mode[]).map(m => (
-        <button key={m} className={mode === m ? 'on' : ''} onClick={() => setMode(m)}>{m === 'light' ? '라이트' : '다크'}</button>
-      ))}
-    </div>
-  );
+  const today = IDEAS.filter(i => i.date === '11월 19일');
 
   return (
-    <div className="review">
-      {review}
-      <Theme theme={themes[defaultThemeSlug]} mode={mode}>
+      <Theme theme={themes[slug]} mode={mode}>
         <div className="phone">
           {/* 상단 바 */}
           <HStack paddingInline={4} paddingBlock={3} vAlign="center" justify="between" gap={2}>
@@ -144,9 +176,51 @@ export default function App() {
                 </HStack>
                 {running && <Card variant="muted"><VStack gap={2}><Text type="label">실행 중 · 분류 중…</Text><ProgressBar label="진행" value={55} /></VStack></Card>}
                 <Banner status="warning" title="Reddit 수집 실패" description="나머지 출처로 만들었습니다" />
-                {IDEAS.filter(i => i.date === '11월 19일').map((i, n) => (
+                {layout === 'feed' && today.map((i, n) => (
                   <IdeaCard key={i.id} idea={i} n={n + 1} starred={!!stars[i.id]} muted={!!hidden[i.id]} onOpen={() => open(i.id, 'today')} onStar={() => toggleStar(i.id)} />
                 ))}
+                {layout === 'compact' && (
+                  <Card padding={0}><VStack gap={0}>
+                    {[...today, ...IDEAS.filter(i => i.date !== '11월 19일')].map((i, n, arr) => (
+                      <VStack key={i.id} gap={0}>
+                        <ClickableCard label={i.title} variant="transparent" padding={3} onClick={() => open(i.id, 'today')}>
+                          <HStack gap={3} vAlign="center">
+                            <Text type="label">{n + 1}</Text>
+                            <VStack gap={1} width="100%">
+                              <Text type="label" maxLines={2}>{i.title}</Text>
+                              <HStack gap={1}><Token label={i.cat} size="sm" color="blue" />{i.badges.map(b => <Badge key={b} label={b} variant="warning" />)}</HStack>
+                            </VStack>
+                            <IconButton label="관심" icon={<Icon icon={stars[i.id] ? StarSolid : StarIcon} color={stars[i.id] ? 'accent' : 'secondary'} />} variant="ghost" size="sm" onClick={e => { e.stopPropagation(); toggleStar(i.id); }} />
+                          </HStack>
+                        </ClickableCard>
+                        {n < arr.length - 1 && <Divider />}
+                      </VStack>
+                    ))}
+                  </VStack></Card>
+                )}
+                {layout === 'focus' && (() => {
+                  const i = today[focusIdx];
+                  return (
+                    <VStack gap={3}>
+                      <ClickableCard label={i.title} padding={5} elevation="low" onClick={() => open(i.id, 'today')}>
+                        <VStack gap={3}>
+                          <HStack justify="between"><Text type="supporting">{focusIdx + 1} / {today.length}</Text><HStack gap={1}><Token label={i.cat} size="sm" color="blue" />{i.badges.map(b => <Badge key={b} label={b} variant="warning" />)}</HStack></HStack>
+                          <Heading level={2}>{i.title}</Heading>
+                          <Text type="supporting">{i.one}</Text>
+                          <Divider />
+                          <Block title="오늘 고른 이유"><Text maxLines={3}>{i.why}</Text></Block>
+                          <Block title="문제"><Text maxLines={3}>{i.problem}</Text></Block>
+                          <HStack justify="between"><Text type="supporting">{i.effort} · AI {i.score}</Text><Text type="supporting">자세히 ›</Text></HStack>
+                        </VStack>
+                      </ClickableCard>
+                      <HStack justify="between" vAlign="center">
+                        <Button label="이전" variant="secondary" isDisabled={focusIdx === 0} onClick={() => setFocusIdx(x => x - 1)} />
+                        <IconButton label={stars[i.id] ? '관심 해제' : '관심'} icon={<Icon icon={stars[i.id] ? StarSolid : StarIcon} size="lg" color={stars[i.id] ? 'accent' : 'primary'} />} variant="ghost" onClick={() => toggleStar(i.id)} />
+                        <Button label="다음" variant="primary" isDisabled={focusIdx === today.length - 1} onClick={() => setFocusIdx(x => x + 1)} />
+                      </HStack>
+                    </VStack>
+                  );
+                })()}
               </VStack>
             )}
 
@@ -239,7 +313,6 @@ export default function App() {
           </BottomSheet>
         </div>
       </Theme>
-    </div>
   );
 }
 

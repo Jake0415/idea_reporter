@@ -1,0 +1,53 @@
+{
+  "name": "sunset",
+  "like": "neutral",
+  "mode": "both",
+  "settings": [
+    {
+      "thing": "accent",
+      "value": "#F2552C",
+      "source": "dial"
+    },
+    {
+      "thing": "vibrancy",
+      "value": "60",
+      "source": "dial"
+    },
+    {
+      "thing": "corners",
+      "value": "large",
+      "source": "dial"
+    },
+    {
+      "thing": "font",
+      "value": "system",
+      "source": "dial"
+    },
+    {
+      "thing": "--color-background-body",
+      "value": "#FFF8F3",
+      "source": "token",
+      "mode": "light"
+    },
+    {
+      "thing": "--color-background-surface",
+      "value": "#FFFFFF",
+      "source": "token",
+      "mode": "light"
+    },
+    {
+      "thing": "--color-background-body",
+      "value": "#16100D",
+      "source": "token",
+      "mode": "dark"
+    },
+    {
+      "thing": "--color-background-surface",
+      "value": "#211915",
+      "source": "token",
+      "mode": "dark"
+    }
+  ],
+  "lifted": [],
+  "palette": "bddc100550822f7944afea7085c7c2a9d4d7b75be8715845f828acae270eefb3"
+}

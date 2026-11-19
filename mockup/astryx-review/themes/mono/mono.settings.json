@@ -1,0 +1,42 @@
+{
+  "name": "mono",
+  "like": "neutral",
+  "mode": "both",
+  "settings": [
+    {
+      "thing": "accent",
+      "value": "#111111",
+      "source": "dial"
+    },
+    {
+      "thing": "corners",
+      "value": "square",
+      "source": "dial"
+    },
+    {
+      "thing": "font",
+      "value": "system",
+      "source": "dial"
+    },
+    {
+      "thing": "font",
+      "value": "serif",
+      "source": "dial",
+      "on": "heading"
+    },
+    {
+      "thing": "--color-background-body",
+      "value": "#FFFFFF",
+      "source": "token",
+      "mode": "light"
+    },
+    {
+      "thing": "--color-background-body",
+      "value": "#0A0A0A",
+      "source": "token",
+      "mode": "dark"
+    }
+  ],
+  "lifted": [],
+  "palette": "694e99f9f8719b1d1deb9f26bdf30872c96394f9c8635689673d3f8fd1e64f4c"
+}
