@@ -1,6 +1,17 @@
 @import '@astryxdesign/core/reset.css';
 @import '@astryxdesign/core/astryx.css';
 
-/* 검토용 페이지 바탕(폰 프레임 바깥). 앱 화면 안은 Astryx 토큰만 쓴다. */
+/* 검토용 바깥 화면(폰 액자·도구 막대)만 여기서 꾸민다. 폰 안의 앱 화면은 Astryx 컴포넌트와 토큰만 쓴다. */
 html, body, #root { height: 100%; }
-body { background: #e5e7eb; }
+body { background: #e5e7eb; font-family: system-ui, "Malgun Gothic", sans-serif; }
+.review { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 16px; }
+.review-bar { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
+.review-bar button { border: 1px solid #cbd5e1; background: #fff; border-radius: 999px; padding: 4px 12px; font-size: 13px; cursor: pointer; }
+.review-bar button.on { background: #111827; color: #fff; border-color: #111827; }
+.phone { width: 390px; height: 800px; border: 10px solid #111; border-radius: 36px; overflow: hidden; display: flex; flex-direction: column; background: var(--color-background-body); transform: translateZ(0); }
+.phone-body { flex: 1; min-height: 0; overflow: auto; }
+.story { display: flex; gap: 14px; overflow-x: auto; padding: 4px 2px 2px; scrollbar-width: none; }
+.story-item { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 66px; flex: none; }
+.story-ring { padding: 2px; border-radius: 50%; background: var(--color-accent); }
+.story-ring.seen { background: var(--color-border, #dbdbdb); }
+.story-ring > * { border: 2px solid var(--color-background-body); border-radius: 50%; }
