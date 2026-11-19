@@ -88,6 +88,20 @@ class PipelineStagesTest {
         assertEquals(listOf("hn:1", "hn:4", "hn:5"), keys(2, signals + standalone))
     }
 
+    @Test fun mergedDemandIsPromotedFromMarketRepresentedTopic() {
+        val market = signal(item(1), score = 9.0, profile = "market-signal")
+        val demand = signal(item(2), score = 6.0, topic = market.classification.topicKey, profile = "demand-signal")
+        val tech = signal(item(3), score = 8.0, tag = "other")
+
+        val selected = Selector(config.copy(minDemandCandidates = 1)).select(listOf(market, demand, tech))
+
+        assertEquals(listOf("hn:2", "hn:3"), selected.kept.map { it.item.key })
+        assertEquals(listOf(market.item.url), selected.kept.first().item.mergedUrls)
+        assertEquals(listOf(market), selected.groups[demand.item.key])
+        assertEquals(listOf("hn:1", "hn:3"),
+            Selector(config.copy(minDemandCandidates = 0)).select(listOf(market, demand, tech)).kept.map { it.item.key })
+    }
+
     @Test fun `분류는 25건씩 묶고 파싱 1회 재시도 후 누락과 none을 기록한다`() = runTest {
         val inputs = (1..26).map { item(it) }
         val prompts = PromptResolver(FilePromptStore(directory))

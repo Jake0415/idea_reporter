@@ -47,7 +47,7 @@ class Selector(private val config: PipelineConfig) {
             kept += extraDemand
             ranked.asSequence().filter { signal ->
                 signal.classification.profile == "demand-signal" &&
-                    representatives.getValue(signal.classification.topicKey).classification.profile == "tech-signal"
+                    representatives.getValue(signal.classification.topicKey).classification.profile != "demand-signal"
             }.distinctBy { it.classification.topicKey }.take(missingDemand - extraDemand.size)
                 .associateByTo(promoted) { it.classification.topicKey }
         }

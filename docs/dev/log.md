@@ -61,3 +61,5 @@
 - 리뷰 4회차: Claude "통과", OpenAI "수정 필요"(중간 1: 포함 관계만으로 다른 문제를 푸는 카드까지 제거).
   - 수정 지시: `docs/dev/P4-fix-r5.md` — 근거 동일 또는 같은 수요 근거+겹치는 기술 주제일 때만 제외. → 반영, 테스트 130개.
 - 리뷰 5회차(한도): **Claude 통과**, OpenAI "수정 필요"(중간 1: 같은 주제 대표가 market-signal이면 병합된 수요 신호가 승격 대상에서 빠짐, Selector.kt:49). 5회 한도로 P4 반복 종료 → **남은 지적은 다음 단계(앱 개발 착수 전)에서 처리**: 승격 대상을 "수요가 아닌 대표" 전체로 넓히고 회귀 테스트 추가.
+- 커밋 `48e90e5`.
+- 잔여 지적 처리(사용자 요청, Claude 직접): `Selector.kt` 승격 대상을 tech 대표 → 수요가 아닌 대표(market 포함)로 확대, 회귀 테스트 `mergedDemandIsPromotedFromMarketRepresentedTopic`. 테스트 131개 통과.
