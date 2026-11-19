@@ -8,6 +8,25 @@ body { background: #e5e7eb; font-family: system-ui, "Malgun Gothic", sans-serif;
 .review-bar { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
 .review-bar button { border: 1px solid #cbd5e1; background: #fff; border-radius: 999px; padding: 4px 12px; font-size: 13px; cursor: pointer; }
 .review-bar button.on { background: #111827; color: #fff; border-color: #111827; }
+.review2 { display: grid; grid-template-columns: 250px 1fr; height: 100vh; }
+.review-map { overflow: auto; background: #fff; border-right: 1px solid #d1d5db; padding: 12px; font-size: 13px; }
+.review-map a { display: flex; gap: 6px; align-items: center; padding: 5px 8px; border-radius: 6px; cursor: pointer; color: #111827; }
+.review-map a:hover { background: #f3f4f6; }
+.review-map a.on { background: #dbeafe; color: #1e3a8a; font-weight: 600; }
+.review-map .sid { font-family: ui-monospace, Consolas, monospace; font-size: 11px; color: #9ca3af; min-width: 46px; }
+.review-title { font-weight: 700; font-size: 14px; margin: 2px 4px 10px; }
+.review-group { font-size: 11px; color: #9ca3af; margin: 12px 6px 4px; }
+.review-foot { font-size: 11px; color: #9ca3af; margin: 14px 6px; }
+.pill-l { font-size: 10px; border: 1px solid #ddd6fe; background: #ede9fe; color: #7c3aed; border-radius: 999px; padding: 0 6px; margin-left: auto; }
+.review-stage { overflow: auto; display: flex; justify-content: center; align-items: flex-start; padding: 24px; }
+.toast2 { position: absolute; left: 50%; bottom: 70px; transform: translateX(-50%); background: #111827; color: #fff; border-radius: 8px; padding: 7px 12px; font-size: 12px; white-space: nowrap; z-index: 10; }
+.prompt-editor textarea { min-height: 300px; font-family: ui-monospace, Consolas, monospace; font-size: 12px; line-height: 1.5; }
+.diff-add, .diff-del { font-family: ui-monospace, Consolas, monospace; font-size: 11px; padding: 2px 6px; border-radius: 4px; white-space: pre-wrap; word-break: break-all; }
+.diff-add { background: #dcfce7; color: #14532d; }
+.diff-del { background: #fee2e2; color: #7f1d1d; text-decoration: line-through; }
+.mail2 { width: 640px; }
+.noti2 { width: 390px; }
+.phone { position: relative; }
 .review-note { font-size: 13px; color: #374151; text-align: center; max-width: 900px; }
 .compare { display: flex; gap: 20px; flex-wrap: wrap; justify-content: center; }
 .compare-item { display: flex; flex-direction: column; align-items: center; gap: 6px; }

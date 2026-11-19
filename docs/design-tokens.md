@@ -3,7 +3,7 @@
 > **2026-11-19 결정: 테마 A 피드로 진행.** 카드 레이아웃은 기본 "1 피드 카드"로 두고, 아래 "확정이 필요한 것"은 계속 검토한다. B·C·D 샘플은 비교 기록으로 남긴다.
 
 > 인스타그램풍의 깔끔한 피드 톤. 출처: Astryx 테마 편집기로 만든 `feed` 테마(neutral 기반) — `mockup/astryx-review/themes/feed/feed.settings.json`, 빌드 결과 `src/themes/feed/feed.css`.
-> 시안: `cd mockup/astryx-review` → `npx vite --port 5180` (SC-01 오늘·SC-02 상세·SC-03 보관함·SC-11 AI 공급자, 라이트/다크 전환).
+> 시안: `cd mockup/astryx-review` → `npx vite --port 5180` — **전체 화면 22개**(SC-00~16·메일·알림)를 A 피드 톤으로, 왼쪽 목록에서 이동, 라이트/다크 전환. 프롬프트 편집 화면은 core의 실제 기본 프롬프트를 불러온다. B·C·D 테마와 레이아웃 비교 시안은 커밋 `7c0adcd`에 있다.
 > 사용자 검토 후 확정하면 4~5단계에서 Jetpack Compose `MaterialTheme`로 옮긴다. 인스타그램 로고·브랜드 그라데이션 등 상표 요소는 쓰지 않는다.
 
 ## 디자인 샘플 (비교용)

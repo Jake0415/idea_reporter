@@ -248,6 +248,16 @@ const SCREENS = [
   feats:["설정 묶음: 수집 / 아이디어 / 운영 / AI 공급자 / 정보"],
   data:["각 하위 화면 요약값(키 연결 상태, 다음 실행 시각, 이번 달 비용)"],
   states:["기본","키 확인 실패"], entry:["하단 탭 설정"], open:[]},
+ {g:"설정 탭", id:"SC-15", name:"프롬프트", mvp:true, tab:"settings", back:"SC-06", isNew:true,
+  purpose:"AI에게 주는 지시문을 사용자가 보고 고친다. 처음엔 기본값(AI 작성)으로 동작.",
+  feats:["F-37 프롬프트 보기·편집·기본값으로 되돌리기","상태: 기본값 / 수정됨 / 기본값 새로 바뀜"],
+  data:["PromptStore(기본값=리소스, 수정본=기기 저장소)","PromptCatalog(id·단계·입력 설명)"],
+  states:["기본"], entry:["SC-06 > AI > 프롬프트","SC-11 하단","SC-08 평가표 편집","SC-09 글로 직접 편집","SC-14 추적 프롬프트"], open:[]},
+ {g:"설정 탭", id:"SC-16", name:"프롬프트 편집", mvp:true, tab:"settings", back:"SC-15", isNew:true,
+  purpose:"프롬프트 하나를 안전하게 고친다(출력 형식·인용 검증은 코드가 강제).",
+  feats:["F-37 편집·저장(버전)·되돌리기","F-38 기본값과 비교·버전 기록·복원·기본값 변경 알림","F-39 시험 실행(최근 자료 5건, 결과·비용)"],
+  data:["PromptOverride(text, version, baseHash)","PromptVersion","LlmRouter(시험 실행)"],
+  states:["기본값 사용 중","수정됨","기본값 새로 바뀜","시험 실행 결과"], entry:["SC-15 줄"], open:["시험 실행 비용을 일일 예산과 따로 둘지"]},
  {g:"설정 탭", id:"SC-07", name:"출처 관리", mvp:true, tab:"settings", back:"SC-06",
   purpose:"출처를 켜고 끄고, 출처별 품질을 본다.",
   feats:["F-17 출처 관리 + 출처 통계","F-18 RSS 추가(L)"],
@@ -479,6 +489,28 @@ R["SC-14"] = s => {
     <div class="row" style="margin-top:12px"><button class="btn" style="flex:1" data-nav="SC-02" data-card="${t.from}">원래 카드 보기</button><button class="btn" style="flex:1" data-toast="추적을 멈췄습니다 · 기록은 남습니다">추적 종료</button></div>
   </div>`,"track");
 };
+const PROMPT_LIST = [["1차 분류","1차 분류 지시","④ 분류",""],["신호 프로필","기술 신호 — 포함 기준","④ 분류",""],["신호 프로필","기술 신호 — 평가표","④ 분류",""],["신호 프로필","수요 신호 — 포함 기준","④ 분류",""],["신호 프로필","수요 신호 — 평가표","④ 분류","수정됨 v2"],["신호 프로필","경쟁 제품 — 포함 기준","④ 분류",""],["신호 프로필","경쟁 제품 — 평가표","④ 분류",""],["카드 작성","아이디어 카드 작성","⑦ 작성","기본값 새로 바뀜"],["추적","추적 업데이트","⑧-1 추적",""],["내 기준","내 기준","⑦ 작성",""]];
+R["SC-15"] = () => phone(appbar("프롬프트",{back:"SC-06"})+`<div class="scr">
+  <div class="box info small">처음엔 기본값(AI 작성)으로 동작합니다. 고치면 다음 실행부터 내 수정본을 씁니다. 출력 형식·인용 검증은 코드가 지킵니다.</div>
+  <div class="row sb" style="margin-bottom:6px"><span class="tiny">수정한 프롬프트 1개</span><u class="tiny" style="color:var(--accent)">모두 기본값으로</u></div>
+  ${[...new Set(PROMPT_LIST.map(p=>p[0]))].map(g=>`<div class="sec">${g}</div><div class="box" style="padding:2px 12px"><div class="list">${PROMPT_LIST.filter(p=>p[0]===g).map(p=>`<div class="li" data-nav="SC-16"><div class="grow"><div>${p[1]}</div><div class="tiny">${p[2]} · ${p[3]&&p[3].startsWith("수정")?"v2 · 11/18 수정":"기본값"}</div></div>${p[3]?`<span class="chip ${p[3].startsWith("수정")?"cat":"badge"}">${p[3]}</span>`:""}<span class="chev">›</span></div>`).join("")}</div></div>`).join("")}</div>`,"settings");
+R["SC-16"] = s => phone(appbar("프롬프트 편집",{back:"SC-15"})+`<div class="scr">
+  <div class="h">추적 업데이트</div>
+  <div class="chips" style="margin-bottom:6px"><span class="chip">⑧-1 추적</span><span class="chip ${s==="수정됨"?"cat":""}">${s==="수정됨"?"수정됨 · v1":"기본값 사용 중"}</span></div>
+  ${s==="기본값 새로 바뀜"?`<div class="box warn small">앱 업데이트로 기본값이 바뀌었습니다. 내 수정본이 있어 비교 후 고르세요. <u>비교</u> · <u>내 수정 유지</u> · <u>새 기본값으로</u></div>`:""}
+  <div class="box info small">출력 형식(JSON)과 인용 검증은 코드가 강제합니다. 여기서는 판단 기준과 글쓰기 규칙을 바꿉니다.</div>
+  <div class="box soft small"><div><b>받는 데이터</b> idea, items(오늘 관련 항목), previous(최근 업데이트 3개)</div><div><b>만드는 것</b> TrackingUpdate: summary, changes</div></div>
+  <div class="input" style="font-family:ui-monospace,Consolas,monospace;font-size:11px;height:180px;overflow:auto;white-space:pre-wrap"># 역할
+
+너는 사용자가 관심 있게 지켜보는 서비스 아이디어의 변화 기록 담당이다…
+
+# 정리 방법
+1. 새로운 사실만 고른다…
+2. 변화 종류를 붙인다 — NEW_COMPETITOR, DEMAND_UP …${s==="수정됨"?"\n- 한국 시장 소식은 따로 표시한다.":""}</div>
+  <div class="row sb tiny" style="margin:4px 0 8px"><span>1,816 / 20,000자</span><span>맨 위 설명 주석은 모델에 보내지 않음</span></div>
+  <div class="row"><button class="btn small">기본값과 비교</button><button class="btn small">버전 기록</button><button class="btn small" data-setstate="SC-16:시험 실행 결과">시험 실행</button></div>
+  ${s==="시험 실행 결과"?`<div class="box" style="margin-top:8px"><b class="small">시험 실행 · 최근 자료 · 저장 전 내용으로</b><div class="small">"로컬 LLM 회의록 앱" → 새 경쟁 제품 1 · 수요 증가 1</div><div class="tiny">토큰 3.1k/0.4k · $0.002 · 실행 기록에 "시험"으로 남음</div></div>`:""}
+  <div class="row" style="margin-top:12px"><button class="btn ghost" style="flex:1">기본값으로 되돌리기</button><button class="btn pri" style="flex:1" data-toast="저장했습니다 · 다음 실행부터 적용">저장</button></div></div>`,"settings");
 R["SC-04"] = () => phone(appbar("반복 주제",{back:"SC-03",right:`<span class="pill l">L</span>`})+`<div class="scr">
   <div class="tiny" style="margin-bottom:8px">최근 30일 · 2번 이상 나온 주제</div>
   ${[["로컬 회의록 정리","meeting-notes-pain",6,"11/02","11/19",[1,0,1,1,0,1,1,1]],["Gemini 4 시리즈","gemini-4",5,"10/29","11/18",[1,0,0,1,0,1,0,1]],["AI 코드 번역 포크","ai-code-port",3,"11/12","11/19",[0,0,0,0,1,0,1,1]]].map(([l,k,n,a,b,h])=>`<div class="box"><div class="row sb"><b>${l}</b><span class="chip">${n}회</span></div><div class="tiny">${k} · ${a} ~ ${b} · 관련 카드 2</div><div class="row" style="gap:2px;margin-top:6px">${h.map(x=>`<i style="flex:1;height:14px;border-radius:2px;background:${x?"var(--accent)":"var(--line2)"}"></i>`).join("")}</div></div>`).join("")}
@@ -496,7 +528,7 @@ R["SC-06"] = s => {
   const g = (t,items)=>`<div class="sec">${t}</div><div class="box" style="padding:2px 12px"><div class="list">${items.map(([l,sub,to,tag])=>`<div class="li" data-nav="${to}"><div class="grow"><div>${l} ${tag||""}</div><div class="tiny">${sub}</div></div><span class="chev">›</span></div>`).join("")}</div></div>`;
   return phone(appbar("설정")+`<div class="scr">
     ${s==="키 확인 실패"?`<div class="box bad small" data-nav="SC-11" style="cursor:pointer">Claude 키 확인 실패 — 키를 다시 등록해 주세요 ›</div>`:""}
-    ${g("AI 공급자",[["AI 공급자·모델",s==="키 확인 실패"?"Claude 확인 실패 · OpenAI 연결됨":"Claude 연결됨 · OpenAI 연결됨 · 예산 $0.50/일","SC-11"]])}
+    ${g("AI",[["AI 공급자·모델",s==="키 확인 실패"?"Claude 확인 실패 · OpenAI 연결됨":"Claude 연결됨 · OpenAI 연결됨 · 예산 $0.50/일","SC-11"],["프롬프트","기본값 9개 · 수정됨 1개","SC-15",`<span class="pill new">새</span>`]])}
     ${g("수집",[["출처 관리","5개 중 2개 켜짐 · 오늘 125건","SC-07"],["신호 프로필","기술 6.0 · 수요 6.0 · 경쟁 5.0","SC-08",`<span class="pill l">L</span>`],["오늘 수집 항목","통과 25 · 탈락 100","SC-05",`<span class="pill l">L</span>`]])}
     ${g("아이디어",[["내 기준·카드 구성","1인 4주 · 개발자·소규모 사업자 · 하루 5개","SC-09"]])}
     ${g("운영",[["실행 기록","이번 달 $2.31 (추정)","SC-10"],["일정·메일·출처 키","매일 07:00 · me@example.com","SC-11b"]])}
