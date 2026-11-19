@@ -62,4 +62,17 @@
   - 수정 지시: `docs/dev/P4-fix-r5.md` — 근거 동일 또는 같은 수요 근거+겹치는 기술 주제일 때만 제외. → 반영, 테스트 130개.
 - 리뷰 5회차(한도): **Claude 통과**, OpenAI "수정 필요"(중간 1: 같은 주제 대표가 market-signal이면 병합된 수요 신호가 승격 대상에서 빠짐, Selector.kt:49). 5회 한도로 P4 반복 종료 → **남은 지적은 다음 단계(앱 개발 착수 전)에서 처리**: 승격 대상을 "수요가 아닌 대표" 전체로 넓히고 회귀 테스트 추가.
 - 커밋 `48e90e5`.
-- 잔여 지적 처리(사용자 요청, Claude 직접): `Selector.kt` 승격 대상을 tech 대표 → 수요가 아닌 대표(market 포함)로 확대, 회귀 테스트 `mergedDemandIsPromotedFromMarketRepresentedTopic`. 테스트 131개 통과.
+- 잔여 지적 처리(사용자 요청, Claude 직접, 커밋 `933d92d`): `Selector.kt` 승격 대상을 tech 대표 → 수요가 아닌 대표(market 포함)로 확대, 회귀 테스트 `mergedDemandIsPromotedFromMarketRepresentedTopic`. 테스트 131개 통과.
+
+## P5 개선(문서 맞추기·RSS 켜기·분류 병렬화)
+- Claude: design.md(§9 출처·RSS 안전 규칙, §7-1 ⑩~⑫, §10)·CLAUDE.md 갱신, RSS 기본 켬(피드 5개).
+- 개발: Codex — 분류 병렬화(첫 묶음 단독 후 `classifyConcurrency` 3), 테스트 134개.
+- 실제 실행: 수집 125(rss 38), 분류 70초(이전 87건 90초), 분류 수요 15·시장 20, 카드 2개, $0.211. CLASSIFY_FAILED 14건(점수 null).
+- 리뷰 1회차: Claude "통과"(낮음 2), OpenAI "수정 필요"(중간 3: 병렬 예산 경계 테스트, PH·BetaList 약관, Latent Space 피드 확인 / 낮음 3: 출시 피드 상한·Simon 피드 범위, 문서 표현).
+  - Claude 직접: BetaList 제외(약관 좁음), PH 10건 + 이용 범위 문서화, Simon `ai` 태그 피드, Latent Space tech만(PC에서 XML 20건 확인), 문서 표현 정확화, ideas.md 카드 조합 안내·줄바꿈 오류 수정.
+  - 수정 지시: `docs/dev/P5-fix-r1.md`(점수 null 재요청, 병렬 예산 경계·취소 테스트).
+  - → 반영, 테스트 136개. 실제 실행(PH 포함·프롬프트 1차본): 수집 109, 분류 74초, CLASSIFY_FAILED **0**, 카드 작성 3 → 검증 후 2(중복 아님, 다른 검증 탈락 — 사유 미기록), $0.218.
+- 리뷰 2회차: 두 리뷰어 "수정 필요". 공통: ideas.md "같은 수요로 다른 카드" 안내가 카드 중복 규칙 (b)와 충돌. OpenAI: PH 공개 피드 기본 활성화의 약관 위험.
+  - Claude 직접: ideas.md에 "같은 수요로 다른 카드는 주제가 다른 기술 신호로" 추가, PH 공개 피드 기본 목록에서 제외(허용 범위 미확인, design.md §9·CLAUDE.md).
+- 리뷰 3회차: **Claude 통과**, OpenAI 높음·중간 없음(낮음 1: CLAUDE.md 문구 → 반영). P5 완료.
+  - 다음 과제(낮음): 카드 검증 탈락 사유(인용 부족·필수 항목·분류)를 실행 기록에 남기기.

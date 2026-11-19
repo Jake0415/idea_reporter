@@ -31,9 +31,12 @@
     { "id": "ph", "enabled": false },
     {
       "id": "rss",
-      "enabled": false,
+      "enabled": true,
+      "windowHours": 48,
       "feeds": [
-        { "name": "Hugging Face Blog", "url": "https://huggingface.co/blog/feed.xml", "profile": "tech-signal", "maxItems": 10 }
+        { "name": "Hugging Face Blog", "url": "https://huggingface.co/blog/feed.xml", "profile": ["tech-signal"], "maxItems": 5 },
+        { "name": "Simon Willison AI", "url": "https://simonwillison.net/tags/ai.atom", "profile": ["tech-signal", "demand-signal"], "maxItems": 5 },
+        { "name": "Latent Space", "url": "https://www.latent.space/feed", "profile": ["tech-signal"], "maxItems": 3 }
       ]
     }
   ],

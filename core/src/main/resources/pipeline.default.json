@@ -5,6 +5,7 @@
     "fallback": true
   },
   "classifyBatchSize": 25,
+  "classifyConcurrency": 3,
   "profiles": {
     "tech-signal":   { "threshold": 6.0, "maxCandidates": 8 },
     "demand-signal": { "threshold": 5.0, "maxCandidates": 8 },

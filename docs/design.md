@@ -260,6 +260,18 @@ app/src/main/kotlin/collector/app/
 - 프로필 안: **AI 점수 내림차순 → 출처 점수(0~100) → 여러 곳 등장 수 → 원점수**.
 - 상한(프로필·태그)은 이 순서로 앞에서부터 채운다.
 
+### ⑩ 수요 후보 최소 보장 (P4)
+- 임계값을 넘은 수요 신호가 있으면 최종 후보에 최소 `minDemandCandidates`(기본 2, 0이면 끔)건을 보장한다. 단, 임계값을 넘은 수요 신호의 **서로 다른 주제 수**까지만 채울 수 있다. 보충분은 태그·프로필 상한을 넘을 수 있다.
+- 부족할 때만 부족분만큼: ① 상한에 걸려 빠진 수요 대표를 먼저 넣고 ② 그래도 모자라면 **수요가 아닌 신호(tech·market)가 대표인 주제** 중 병합된 수요 신호를 수요 점수 순으로 대표로 승격한다. 원래 대표는 `mergedUrls`·병합 신호로 남고 주제 정렬 위치는 유지.
+
+### ⑪ 분류 응답 검증 (P4)
+- 주제 키는 거부 전에 정규화(소문자, 허용 밖 문자 → `-`, 60자). 점수가 0~10 밖이면 잘라 쓰고 `scoreClampWarnings`로 센다(null은 실패).
+- 빠진 항목·중복·**후보 밖 프로필·점수 없음(null)**은 한 번만 재요청(허용 프로필 + `none` 명시, 공급자 대체 없음). 그래도 안 되면 `CLASSIFY_FAILED`와 구체 사유, 예산에 막히면 `BUDGET_EXCEEDED`.
+- 묶음은 첫 묶음을 단독으로 끝낸 뒤(프롬프트 캐시 생성을 노림, 생성 여부는 확인하지 않음) 나머지를 **최대** `classifyConcurrency`(기본 3)개까지 동시에 실행한다(빈자리가 나면 다음 묶음 시작). 결과는 원래 순서로 합친다. 예산 경계에서는 어느 묶음이 `BUDGET_EXCEEDED`가 될지가 실행 타이밍에 따라 달라질 수 있다(허용).
+
+### ⑫ 카드 중복 제거 (P4)
+- 검증 후 카드를 작성 순서대로 보며, 앞서 **채택된** 카드와 비교해 뒤 카드를 제외(실행 기록 경고): (a) 정규화한 전체 근거 집합이 같거나 (b) 비어 있지 않은 수요 근거 집합이 같고 기술 근거 주제가 겹칠 때(이때는 근거가 포함 관계여도 제외). 그 밖에 근거가 포함 관계이기만 하면 둘 다 남긴다. 분류별·`ideaCount` 상한보다 먼저 적용.
+
 ## 7-2. 관심 추적 (★ = 추적 시작)
 
 ### 시작·종료
@@ -407,15 +419,19 @@ data class SourceStats(val source: String, val days: Int, val fetched: Int, val 
 
 | id | 방법 | 조건 | 1차 필터 | 프로필 |
 |---|---|---|---|---|
-| hn | Algolia 검색 API | queries: LLM, AI agent, Show HN AI, GPT, Claude, open source model / 24h, 검색어당 50 | minScore 20, 최대 60 | 후보 3종 |
+| hn | Algolia 검색 API | queries: LLM, AI agent, Show HN AI, GPT, Claude, open source model / 24h, 검색어당 50. **수요형 검색어**(Ask HN, alternative to, looking for a tool, frustrated with)는 72h·5점 이상(`queryOverrides`) | minScore 20, 최대 60 | 후보 3종 |
 | github | 저장소 검색 API | topic:llm, ai-agent, generative-ai / 14일 내 생성, 스타순, 검색어당 100 | minStars 200, 최대 50 | tech-signal |
-| hf | 모델·Spaces API | 트렌딩 정렬 | 상위 30 | tech-signal |
-| reddit | 서브레딧 인기글(OAuth 권장) | LocalLLaMA, SaaS, ChatGPT, artificial / day | minUpvotes 100 | demand-signal (LocalLLaMA는 후보 2종) |
-| ph | GraphQL API(토큰) | topic artificial-intelligence, 오늘 | minVotes 50 | market-signal |
+| hf | 모델·Spaces API | 트렌딩 정렬 | 종류별 15(`maxItemsPerKind`) 후 출처 상한 | tech-signal |
+| reddit | 서브레딧 인기글(OAuth, 키 필요 — 기본 꺼짐) | LocalLLaMA, SaaS, ChatGPT, artificial / day. 본문 전문 3,000자는 작성 단계, 상위 댓글 5개는 분류 입력 | minUpvotes 100 | demand-signal (`subredditProfiles`: LocalLLaMA → tech·demand) |
+| ph | GraphQL API(토큰 — 기본 꺼짐) | topic artificial-intelligence, 최근 24시간 이동 창 | minVotes 50 | market-signal |
 | arxiv | 공개 API (기본 꺼짐) | cs.AI, cs.CL | 상위 30 | tech-signal |
-| rss | RSS/Atom (피드 목록) | 사용자가 추가 | 피드별 최대 10 | 후보 3종 |
+| rss | RSS/Atom (피드 목록, **기본 켜짐**, 48h) | HF Blog(tech, 5), Simon Willison `ai` 태그 피드(tech·demand, 5), Latent Space(tech, 3) | 피드별 `maxItems`(최신순, 필터 뒤 SourceCap에서) | 피드별 프로필 목록 |
+
+**피드 이용 범위:** 각 사이트가 제공하는 공식 피드만 읽고, 웹페이지는 긁지 않는다. 출시 피드(Product Hunt 공개 피드, BetaList)는 기본 목록에서 뺐다 — PH는 피드 주소를 안내하지만 일반 약관에 크롤링·복제·저장 제한이 있고, BetaList 약관은 개인 열람 범위로 좁아 **자동 수집·저장·외부 LLM 전송의 허용 범위가 확인되지 않았다**. 시장 신호가 더 필요하면 사용자가 약관을 확인한 뒤 피드를 직접 추가하거나, PH API(토큰, `ph` 출처)를 쓴다.
 
 공통 제외 키워드: crypto, giveaway, hiring. 앱의 출처 설정 화면에서 수정한 값은 Room에 덮어써 저장한다.
+
+**RSS 안전 규칙(P3):** 피드마다 격리(한 피드 실패는 "RSS 부분 실패" 경고만, 전부 실패할 때만 출처 실패). 피드별 기한 = min(남은 출처 시간, 피드당 상한), 출처 기한이 먼저 끝나도 완료된 피드는 반환하고 진행 중 HTTP 호출은 취소. 피드 URL의 비밀 후보(쿼리 값 6자 이상·userinfo)는 결과의 모든 문자열에서 `[redacted]`로 치환, 오류에는 상태 코드만. 피드 이름은 설정 라벨이며 중복 이름·비밀값 포함 이름은 설정 단계에서 거부.
 
 ## 10. 파이프라인 설정 기본값
 
@@ -429,12 +445,14 @@ data class SourceStats(val source: String, val days: Int, val fetched: Int, val 
   "classifyBatchSize": 25,
   "profiles": {
     "tech-signal":   { "threshold": 6.0, "maxCandidates": 8 },
-    "demand-signal": { "threshold": 6.0, "maxCandidates": 8 },
+    "demand-signal": { "threshold": 5.0, "maxCandidates": 8 },
     "market-signal": { "threshold": 5.0, "maxCandidates": 4 }
   },
+  "classifyConcurrency": 3,
   "ideaCount": 5,
   "maxCardsPerCategory": 2,
   "maxCandidatesPerTag": 2,
+  "minDemandCandidates": 2,
   "recentTopicDays": 14,
   "recentCardDays": 7,
   "badges": { "hnPointsPerHour": 10, "githubStarsPerDay": 100, "streakDays": 3, "streakMin": 2 },

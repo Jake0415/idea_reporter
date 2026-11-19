@@ -28,8 +28,8 @@
 ## 개발 순서
 0. 메뉴·기능 설계 — 완료([docs/menu.md](docs/menu.md))
 1. `core` 골격, `Item`, HN·GitHub 어댑터, 규칙 필터, 스팸 묶음 거르기, 중복 제거, 탈락 이유 기록 — 완료(PC 실행·테스트 확인)
-2. (완료: 출처 기준 조정, 신호 프로필 3종·ProfileLoader) Classifier(프로필 배정·주제 합치기) + 선택(임계값·상한) + 댓글·과거 기록 + IdeaGenerator(피드백 반영) + 인용 검증 + 비용 기록 + HtmlRenderer
-3. 나머지 어댑터 4개, 설정 파일 연동
+2. Classifier(프로필 배정·주제 합치기) + 선택(임계값·상한) + 댓글·과거 기록 + IdeaGenerator(피드백 반영) + 인용 검증 + 비용 기록 + HtmlRenderer — 완료(P1 LLM 연결부·프롬프트 저장소, P2 파이프라인)
+3. 나머지 어댑터 4개, 설정 파일 연동 — 완료(P3 HF·Reddit·PH·RSS, P4 튜닝: 수요 최소 보장·분류 검증·카드 중복 제거). 개발 기록 [docs/dev/log.md](docs/dev/log.md). Reddit·PH API는 기본 꺼짐 — 설정에서 켜고 자격 증명(키)을 넣어야 함. RSS 기본 피드는 HF Blog·Simon Willison(ai)·Latent Space(출시 피드 PH·BetaList는 약관 허용 범위 미확인으로 제외 — 시장 신호가 더 필요하면 사용자가 약관을 확인한 뒤 피드를 직접 추가하거나 PH API를 쓴다, design.md §9)
 4. `app`: WorkManager, Room, Keystore, SMTP 메일
 5. 앱 화면: 오늘 카드·보관함·출처/평가 기준 수정·실행 기록
 6. (선택) 보충 검색, Batch API, runner + GitHub Actions

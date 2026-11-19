@@ -7,9 +7,12 @@ import collector.profile.ProfileLoader
 import collector.profile.Sampling
 import collector.prompt.FilePromptStore
 import collector.prompt.PromptResolver
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
 import kotlinx.serialization.json.*
@@ -27,6 +30,119 @@ import kotlin.test.*
 class ClassificationTest {
     @TempDir lateinit var directory: Path
     private val profiles = ProfileLoader.loadDefaults()
+
+    @Test fun parallelBatchesWaitForWarmupAndMergeInInputOrder() = runTest {
+        var active = 0
+        var peak = 0
+        val finished = mutableListOf<String>()
+        val items = listOf(8, 6, 1, 5, 2, 4, 3).map(::item)
+        val config = PipelineConfig.defaults.copy(classifyBatchSize = 1, classifyConcurrency = 2)
+        val result = classifier(config = config) { _, keys ->
+            val key = keys.single()
+            if (key != items.first().key) assertEquals(items.first().key, finished.firstOrNull())
+            peak = maxOf(peak, ++active)
+            try {
+                delay(if (key == "hn:6") 100 else 10)
+                if (key == "hn:1") throw LlmServiceException(reason = "truncated")
+                listOf(row(key).copy(profile = "none"))
+            } finally {
+                active--
+                finished += key
+            }
+        }.classify(items, emptyList(), emptyList())
+
+        assertEquals(config.classifyConcurrency, peak)
+        assertTrue(finished.indexOf("hn:5") < finished.indexOf("hn:6"))
+        assertEquals(items.map { it.key } - "hn:1", result.signals.map { it.item.key })
+        assertEquals(items.map { it.key }, result.dropped.map { it.item.key })
+        assertEquals(DropReason.CLASSIFY_FAILED, result.dropped[2].reason)
+    }
+
+    @Test fun concurrencyOneCompletesRecoveryBeforeStartingNextBatch() = runTest {
+        val config = PipelineConfig.defaults.copy(classifyBatchSize = 2, classifyConcurrency = 1)
+        val calls = mutableListOf<List<String>>()
+        val result = classifier(config = config) { _, keys ->
+            delay(10)
+            calls += keys
+            when (keys) {
+                listOf("hn:1", "hn:2") -> listOf(row("hn:1"))
+                listOf("hn:3", "hn:4") -> throw LlmServiceException(reason = "truncated")
+                else -> keys.map(::row)
+            }
+        }.classify((1..5).map(::item), emptyList(), emptyList())
+
+        assertEquals(listOf(listOf("hn:1", "hn:2"), listOf("hn:2"), listOf("hn:3", "hn:4"),
+            listOf("hn:3"), listOf("hn:4"), listOf("hn:5")), calls)
+        assertEquals((1..5).map { "hn:$it" }, result.signals.map { it.item.key })
+        assertTrue(result.dropped.isEmpty())
+    }
+
+    @Test fun parallelBatchesReserveOnlyRemainingBudgetAndKeepInputOrder() = runTest {
+        val items = listOf(8, 6, 1, 5, 2, 4, 3, 9, 7, 0).map(::item)
+        val config = PipelineConfig.defaults.copy(classifyBatchSize = 2, classifyConcurrency = 4)
+        val batchCost = 928.0 // 928 maximum output tokens at $1 per token.
+        val budget = CostGuard(3 * batchCost)
+        val catalog = ModelCatalog(listOf(ModelPrice(ProviderId.ANTHROPIC, "test", ModelTier.FAST,
+            inputUsd = 0.0, outputUsd = 1_000_000.0, cachedInputUsd = 0.0)))
+        val started = mutableListOf<String>()
+        val finished = mutableListOf<String>()
+        val result = classifier(costUsd = batchCost, config = config, costGuard = budget,
+            preflightBudget = true, catalog = catalog) { _, keys ->
+            started += keys.first()
+            when (started.size) {
+                2 -> delay(100)
+                3 -> delay(10)
+            }
+            finished += keys.first()
+            keys.map(::row)
+        }.classify(items, emptyList(), emptyList())
+
+        assertEquals(3, started.size)
+        assertEquals(listOf(started[0], started[2], started[1]), finished)
+        assertEquals(budget.dailyBudgetUsd, budget.calls.sumOf { it.costUsd })
+        assertEquals(items.chunked(2).filter { it.first().key in started }.flatten(), result.signals.map { it.item })
+        assertEquals(items.chunked(2).filter { it.first().key !in started }.flatten(), result.dropped.map { it.item })
+        assertEquals(List(4) { DropReason.BUDGET_EXCEEDED }, result.dropped.map { it.reason })
+    }
+
+    @Test fun parentCancellationCancelsActiveRequestsWithoutStartingQueuedBatches() = runTest {
+        val items = (1..5).map(::item)
+        val config = PipelineConfig.defaults.copy(classifyBatchSize = 1, classifyConcurrency = 2)
+        val started = mutableListOf<String>()
+        val cancelled = mutableListOf<String>()
+        val bothActive = CompletableDeferred<Unit>()
+        val classifier = classifier(config = config) { _, keys ->
+            val key = keys.single()
+            started += key
+            if (key == items.first().key) listOf(row(key)) else {
+                if (started.size == 3) bothActive.complete(Unit)
+                try {
+                    awaitCancellation()
+                } catch (e: CancellationException) {
+                    cancelled += key
+                    throw e
+                }
+            }
+        }
+        val parent = async { classifier.classify(items, emptyList(), emptyList()) }
+        bothActive.await()
+        yield()
+        parent.cancelAndJoin()
+
+        assertTrue(parent.isCancelled)
+        assertEquals(3, started.size)
+        assertEquals(started.drop(1).toSet(), cancelled.toSet())
+    }
+
+    @Test fun parallelBatchCancellationPropagates() = runTest {
+        val config = PipelineConfig.defaults.copy(classifyBatchSize = 1)
+        assertFailsWith<CancellationException> {
+            classifier(config = config) { _, keys ->
+                if (keys.single() == "hn:2") throw CancellationException()
+                keys.map(::row)
+            }.classify((1..3).map(::item), emptyList(), emptyList())
+        }
+    }
 
     @Test fun `분류가 잘리면 최대 두 단계까지 묶음을 반으로 나눈다`() = runTest {
         val items = (1..8).map(::item)
@@ -59,7 +175,7 @@ class ClassificationTest {
         assertTrue(result.signals.isEmpty())
         assertEquals(List(4) { DropReason.CLASSIFY_FAILED }, result.dropped.map { it.reason })
         assertEquals(listOf("후보에 없는 프로필(market-signal)", "알 수 없는 프로필(unknown)",
-            "점수 없음/범위 밖(null)", "주제 키 형식(${"/".repeat(40)})"), result.dropped.map { it.detail })
+            "점수 없음(null)", "주제 키 형식(${"/".repeat(40)})"), result.dropped.map { it.detail })
     }
 
     @Test fun `주제 키를 정규화한 후 이전 주제 이름을 적용한다`() = runTest {
@@ -74,23 +190,25 @@ class ClassificationTest {
         assertTrue(result.dropped.isEmpty())
     }
 
-    @Test fun `누락 항목과 후보 밖 응답을 함께 한 번 재요청한다`() = runTest {
+    @Test fun `누락 항목과 후보 밖 응답과 점수 없는 응답을 함께 한 번 재요청한다`() = runTest {
         val requested = mutableListOf<List<String>>()
         val result = classifier { request, keys ->
             requested += keys
-            if (requested.size == 1) listOf(row(keys[0]), row(keys[1]).copy(profile = "market-signal"))
+            if (requested.size == 1) listOf(row(keys[0]).copy(profile = "none", score = null),
+                row(keys[1]).copy(profile = "market-signal"), row(keys[2]).copy(score = null))
             else {
                 val inputs = Json.parseToJsonElement(request.user).jsonObject.getValue("items").jsonArray
-                assertEquals(List(2) { listOf("tech-signal", "none") }, inputs.map {
+                assertEquals(List(3) { listOf("tech-signal", "none") }, inputs.map {
                     it.jsonObject.getValue("candidates").jsonArray.map { candidate -> candidate.jsonPrimitive.content }
                 })
                 keys.map(::row)
             }
-        }.classify((1..3).map(::item), emptyList(), emptyList())
+        }.classify((1..4).map(::item), emptyList(), emptyList())
 
-        assertEquals(listOf(listOf("hn:1", "hn:2", "hn:3"), listOf("hn:2", "hn:3")), requested)
-        assertEquals(listOf("hn:1", "hn:2", "hn:3"), result.signals.map { it.item.key })
-        assertTrue(result.dropped.isEmpty())
+        assertEquals(listOf(listOf("hn:1", "hn:2", "hn:3", "hn:4"), listOf("hn:2", "hn:3", "hn:4")), requested)
+        assertEquals(listOf("hn:1", "hn:2", "hn:3", "hn:4"), result.signals.map { it.item.key })
+        assertNull(result.signals.first().classification.score)
+        assertEquals(DropReason.NOT_RELEVANT, result.dropped.single().reason)
     }
 
     @Test fun `후보 밖 프로필의 재요청이 예산에 막히면 예산 초과를 기록한다`() = runTest {
@@ -316,7 +434,14 @@ class ClassificationTest {
 
     private fun row(key: String) = ClassifiedItem(key, "tech-signal", 8.0, "reason", "summary", emptyList(), "topic", "Topic")
 
-    private fun classifier(costUsd: Double = 0.0, output: (LlmRequest, List<String>) -> List<ClassifiedItem>?): Classifier {
+    private fun classifier(
+        costUsd: Double = 0.0,
+        config: PipelineConfig = PipelineConfig.defaults,
+        costGuard: CostGuard = CostGuard(0.5),
+        preflightBudget: Boolean = false,
+        catalog: ModelCatalog = ModelCatalog.defaults,
+        output: suspend (LlmRequest, List<String>) -> List<ClassifiedItem>?
+    ): Classifier {
         val fake = object : LlmProvider {
             override val id = ProviderId.ANTHROPIC
             override suspend fun listModels() = emptyList<ModelInfo>()
@@ -334,7 +459,7 @@ class ClassificationTest {
             override suspend fun complete(req: LlmRequest): LlmResult =
                 throw AssertionError("이 분류 요청은 공급자를 바꾸어 반복하지 않는다.")
         }
-        return Classifier(PipelineConfig.defaults, profiles, PromptResolver(FilePromptStore(directory)),
-            LlmRouter(listOf(fake, alternate), CostGuard(0.5)))
+        return Classifier(config, profiles, PromptResolver(FilePromptStore(directory)),
+            LlmRouter(listOf(fake, alternate), costGuard, catalog = catalog, preflightBudget = preflightBudget))
     }
 }

@@ -21,8 +21,13 @@ data class PipelineConfig(
     val historyDays: Int,
     val supplementSearch: Search,
     val dailyBudgetUsd: Double,
-    val minDemandCandidates: Int = 2
+    val minDemandCandidates: Int = 2,
+    val classifyConcurrency: Int = 3
 ) {
+    init {
+        require(classifyConcurrency >= 1) { "classifyConcurrency must be at least 1" }
+    }
+
     @Serializable data class Models(val classify: StageModel, val generate: StageModel, val fallback: Boolean)
     @Serializable data class Selection(val threshold: Double, val maxCandidates: Int)
     @Serializable data class Badges(val hnPointsPerHour: Int, val githubStarsPerDay: Int, val streakDays: Int, val streakMin: Int)
