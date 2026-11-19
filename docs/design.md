@@ -159,6 +159,7 @@ core/src/main/kotlin/collector/
 ├── stage/     Classifier, CommentFetcher, Enricher, IdeaGenerator, CitationValidator, Supplement
 ├── history/   HistorySearch(인터페이스) — 과거 항목·카드 전문 검색
 ├── report/    HtmlRenderer, MarkdownRenderer
+├── prompt/    PromptStore, PromptResolver, PromptCatalog (§7-3)
 ├── track/     TrackingKeywords(키워드 추출), TrackingSearch(전용 검색어), TrackingUpdater(⑧-1), StrengthCalculator
 ├── port/      SeenStore, ItemStore, IdeaStore, FeedbackStore, StatsStore, TrackedStore, Mailer, SecretProvider
 ├── pipeline/  Pipeline, Stage
@@ -273,6 +274,37 @@ app/src/main/kotlin/collector/app/
 
 ### 보여 주기
 - 오늘 화면 추적 줄(SC-01), 추적 탭(SC-13·14), 메일 "추적 업데이트" 칸, 알림(업데이트가 있을 때 하루 1회 묶어서).
+
+## 7-3. 프롬프트 편집 (사용자 수정 가능)
+
+### 대상 (프롬프트 id)
+| id | 파일(기본값) | 쓰는 단계 |
+|---|---|---|
+| `classify` | `prompts/classify.md` | ④ 1차 분류 |
+| `profile.<p>.match`, `profile.<p>.analysis` (p = tech-signal·demand-signal·market-signal) | `profiles/<p>/match.md`, `analysis.md` | ④ 1차 분류(시스템 메시지에 붙음) |
+| `ideas` | `prompts/ideas.md` | ⑦ 카드 작성 |
+| `track` | `prompts/track.md` | ⑧-1 추적 업데이트 |
+| `criteria` | `prompts/criteria.default.md` | ⑦ 카드 작성(사용자 메시지) — SC-09 양식으로도 편집 |
+
+### 규칙
+- **기본값은 앱 리소스**(AI가 작성, 앱과 함께 배포). **사용자 수정본이 있으면 그것을 쓴다.** 수정본은 기기 저장소(앱=Room, PC=`config/prompts/<id>.md`, 커밋 안 됨).
+- 출력 형식(JSON 스키마)·인용 검증·필수 블록 검증은 **코드가 강제**하므로 프롬프트를 고쳐도 깨지지 않는다. 프롬프트는 판단 기준·글쓰기 규칙만 바꾼다.
+- 저장할 때마다 버전을 남긴다(최근 10개). 되돌리기 = 수정본 삭제(기본값 사용).
+- **기본값 변경 감지:** 수정본에 그때의 기본값 해시(`baseHash`)를 저장해 두고, 앱 업데이트로 기본값이 바뀌면 "기본값 새로 바뀜"으로 표시해 비교 후 선택하게 한다.
+- 검증: 빈 내용 금지, 2만 자 상한. 프롬프트 맨 위 `<!-- -->` 설명 주석은 모델에 보내기 전에 제거한다.
+- **시험 실행:** 최근 실행에서 고른 5건(분류) 또는 최근 후보(카드·추적)로 저장 전 수정본을 1회 돌려 결과·토큰·비용을 보여 준다. 실행 기록에는 "시험"으로 남고 일일 예산에 포함된다.
+- 각 실행의 `RunReport`에 단계별로 쓴 프롬프트 id·버전(기본값이면 `default`)을 남겨, 결과가 달라졌을 때 어느 수정 때문인지 추적할 수 있게 한다.
+
+### 구조
+```
+core: prompt/PromptStore(인터페이스), PromptResolver(기본값+수정본 → 실제 텍스트, 주석 제거), PromptCatalog(id·파일·설명·입력 설명)
+app:  RoomPromptStore     PC: FilePromptStore(config/prompts/)
+```
+
+```kotlin
+@Serializable data class PromptOverride(val id: String, val text: String, val version: Int, val baseHash: String, val editedAt: Instant)
+@Serializable data class PromptVersion(val id: String, val version: Int, val text: String, val savedAt: Instant)
+```
 
 ## 8. 핵심 타입
 

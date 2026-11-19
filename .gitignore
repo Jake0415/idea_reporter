@@ -19,6 +19,7 @@ captures/
 # PC 실행 결과·개인 설정
 out/
 config/*.local.json
+config/prompts/
 
 # 비밀값
 .env
