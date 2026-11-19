@@ -17,7 +17,8 @@
 - LLM: **Claude(Anthropic)·OpenAI 두 공급자 지원, 사용자가 자기 키를 등록하면 연동**(design.md §5-1). 단계별(분류·작성)로 공급자·모델 선택, 모델 목록은 공급자 API에서 받음, 두 키가 있으면 대체 공급자 1회 재시도. 기본값(Claude): 분류 `claude-haiku-5-5`, 작성 `claude-opus-5-5`. 일일 비용 상한(`dailyBudgetUsd`).
 - **키 취급:** API 키는 코드·문서·설정 파일·로그·커밋에 절대 쓰지 않는다. PC는 환경 변수(`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`), 앱은 Keystore.
 - [Horizon](https://github.com/Thysrael/Horizon)(MIT) **설계만 차용**해 Kotlin으로 새로 구현: 신호 프로필 3종(기술·수요·경쟁), 프로필별 임계값, 주제 합치기, 분류별 상한, 댓글 수집, 과거 기록 검색, 인용 검증, 출처 통계, RSS 입력 어댑터. 근거는 [docs/verification/horizon-rea-check.md](docs/verification/horizon-rea-check.md). 코드·프롬프트를 옮기면 `THIRD_PARTY_NOTICES.md`에 고지.
-- MVP 하단 탭은 오늘·보관함·설정. 수집함(SC-05)은 나중이지만 탈락 이유 기록은 1단계부터.
+- 디자인 톤: A 피드(인스타그램풍, docs/design-tokens.md). MVP 하단 탭은 오늘·추적·보관함·설정(아이콘만).
+- **★ = 관심 추적 시작**: 추적 아이디어를 매일 계속 조사(수집분 매칭 + 전용 검색), 업데이트 요약·신호 강도 추이(design.md §7-2). 수집함(SC-05)은 나중이지만 탈락 이유 기록은 1단계부터.
 
 ## 미정 사항
 - 평가 기준(`criteria.default.md`): 1인 개발 여부, 대상 고객, 제외 분야, 수익화 방식 — 사용자 입력 대기.

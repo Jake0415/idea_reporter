@@ -159,7 +159,8 @@ core/src/main/kotlin/collector/
 ├── stage/     Classifier, CommentFetcher, Enricher, IdeaGenerator, CitationValidator, Supplement
 ├── history/   HistorySearch(인터페이스) — 과거 항목·카드 전문 검색
 ├── report/    HtmlRenderer, MarkdownRenderer
-├── port/      SeenStore, ItemStore, IdeaStore, FeedbackStore, StatsStore, Mailer, SecretProvider
+├── track/     TrackingKeywords(키워드 추출), TrackingSearch(전용 검색어), TrackingUpdater(⑧-1), StrengthCalculator
+├── port/      SeenStore, ItemStore, IdeaStore, FeedbackStore, StatsStore, TrackedStore, Mailer, SecretProvider
 ├── pipeline/  Pipeline, Stage
 └── dev/       Main, JsonFile*Store, EnvSecretProvider (PC 실행 전용)
 
@@ -175,15 +176,16 @@ app/src/main/kotlin/collector/app/
 
 | 단계 | 내용 | 하루 처리량 | LLM 비용 |
 |---|---|---|---|
-| ① Collect | 어댑터 병렬 실행, 출처 하나 실패해도 계속 | 300~500건 | 0 |
+| ① Collect | 어댑터 병렬 실행, 출처 하나 실패해도 계속. **추적 전용 검색**(추적 아이디어별 맞춤 검색어, 낮은 인기도 기준)도 함께 실행해 `trackHint`를 붙임(§7-2) | 300~500건 (+추적 수십 건) | 0 |
 | ② Filter | 기간, 출처별 최소 점수, 제외 키워드, **스팸 묶음**(같은 출처에서 3개 이상 계정이 같은 이름·설명으로 찍어 낸 저장소), **출처 상한**(거른 뒤 출처당 `maxItems`) → 탈락 이유 기록. 어댑터는 스팸을 감안해 검색어당 `fetchPerQuery`건을 넉넉히 받아 온다 | → ~150 | 0 |
 | ③ Dedupe | URL 정규화, 제목 유사도, 이미 본 글, 여러 출처 합치기(`alsoSeenIn`), 점수 0~100 통일 | → ~80 | 0 |
-| ④ Classify | Haiku 5.5, 25건씩 묶어: 프로필 배정·0~10점·이유·한 줄 요약·태그 3~5개·`topicKey` | 80 | ~$0.01 |
+| ④ Classify | Haiku 5.5, 25건씩 묶어: 프로필 배정·0~10점·이유·한 줄 요약·태그 3~5개·`topicKey`·**관련 추적 아이디어 id**(입력에 추적 목록을 함께 줌, 추가 호출 없음) | 80 | ~$0.01 |
 | ⑤ Select | 무관(`none`) 제외 → 프로필별 임계값 → `topicKey`로 주제 합치기(중복 항목 URL·댓글은 대표에 붙임) → 프로필별 후보 상한 + 태그 다양성 상한. **비싼 ⑦ 작성 전에** 후보를 줄여 비용 절약. 카드 분류별 상한은 ⑦·⑧에서(§7-1) | → 15~20 | 0 |
 | ⑥ Enrich | 최종 후보 본문 샘플, HN·Reddit 상위 댓글 5개, 과거 기록 검색 / (선택) 보충 검색 | 15~20 | 0 (~$0.03) |
 | ⑦ Generate | 작성 모델: 신호를 엮어 카드 5개(분류는 고정 목록에서, 분류별 상한 지시), 최근 피드백·최근 카드 포함 | 5 | ~$0.1~0.2 |
 | ⑧ Validate | 인용 검증(수집 URL만), 카드 스키마·필수 블록 검증, 분류별 상한 초과분 제거, 배지 계산(코드), 실패 시 1회 재시도 | — | (재시도 시) |
-| ⑨ Deliver | HTML 메일, 저장(항목·카드·탈락 이유·출처 통계), SeenStore 갱신, 실행 기록 | — | 0 |
+| ⑧-1 Track | 추적 아이디어마다 오늘 관련 항목이 있으면 싼 모델로 "무엇이 달라졌나" 요약(`TrackingUpdate`), 신호 강도·추이는 코드가 계산(§7-2) | 추적 수 이하 | ~$0.005/건 |
+| ⑨ Deliver | HTML 메일(추적 업데이트 칸 포함), 저장(항목·카드·탈락 이유·출처 통계·추적 업데이트), SeenStore 갱신, 실행 기록, 추적 업데이트 알림 | — | 0 |
 
 ## 7-1. 단계 세부 규칙 (2단계 전 확정)
 
@@ -252,6 +254,26 @@ app/src/main/kotlin/collector/app/
 - 프로필 안: **AI 점수 내림차순 → 출처 점수(0~100) → 여러 곳 등장 수 → 원점수**.
 - 상한(프로필·태그)은 이 순서로 앞에서부터 채운다.
 
+## 7-2. 관심 추적 (★ = 추적 시작)
+
+### 시작·종료
+- 카드에 ★ → `TrackedIdea` 생성. 해제 → `status = STOPPED`(기록은 남김). 최대 `maxTracked`(10)개, 넘으면 가장 오래 조용한 것을 멈출지 묻는다.
+- **추적 키워드 자동 추출(코드, AI 호출 없음):** 카드 제목 핵심어 상위 3개 + 카드 태그 + 근거 항목들의 `topicKey` + 경쟁 제품 이름. 사용자가 SC-14에서 추가·삭제.
+- 30일(`quietDays`) 동안 업데이트가 없으면 `status = QUIET`(조사는 계속, 목록 아래로).
+
+### 매일 조사
+1. **오늘 수집분에서 찾기(추가 호출 없음):** ④ 분류 입력에 추적 목록(`trackedId`, 제목, 키워드)을 함께 주고, 항목마다 관련된 `trackedIdeaIds`를 받는다. 관련 항목은 프로필 임계값과 상관없이 추적 근거로 보관한다(카드 후보 선택과는 별개).
+2. **전용 검색:** 추적 아이디어마다 출처별 맞춤 검색어(키워드 조합)로 ① 수집 때 함께 조회한다. 일반 수집보다 인기도 기준을 낮춘다(`minRawScoreFactor` 0.3 — 예: HN 20점 → 6점). 이미 본 글은 추적 근거로만 다시 쓸 수 있다(새 카드 후보로는 제외). 아이디어당 출처별 1회(`queriesPerSource`).
+3. **(L) 주간 심층 조사:** 주 1회 공급자 웹 검색(보충 검색과 같은 도구)으로 경쟁 제품·시장 변화를 정리. 아이디어당 검색 `maxUses` 3, 비용은 일일 예산에 포함.
+
+### 업데이트 만들기 (⑧-1 Track)
+- 그날 관련 항목이 1건 이상인 추적 아이디어만, 분류 모델로 1회 호출 → `TrackingUpdate`(요약 1~2문장, 변화 목록). 프롬프트: `prompts/track.md`(3단계에서 작성). 인용 검증은 카드와 같다(수집된 URL만).
+- 변화 종류: `NEW_COMPETITOR`(새 경쟁 제품), `DEMAND_UP`(수요 증가), `DEMAND_DOWN`(수요 감소/불만 해소), `TECH_RELEASE`(관련 기술 새 버전), `RISK_CHANGE`(위험 변화), `OTHER`.
+- **신호 강도(코드 계산):** 최근 7일 관련 항목을 프로필별 가중치로 합산(수요 1.5, 경쟁 1.0, 기술 1.0) × 항목 AI 점수/10. **추이:** 최근 7일 대 그 전 7일 — 20% 이상 증가 `UP`, 20% 이상 감소 `DOWN`, 그 외 `FLAT`.
+
+### 보여 주기
+- 오늘 화면 추적 줄(SC-01), 추적 탭(SC-13·14), 메일 "추적 업데이트" 칸, 알림(업데이트가 있을 때 하루 1회 묶어서).
+
 ## 8. 핵심 타입
 
 ```kotlin
@@ -267,7 +289,8 @@ data class Item(
     val alsoSeenIn: List<String> = emptyList(),  // 여러 출처에 동시 등장
     val profileHint: List<String> = emptyList(), // 출처 설정의 명시 배정/후보
     val comments: List<Comment> = emptyList(),   // ⑥에서 최종 후보만 채움
-    val mergedUrls: List<String> = emptyList()   // ⑤ 주제 합치기로 붙은 중복 항목 URL (근거 유지)
+    val mergedUrls: List<String> = emptyList(),  // ⑤ 주제 합치기로 붙은 중복 항목 URL (근거 유지)
+    val trackHint: List<String> = emptyList()    // 추적 전용 검색으로 들어온 경우 그 추적 아이디어 id (§7-2)
 )
 
 @Serializable
@@ -281,8 +304,28 @@ data class ClassifiedItem(
     val reason: String, val summary: String,      // 한 줄 이유, 한 줄 요약(한국어)
     val tags: List<String>,                       // 구체적 주제 태그 3~5개 (첫 번째가 대표 태그 → 다양성 상한)
     val topicKey: String,                         // 대상 단위 kebab-case, 최근 14일 키 재사용 (§7-1 ④)
-    val topicLabel: String                        // 한국어 짧은 주제 이름
+    val topicLabel: String,                       // 한국어 짧은 주제 이름
+    val trackedIdeaIds: List<String> = emptyList() // 관련된 추적 아이디어 (§7-2)
 )
+
+@Serializable
+data class TrackedIdea(
+    val id: String, val cardId: String, val title: String, val category: String,
+    val keywords: List<String>,                   // 자동 추출 + 사용자 편집
+    val competitors: List<String>,                // 추적 중 발견된 경쟁 제품 누적
+    val status: Status,                           // TRACKING | QUIET | STOPPED
+    val startedAt: Instant, val lastUpdateAt: Instant?,
+    val strength: Double, val trend: Trend        // 코드 계산 (§7-2)
+) { enum class Status { TRACKING, QUIET, STOPPED }; enum class Trend { UP, FLAT, DOWN } }
+
+@Serializable
+data class TrackingUpdate(
+    val id: String, val trackedId: String, val runDate: LocalDate,
+    val summary: String,                          // 무엇이 달라졌나 1~2문장
+    val changes: List<Change>,
+    val itemKeys: List<String>,                   // 근거 항목 (수집된 것만)
+    val strength: Double, val trend: TrackedIdea.Trend
+) { @Serializable data class Change(val kind: String, val note: String, val itemKey: String?) }
 
 @Serializable
 data class TopicHistory(val topicKey: String, val topicLabel: String, val runDate: LocalDate, val itemKeys: List<String>)
@@ -358,6 +401,9 @@ data class SourceStats(val source: String, val days: Int, val fetched: Int, val 
   "recentTopicDays": 14,
   "recentCardDays": 7,
   "badges": { "hnPointsPerHour": 10, "githubStarsPerDay": 100, "streakDays": 3, "streakMin": 2 },
+  "tracking": { "maxTracked": 10, "quietDays": 30, "queriesPerSource": 1, "minRawScoreFactor": 0.3,
+                "strengthWeights": { "demand-signal": 1.5, "market-signal": 1.0, "tech-signal": 1.0 },
+                "weeklyDeepDive": { "enabled": false, "maxUses": 3 } },
   "commentsPerItem": 5,
   "feedbackExamples": 10,
   "historyDays": 90,
