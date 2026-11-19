@@ -101,7 +101,7 @@ app/src/main/kotlin/collector/app/
 | 단계 | 내용 | 하루 처리량 | LLM 비용 |
 |---|---|---|---|
 | ① Collect | 어댑터 병렬 실행, 출처 하나 실패해도 계속 | 300~500건 | 0 |
-| ② Filter | 기간, 출처별 최소 점수, 제외 키워드 → 탈락 이유 기록 | → ~150 | 0 |
+| ② Filter | 기간, 출처별 최소 점수, 제외 키워드, **스팸 묶음**(같은 출처에서 3개 이상 계정이 같은 이름·설명으로 찍어 낸 저장소) → 탈락 이유 기록 | → ~150 | 0 |
 | ③ Dedupe | URL 정규화, 제목 유사도, 이미 본 글, 여러 출처 합치기(`alsoSeenIn`), 점수 0~100 통일 | → ~80 | 0 |
 | ④ Classify | Haiku 5.5, 25건씩 묶어: 프로필 배정·0~10점·이유·한 줄 요약·태그 3~5개·`topicKey` | 80 | ~$0.01 |
 | ⑤ Select | 프로필별 임계값 → `topicKey`로 주제 합치기(중복 항목 URL·댓글은 대표에 붙임) → 프로필별·분류별 상한. **비싼 ⑦ 작성 전에** 후보를 줄여 비용 절약 | → 15~20 | 0 |
@@ -118,6 +118,9 @@ data class Item(
     val source: String, val externalId: String, val title: String, val url: String,
     val rawScore: Int, val score: Int = 0, val publishedAt: Instant,
     val snippet: String,                         // 최대 300자, 분류에는 이것만
+    val author: String?, val commentCount: Int,  // 출처 줄 표시용
+    val discussionUrl: String?,                  // 토론 페이지가 따로 있는 출처만(HN·Reddit)
+    val extra: Map<String, String>,              // 출처별 부가 정보: license, language, forks ...
     val tags: List<String> = emptyList(),
     val alsoSeenIn: List<String> = emptyList(),  // 여러 출처에 동시 등장
     val profileHint: List<String> = emptyList(), // 출처 설정의 명시 배정/후보
@@ -126,7 +129,7 @@ data class Item(
 )
 
 @Serializable
-enum class DropReason { OUT_OF_WINDOW, LOW_SOURCE_SCORE, EXCLUDED_KEYWORD, DUPLICATE, ALREADY_SEEN,
+enum class DropReason { OUT_OF_WINDOW, LOW_SOURCE_SCORE, EXCLUDED_KEYWORD, SUSPECTED_SPAM, DUPLICATE, ALREADY_SEEN,
     BELOW_PROFILE_THRESHOLD, SAME_TOPIC, OVER_QUOTA, CLASSIFY_FAILED, BUDGET_EXCEEDED }
 
 @Serializable

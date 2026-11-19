@@ -1,0 +1,23 @@
+{
+  "sources": [
+    {
+      "id": "hn",
+      "enabled": true,
+      "queries": ["LLM", "AI agent", "Show HN AI"],
+      "windowHours": 24,
+      "minRawScore": 50,
+      "maxItems": 60,
+      "profile": ["tech-signal", "demand-signal", "market-signal"]
+    },
+    {
+      "id": "github",
+      "enabled": true,
+      "queries": ["topic:llm", "topic:ai-agent", "topic:generative-ai"],
+      "createdWithinDays": 14,
+      "minRawScore": 200,
+      "maxItems": 50,
+      "profile": ["tech-signal"]
+    }
+  ],
+  "excludeKeywords": ["crypto", "giveaway", "hiring"]
+}
