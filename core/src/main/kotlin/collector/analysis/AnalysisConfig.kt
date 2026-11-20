@@ -35,8 +35,11 @@ data class AnalysisConfig(
     val minSources: Int = 2,
     val minDataDays: Int = 14,
     val maxInputChars: Int = 100_000,
-    val minFitOutputTokens: Int = 16_000
+    val minFitOutputTokens: Int = 16_000,
+    val mail: Mail = Mail()
 ) {
+    @Serializable data class Mail(val analysis: Boolean = true)
+
     init {
         require(model.provider == ProviderId.OPENAI)
         require(maxOutputTokens in 1..128_000 && timeoutMillis > 0 && maxInputChars > 0)

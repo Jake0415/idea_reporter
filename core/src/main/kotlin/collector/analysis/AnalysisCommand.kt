@@ -35,7 +35,8 @@ internal class AnalysisCommand(
     private val provider: () -> LlmProvider,
     private val clock: Clock = Clock.systemDefaultZone(),
     private val print: (String) -> Unit = ::println,
-    private val settingsOverride: BudgetSettings? = null
+    private val settingsOverride: BudgetSettings? = null,
+    private val sendMail: (String) -> Unit = {}
 ) {
     private val reports = AnalysisReports(out.resolve("analysis"))
     private fun settings() = settingsOverride ?: BudgetSettings.load(out, print)
@@ -263,6 +264,9 @@ internal class AnalysisCommand(
                 input.reportUrlMismatches),
             opportunities, judgment, issues, fit, warnings, promptVersions, selected.inputHash, judgmentSettingsHash)
         print("분석 결과 · ${reports.save(run)} · $judgment")
+        if (config.mail.analysis && issues.isEmpty() && opportunities.any { it.decision != OpportunityDecision.INVALID }) {
+            sendMail(run.id)
+        }
     }
 
     private fun fitOptions(original: AnalysisFit, input: AnalysisInput?, trend: TrendReport): List<AnalysisFit> = buildList {

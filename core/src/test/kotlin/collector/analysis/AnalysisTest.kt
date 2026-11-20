@@ -45,6 +45,42 @@ class AnalysisTest {
         "수요 증가", "팀장", listOf(ref(repo)), listOf(ref(demand), ref(demand2)), listOf(ref(repo)), emptyList(),
         scoreLabels.keys.associateWith { score }, false, "", "유료 고객 확인", emptyList())
 
+    @Test fun successfulAnalysisMailsSavedReportUnlessDisabled() = runTest {
+        seed()
+        val delivered = mutableListOf<collector.mail.MailMessage>()
+        val mail = collector.mail.MailDelivery(out, collector.mail.Mailer { delivered += it }, clock = clock)
+        val fake = Fake(ProviderId.OPENAI) { req ->
+            LlmResult(Json.encodeToString(OpportunityOutput(listOf(opportunity))), ProviderId.OPENAI,
+                req.model, 100, 50, 0, 0.001)
+        }
+        val prompts = PromptResolver(FilePromptStore(out.resolve("prompts").toPath()))
+        val args = arrayOf("--analyze", "local-doc", "--yes", "--force")
+        fun command(config: AnalysisConfig) = AnalysisCommand(out, config, prompts, { fake }, clock, {},
+            sendMail = { id -> mail.send(collector.mail.MailKind.ANALYSIS, id) })
+        command(config).run(args)
+        assertEquals("사업성 분석 · local-doc ($date)", delivered.single().subject)
+        val settingsFile = out.resolve("analysis.local.json").apply { writeText("""{"mail":{"analysis":false}}""") }
+        command(AnalysisConfig.load(settingsFile, config)).run(args)
+        assertEquals(2, fake.requests.size)
+        assertEquals(1, delivered.size)
+    }
+
+    @Test fun analysisWithoutValidOpportunitiesSkipsAutomaticMail() = runTest {
+        seed()
+        val fake = Fake(ProviderId.OPENAI) { req ->
+            val invalid = opportunity.copy(scores = emptyMap())
+            LlmResult(Json.encodeToString(OpportunityOutput(listOf(invalid))), ProviderId.OPENAI,
+                req.model, 100, 50, 0, 0.001)
+        }
+        val prompts = PromptResolver(FilePromptStore(out.resolve("prompts").toPath()))
+        AnalysisCommand(out, config, prompts, { fake }, clock, {},
+            sendMail = { fail("invalid analysis must not send mail") })
+            .run(arrayOf("--analyze", "local-doc", "--yes"))
+        val run = AnalysisReports(out.resolve("analysis")).list().single()
+        assertTrue(run.issues.isEmpty())
+        assertEquals(OpportunityDecision.INVALID, run.opportunities.single().decision)
+    }
+
     @Test fun oneTimeCapSettlementBlocksUntilConfiguredCapChanges() = runTest {
         seed()
         val lines = mutableListOf<String>()
@@ -53,7 +89,7 @@ class AnalysisTest {
                 req.model, 100, 50, 0, 0.60)
         }
         val command = AnalysisCommand(out, config, PromptResolver(FilePromptStore(out.resolve("prompts").toPath())),
-            { fake }, clock, lines::add)
+            { fake }, clock, lines::add, sendMail = { fail("analysis with issues must not send mail") })
         command.run(arrayOf("--analyze", "local-doc", "--budget", "0.40", "--yes"))
         command.run(arrayOf("--analyze", "local-doc", "--yes"))
         assertEquals(1, fake.requests.size)

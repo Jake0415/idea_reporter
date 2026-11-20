@@ -124,3 +124,11 @@
 - 재수집 3건 → `P10-fix-r2.md`(우선순위 정기 저장소>이슈>추적, 두 경로, 다의어 방어, 168시간) → 1건 → `P10-fix-r3.md`(단계별 깔때기 기록 `out/debug/github-issues-<날짜>.json`, 반응 1·스타 20·토큰 시 검색 24회) → 13건(적합 약 85%) → `P10-fix-r4.md`(제목 의도어 로컬 검증 등) → 2건(검증 과도) → `P10-fix-r5.md`(요청·불편 표현으로 확장) → **8건, 모두 AI 도구 관련**(Claude Code 429·403, MCP 도구 누락, LM Studio 시간 초과 등).
 - 마지막 리뷰: Claude 통과, **OpenAI 높음 1 — 토큰으로 검색해 비공개 저장소 이슈가 저장·LLM 입력에 들어갈 수 있음** → Claude 직접 수정: 모든 이슈·토론 검색에 `is:public`, 저장소 메타데이터 `private`·토론 `repository.isPrivate`이면 디버그 표본에도 남기지 않고 제외(경고 "비공개 저장소 n건 제외"), 회귀 테스트 추가. 재수집 결과 동일(8건). 테스트 254개.
 - 이관(낮음 취급): 일일 저장소 검색은 다른 출처가 정한 대기를 무시(실제 한도 소진 시 403 실패, 하루 검색 수가 한도보다 훨씬 적어 가능성 낮음). 비공개 판정 전 단계(예: 제외 제목)에서 빠지는 항목은 디버그 표본에 제목이 남을 수 있으나 `is:public`로 검색 단계에서 차단.
+
+## P11 메일 발송 + 자동 실행 (이 PC, 매일 07:00)
+- 사용자 결정: Gmail SMTP + 앱 비밀번호(.env, 사용자가 직접 입력), Windows 작업 스케줄러 매일 07:00, 일요일 트렌드. 지시 `docs/dev/P11-mail-schedule.md`, 개발 Codex. 라이브러리 Jakarta Mail API 2.1.5 + Angus Mail 2.0.5.
+- 명령: `--mail-test`, `--mail <daily|trend|analysis> [--resend]`, `--scheduled`(일일 → 일요일 트렌드 → 메일), 분석 성공 시 자동 메일. 스크립트 `scripts/run-scheduled.ps1`·`register-task.ps1`(현재 사용자, StartWhenAvailable, `-ExecutionPolicy Bypass`, `-Unregister`), `scripts/README.md`.
+- 리뷰 1회차: OpenAI 높음 1(SMTP 수락 메일 재발송), Claude 중간 1(실행 정책으로 작업이 조용히 실패). `P11-fix-r1.md`(sending 선기록·sendMessage/close 분리·unknown은 --resend로만, 라이브러리 로그·JVM 옵션 차단, 오늘 메일은 이번 실행 발행분만).
+- 2회차: OpenAI 높음 1(응답 유실 시 재발송) → `P11-fix-r2.md`(수락 불명확은 unknown, 결과 6종). 3회차: OpenAI 높음 1(나중에 생기는 로거로 주소 노출) → `P11-fix-r3.md`(SMTP 전 JUL reset+필터, 마지막 응답 코드로 분류). 4회차: OpenAI 중간 1 → `P11-fix-r4.md`(복수 수신자 거절). Claude는 2회차부터 통과.
+- 5회차(마지막): Claude 통과, OpenAI 중간 1 — 메일 실패 사유가 분석 결과 issues에 기록돼 재사용이 막히고 유료 분석이 다시 돌 수 있음 → **Claude 직접 수정**(분석 메일 실패는 분석 결과에 쓰지 않음, 발송 결과는 out/mail/sent.json에만), 회귀 테스트 추가. 테스트 285개.
+- 미완료: 실제 테스트 메일(사용자 .env 입력 후), 작업 스케줄러 등록(사용자 확인 후).

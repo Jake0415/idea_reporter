@@ -10,6 +10,10 @@ import collector.config.DuplicateRssFeedNameException
 import collector.config.PipelineConfig
 import collector.config.SourcesFile
 import collector.llm.*
+import collector.mail.MailKind
+import collector.mail.MailSendResult
+import collector.mail.Mailer
+import collector.mail.SmtpMailer
 import collector.model.DropReason
 import collector.model.Item
 import collector.model.RunReport
@@ -43,6 +47,7 @@ import java.nio.channels.FileChannel
 import java.nio.channels.OverlappingFileLockException
 import java.nio.file.StandardOpenOption
 import java.time.Instant
+import java.time.Clock
 import java.time.LocalDate
 import java.util.Locale
 import kotlin.system.exitProcess
@@ -58,6 +63,7 @@ fun main(args: Array<String>) {
             is IllegalArgumentException -> println("사용법 · --keep-unseen --no-llm --budget <USD> | --trend [--date yyyy-MM-dd] | " +
                 "--backfill <4w|Nd> [--dry-run] [--yes] [--force] [--budget <usd>] [--date yyyy-MM-dd] | " +
                 "--analyze <테마ID…> [--date yyyy-MM-dd] [--yes] [--force] [--budget <usd>] [--fit <n>] | " +
+                "--scheduled | --mail-test | --mail <daily|trend|analysis> [--date yyyy-MM-dd | --id 분석ID] [--resend] | " +
                 "--analysis-detail <분석ID> <번호|기회 ID> | --analysis-list | --budget-status | --set-budget key=value [key=value…]")
             is LlmKeyMissingException -> println(e.message)
             is RunLockedException -> println("다른 실행이 진행 중입니다.")
@@ -70,6 +76,8 @@ internal suspend fun runMain(
     args: Array<String>,
     out: File = File("out"),
     dailySources: Pair<SourcesFile, List<SourceAdapter>>? = null,
+    scheduledClock: Clock = Clock.systemDefaultZone(),
+    scheduledMailer: (() -> Mailer?)? = null,
     dailyProviders: (() -> List<LlmProvider>)? = null
 ) {
     when (args.firstOrNull()) {
@@ -110,6 +118,29 @@ internal suspend fun runMain(
         return
     }
     val secrets = DotEnv.secretProvider(DotEnv.load(File(".env")))
+    when (args.firstOrNull()) {
+        "--mail", "--mail-test" -> {
+            out.mkdirs()
+            withRunLock(out) { runMailCommand(args, out, secrets) }
+            return
+        }
+        "--scheduled" -> {
+            require(args.size == 1)
+            val status = runScheduled(out, secrets, scheduledClock, daily = { startedAt, log ->
+                var result: PipelineResult? = null
+                try {
+                    runDaily(emptyArray(), out, secrets, dailySources, dailyProviders, startedAt,
+                        print = {}, summary = { result = it })
+                } finally {
+                    log("일일 요약 · 카드 ${result?.cards?.size ?: 0}개 · " +
+                        String.format(Locale.ROOT, "추정 USD %.6f", result?.report?.costUsd ?: 0.0) +
+                        " · 실패 출처 ${result?.report?.failedSources?.size ?: 0}개")
+                }
+            }, mailer = if (scheduledMailer == null) SmtpMailer.from(secrets) else scheduledMailer())
+            if (status != 0) throw ScheduledDailyFailure()
+            return
+        }
+    }
     if (args.contentEquals(arrayOf("--llm-smoke"))) {
         if (!llmSmoke(secrets)) exitProcess(1)
         return
@@ -123,6 +154,9 @@ internal suspend fun runMain(
             AnalysisCommand(out, config, prompts, provider = {
                 OpenAiProvider(secrets.get("OPENAI_API_KEY")?.takeIf { it.isNotBlank() }
                     ?: throw LlmKeyMissingException(ProviderId.OPENAI))
+            }, sendMail = { id ->
+                val delivery = mailDelivery(out, secrets)
+                if (delivery.send(MailKind.ANALYSIS, id) == MailSendResult.RECORD_FAILED) throw MailRecordFailure()
             }).run(args)
         } catch (e: IllegalArgumentException) {
             e.message?.let { println("분석 입력 오류 · $it") }
@@ -134,6 +168,21 @@ internal suspend fun runMain(
         runBackfill(args, secrets, defaults, out)
         return
     }
+    out.mkdirs()
+    withRunLock(out) { runDaily(args, out, secrets, dailySources, dailyProviders) }
+}
+
+private suspend fun runDaily(
+    args: Array<String>,
+    out: File,
+    secrets: SecretProvider,
+    dailySources: Pair<SourcesFile, List<SourceAdapter>>?,
+    dailyProviders: (() -> List<LlmProvider>)?,
+    runStartedAt: Instant? = null,
+    print: (String) -> Unit = ::println,
+    summary: (PipelineResult) -> Unit = {}
+): Boolean {
+    val defaults = PipelineConfig.defaults
     var budgetOverride: Double? = null
     var keepUnseen = false
     var noLlm = false
@@ -147,99 +196,100 @@ internal suspend fun runMain(
         }
     }
     budgetOverride?.let { require(it.isFinite() && it >= 0.0) }
-    out.mkdirs()
-    withRunLock(out) {
-        val settings = BudgetSettings.load(out)
-        val config = defaults.copy(dailyBudgetUsd = budgetOverride ?: settings.dailyCardUsd)
-        val monthlyBudget = MonthlyBudget(out, settings)
-        val sources = dailySources?.first ?: ConfigLoader.load(File("config/sources.local.json"))
-        val profiles = ProfileLoader.loadDefaults()
-        val routingIssues = ProfileLoader.validateRouting(sources, profiles)
-        if (routingIssues.isNotEmpty()) {
-            println("출처 설정 오류:\n- " + routingIssues.joinToString("\n- "))
-            throw InvalidSourceRoutingException()
+    val settings = BudgetSettings.load(out, print)
+    val config = defaults.copy(dailyBudgetUsd = budgetOverride ?: settings.dailyCardUsd)
+    val monthlyBudget = MonthlyBudget(out, settings)
+    val sources = dailySources?.first ?: ConfigLoader.load(File("config/sources.local.json"))
+    val profiles = ProfileLoader.loadDefaults()
+    val routingIssues = ProfileLoader.validateRouting(sources, profiles)
+    if (routingIssues.isNotEmpty()) {
+        print("출처 설정 오류:\n- " + routingIssues.joinToString("\n- "))
+        throw InvalidSourceRoutingException()
+    }
+    val prompts = PromptResolver(FilePromptStore(File("config/prompts").toPath()))
+    for (id in profiles.ids) {
+        prompts.resolve("profile.$id.match")
+        prompts.resolve("profile.$id.analysis")
+    }
+    val history = FileHistorySearch(out, defaults.historyDays)
+    val ledger = if (noLlm) null else costLedger(out, history)
+    val startedAt = runStartedAt ?: Instant.now()
+    val today = LocalDate.ofInstant(startedAt, java.time.ZoneId.systemDefault())
+    val skipReason = if (noLlm) null else monthlyBudget.dailySkipReason(today, config.dailyBudgetUsd)
+    val costs = CostGuard(config.dailyBudgetUsd, ledger = ledger, allowsReservation = monthlyBudget::allows)
+    val http = Http.client()
+    val providers = mutableListOf<LlmProvider>()
+    try {
+        if (!noLlm && skipReason == null) {
+            if (dailyProviders != null) {
+                providers += dailyProviders()
+            } else {
+                secrets.get("ANTHROPIC_API_KEY")?.let { providers += AnthropicProvider(it) }
+                secrets.get("OPENAI_API_KEY")?.let { providers += OpenAiProvider(it) }
+            }
         }
-        val prompts = PromptResolver(FilePromptStore(File("config/prompts").toPath()))
-        for (id in profiles.ids) {
-            prompts.resolve("profile.$id.match")
-            prompts.resolve("profile.$id.analysis")
-        }
-        val history = FileHistorySearch(out, defaults.historyDays)
-        val ledger = if (noLlm) null else costLedger(out, history)
-        val startedAt = Instant.now()
-        val today = LocalDate.ofInstant(startedAt, java.time.ZoneId.systemDefault())
-        val skipReason = if (noLlm) null else monthlyBudget.dailySkipReason(today, config.dailyBudgetUsd)
-        val costs = CostGuard(config.dailyBudgetUsd, ledger = ledger, allowsReservation = monthlyBudget::allows)
-        val http = Http.client()
-        val providers = mutableListOf<LlmProvider>()
-        try {
-            if (!noLlm && skipReason == null) {
-                if (dailyProviders != null) {
-                    providers += dailyProviders()
-                } else {
-                    secrets.get("ANTHROPIC_API_KEY")?.let { providers += AnthropicProvider(it) }
-                    secrets.get("OPENAI_API_KEY")?.let { providers += OpenAiProvider(it) }
+        val models = if (providers.any { it.id == ProviderId.ANTHROPIC } || providers.isEmpty()) {
+            mapOf("classify" to defaults.models.classify, "generate" to defaults.models.generate, "track" to defaults.models.classify)
+        } else emptyMap()
+        val router = LlmRouter(providers, costs, models, defaults.models.fallback, preflightBudget = true)
+        val tracked = JsonFileTrackedStore(out.resolve("tracked.json"))
+        val seen = JsonFileSeenStore(out.resolve("seen.json"))
+        val reddit = RedditAdapter(http, secrets)
+        val full = FullPipeline(config, profiles, prompts, router, costs, http, history, tracked,
+            collectOnly = noLlm, reddit = reddit)
+        val adapters = dailySources?.second ?: listOf(HackerNewsAdapter(http), GitHubAdapter(http, secrets), HuggingFaceAdapter(http),
+            GitHubIssuesAdapter(http, secrets), reddit, ProductHuntAdapter(http, secrets), RssAdapter(http))
+        val pipeline = Pipeline(adapters, seen, clock = { startedAt },
+            onStage = { print("· 단계 \u00b7 ${HtmlRenderer.stageName(it)}") }, full = full,
+            paidStageSkipReason = skipReason)
+        val result = try {
+            pipeline.run(sources)
+        } catch (e: Exception) {
+            if (!noLlm) {
+                val day = LocalDate.ofInstant(startedAt, java.time.ZoneId.systemDefault())
+                val report = RunReport(day.toString(), startedAt.toString(), emptyList(), emptyList(),
+                    emptyMap(), java.time.Duration.between(startedAt, Instant.now()).toMillis(),
+                    llmCalls = costs.drainCalls(), issues = listOf(safeFailure(e)))
+                val failed = PipelineResult(emptyList(), emptyList(), report)
+                summary(failed)
+                val archived = archiveFailedRun(out, failed)
+                print("실패 실행 보관 · out/runs/failed/${archived.name}")
+                if (history.runs(day.plusDays(1), 1).firstOrNull()?.cards?.isNotEmpty() == true) {
+                    print("기존 카드 결과 유지 · out/$day.json")
                 }
             }
-            val models = if (providers.any { it.id == ProviderId.ANTHROPIC } || providers.isEmpty()) {
-                mapOf("classify" to defaults.models.classify, "generate" to defaults.models.generate, "track" to defaults.models.classify)
-            } else emptyMap()
-            val router = LlmRouter(providers, costs, models, defaults.models.fallback, preflightBudget = true)
-            val tracked = JsonFileTrackedStore(out.resolve("tracked.json"))
-            val seen = JsonFileSeenStore(out.resolve("seen.json"))
-            val reddit = RedditAdapter(http, secrets)
-            val full = FullPipeline(config, profiles, prompts, router, costs, http, history, tracked,
-                collectOnly = noLlm, reddit = reddit)
-            val adapters = dailySources?.second ?: listOf(HackerNewsAdapter(http), GitHubAdapter(http, secrets), HuggingFaceAdapter(http),
-                GitHubIssuesAdapter(http, secrets), reddit, ProductHuntAdapter(http, secrets), RssAdapter(http))
-            val pipeline = Pipeline(adapters, seen, clock = { startedAt },
-                onStage = { println("· 단계 \u00b7 ${HtmlRenderer.stageName(it)}") }, full = full,
-                paidStageSkipReason = skipReason)
-            val result = try {
-                pipeline.run(sources)
-            } catch (e: Exception) {
-                if (!noLlm) {
-                    val day = LocalDate.ofInstant(startedAt, java.time.ZoneId.systemDefault())
-                    val report = RunReport(day.toString(), startedAt.toString(), emptyList(), emptyList(),
-                        emptyMap(), java.time.Duration.between(startedAt, Instant.now()).toMillis(),
-                        llmCalls = costs.drainCalls(), issues = listOf(safeFailure(e)))
-                    val archived = archiveFailedRun(out, PipelineResult(emptyList(), emptyList(), report))
-                    println("실패 실행 보관 · out/runs/failed/${archived.name}")
-                    if (history.runs(day.plusDays(1), 1).firstOrNull()?.cards?.isNotEmpty() == true) {
-                        println("기존 카드 결과 유지 · out/$day.json")
-                    }
-                }
-                throw e
-            }
-            val day = LocalDate.parse(result.report.runDate)
-            if (skipReason != null) {
-                val archived = archiveFile(out, result.report)
-                archived.writeAtomically(outputJson.encodeToString(result))
-                println("$skipReason · ${archived.path}")
-                return@withRunLock
-            }
-            if (noLlm) {
-                out.resolve("$day-collect.json").writeAtomically(outputJson.encodeToString(result))
-                if (!keepUnseen) seen.markSeen(result.items, day)
-                println("수집·정제 ${result.items.size}건 · out/$day-collect.json")
-                return@withRunLock
-            }
-            val renderer = HtmlRenderer(IdeaGenerator(defaults, prompts, router).categories)
-            val rendered = publishOrArchiveFailure(out, history, renderer, result, keepUnseen)
-            println("${rendered?.subject ?: "카드 0개"} · 추적 ${result.trackingUpdates.size}건 · " +
-                String.format(Locale.ROOT, "추정 USD %.6f", result.report.costUsd))
-            result.metrics.profiles.forEach { (profile, counts) ->
-                println("$profile · 분류 ${counts.classified}건 · 임계값 통과 ${counts.thresholdPassed}건 · 최종 후보 ${counts.selected}건")
-            }
-            result.report.failedSources.forEach { println("출처 실패 · ${it.source} · ${it.error}") }
-            result.report.issues.forEach { println("· $it") }
-            if (rendered == null) println("기존 카드 결과 유지 · 새 실행은 out/runs/에 보관")
-            else println("결과 저장 · out/$day.json · out/$day.html · out/$day.txt")
-        } finally {
-            providers.filterIsInstance<AutoCloseable>().forEach { it.close() }
-            http.dispatcher.executorService.shutdown()
-            http.connectionPool.evictAll()
+            throw e
         }
+        summary(result)
+        val day = LocalDate.parse(result.report.runDate)
+        if (skipReason != null) {
+            val archived = archiveFile(out, result.report)
+            archived.writeAtomically(outputJson.encodeToString(result))
+            print("$skipReason · ${archived.path}")
+            return false
+        }
+        if (noLlm) {
+            out.resolve("$day-collect.json").writeAtomically(outputJson.encodeToString(result))
+            if (!keepUnseen) seen.markSeen(result.items, day)
+            print("수집·정제 ${result.items.size}건 · out/$day-collect.json")
+            return false
+        }
+        val renderer = HtmlRenderer(IdeaGenerator(defaults, prompts, router).categories)
+        val rendered = publishOrArchiveFailure(out, history, renderer, result, keepUnseen)
+        print("${rendered?.subject ?: "카드 0개"} · 추적 ${result.trackingUpdates.size}건 · " +
+            String.format(Locale.ROOT, "추정 USD %.6f", result.report.costUsd))
+        result.metrics.profiles.forEach { (profile, counts) ->
+            print("$profile · 분류 ${counts.classified}건 · 임계값 통과 ${counts.thresholdPassed}건 · 최종 후보 ${counts.selected}건")
+        }
+        result.report.failedSources.forEach { print("출처 실패 · ${it.source} · ${it.error}") }
+        result.report.issues.forEach { print("· $it") }
+        if (rendered == null) print("기존 카드 결과 유지 · 새 실행은 out/runs/에 보관")
+        else print("결과 저장 · out/$day.json · out/$day.html · out/$day.txt")
+        return rendered != null
+    } finally {
+        providers.filterIsInstance<AutoCloseable>().forEach { it.close() }
+        http.dispatcher.executorService.shutdown()
+        http.connectionPool.evictAll()
     }
 }
 
@@ -320,7 +370,7 @@ private suspend fun runBackfill(args: Array<String>, secrets: SecretProvider, de
 private class InvalidSourceRoutingException : RuntimeException()
 internal class RunLockedException : RuntimeException()
 
-private fun safeFailure(e: Exception): String {
+internal fun safeFailure(e: Exception): String {
     val reason = when (e) {
         is InvalidSourceRoutingException -> "invalid_source_routing"
         is IllegalArgumentException -> "invalid_arguments_or_settings"

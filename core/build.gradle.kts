@@ -14,6 +14,8 @@ dependencies {
     implementation(libs.okhttp)
     implementation("com.anthropic:anthropic-java:3.3.0")
     implementation("com.openai:openai-java:4.109.0")
+    implementation("jakarta.mail:jakarta.mail-api:2.1.5")
+    implementation("org.eclipse.angus:angus-mail:2.0.5")
 
     testImplementation(kotlin("test"))
     testImplementation(libs.junit.jupiter)
@@ -33,4 +35,5 @@ tasks.named<JavaExec>("run") {
 
 tasks.test {
     useJUnitPlatform()
+    systemProperty("collector.cli.classpath", sourceSets.main.get().runtimeClasspath.asPath)
 }

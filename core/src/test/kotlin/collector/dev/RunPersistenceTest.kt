@@ -6,6 +6,7 @@ import collector.config.SourceConfig
 import collector.config.SourcesFile
 import collector.item
 import collector.llm.*
+import collector.mail.Mailer
 import collector.model.*
 import collector.pipeline.FullPipeline
 import collector.pipeline.Pipeline
@@ -41,6 +42,23 @@ class RunPersistenceTest {
         competitors = listOf(SignalRef(second.key, second.url, "경쟁")), history = emptyList(),
         effort = "2주", differentiation = "차별화", biggestRisk = "위험", validationPlan = "검증",
         caveats = emptyList(), category = "dev-tools", tags = listOf("ai"))
+
+    @Test fun scheduledEntryPointDoesNotMailPreservedCards() = runTest {
+        val clock = Clock.fixed(now, java.time.ZoneId.systemDefault())
+        val key = LocalDate.now(clock).toString()
+        val prior = PipelineResult(emptyList(), emptyList(), RunReport(key, now.minusSeconds(60).toString(),
+            emptyList(), emptyList(), emptyMap(), 0), cards = listOf(card))
+        publishRun(out, FileHistorySearch(out, 30), HtmlRenderer(emptyList()), prior)
+        val before = out.resolve("$key.txt").readText()
+        var smtpCalls = 0
+        runMain(arrayOf("--scheduled"), out, SourcesFile(emptyList()) to emptyList(),
+            scheduledClock = clock, scheduledMailer = { Mailer { smtpCalls++ } }) {
+            listOf(agent { error("빈 출처에서는 공급자를 호출하지 않아야 합니다.") })
+        }
+        assertEquals(0, smtpCalls)
+        assertEquals(before, out.resolve("$key.txt").readText())
+        assertContains(out.resolve("logs/$key.log").readText(), "일일 요약 · 카드 0개")
+    }
 
     @Test fun replacesAndArchivesSameDayThenKeepsCardsWhenRerunIsEmpty() = runTest {
         val renderer = HtmlRenderer(emptyList())

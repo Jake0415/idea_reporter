@@ -44,8 +44,12 @@ internal class AnalysisReports(private val directory: File) {
         .mapNotNull { readJson<AnalysisRun>(it) }.sortedByDescending { it.createdAt }
 
     fun resultFile(id: String): File {
-        require(id.matches(Regex("[0-9]{8}-[0-9]{9}-[a-f0-9]{8}"))) { "분석 ID 형식이 올바르지 않습니다." }
+        require(validId(id)) { "분석 ID 형식이 올바르지 않습니다." }
         return directory.resolve("$id.json")
+    }
+
+    companion object {
+        fun validId(id: String) = id.matches(Regex("[0-9]{8}-[0-9]{9}-[a-f0-9]{8}"))
     }
 
     fun save(run: AnalysisRun): File {
