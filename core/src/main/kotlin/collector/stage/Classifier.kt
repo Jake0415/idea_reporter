@@ -45,7 +45,7 @@ class Classifier(
                         val hints = candidates.getValue(item.key)
                         buildJsonObject {
                             put("itemId", item.key)
-                            put("source", item.source)
+                            put("source", if (item.source == "github-issues") "GitHub 이슈" else item.source)
                             put("title", item.title)
                             put("snippet", item.snippet.take(minOf(300, maxSnippetChars(item))))
                             putHnContext(hnContexts[item.key])

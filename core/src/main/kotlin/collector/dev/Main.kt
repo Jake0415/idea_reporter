@@ -22,6 +22,7 @@ import collector.prompt.FilePromptStore
 import collector.prompt.PromptResolver
 import collector.report.HtmlRenderer
 import collector.source.GitHubAdapter
+import collector.source.GitHubIssuesAdapter
 import collector.source.HackerNewsAdapter
 import collector.source.HuggingFaceAdapter
 import collector.source.ProductHuntAdapter
@@ -190,7 +191,7 @@ internal suspend fun runMain(
             val full = FullPipeline(config, profiles, prompts, router, costs, http, history, tracked,
                 collectOnly = noLlm, reddit = reddit)
             val adapters = dailySources?.second ?: listOf(HackerNewsAdapter(http), GitHubAdapter(http, secrets), HuggingFaceAdapter(http),
-                reddit, ProductHuntAdapter(http, secrets), RssAdapter(http))
+                GitHubIssuesAdapter(http, secrets), reddit, ProductHuntAdapter(http, secrets), RssAdapter(http))
             val pipeline = Pipeline(adapters, seen, clock = { startedAt },
                 onStage = { println("· 단계 \u00b7 ${HtmlRenderer.stageName(it)}") }, full = full,
                 paidStageSkipReason = skipReason)

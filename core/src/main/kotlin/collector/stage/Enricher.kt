@@ -140,8 +140,8 @@ class Enricher(http: OkHttpClient, private val profiles: ProfileLoader.ProfileSe
                 slots.withPermit {
                     val item = signal.item
                     val budget = checkNotNull(profiles[signal.classification.profile]).config.content
-                    val text = if (item.source in setOf("hf", "reddit", "ph", "rss")) {
-                        if (item.source == "reddit") item.extra["body"].orEmpty().ifBlank { item.snippet } else item.snippet
+                    val text = if (item.source in setOf("hf", "reddit", "ph", "rss", "github-issues")) {
+                        if (item.source in setOf("reddit", "github-issues")) item.extra["body"].orEmpty().ifBlank { item.snippet } else item.snippet
                     } else fetchOrNull {
                         val request = Request.Builder().url(item.url).build()
                         val html = withContext(Dispatchers.IO) {

@@ -26,6 +26,33 @@
       "fetchPerQuery": 100,
       "profile": ["tech-signal"]
     },
+    {
+      "id": "github-issues",
+      "enabled": true,
+      "queries": ["ollama","\"local model\"","mcp","\"claude code\"","vllm","\"lm studio\"","langchain","\"open webui\"","\"ai agent\"","llm","\"embedding model\""],
+      "titleIntents": {
+        "\"local model\"": "support",
+        "vllm": "\"add support\"",
+        "\"ai agent\"": "\"feature request\"",
+        "llm": "support",
+        "\"embedding model\"": "\"please add\""
+      },
+      "ambiguousTerms": ["mcp","local model","ai agent","embedding model"],
+      "minPositiveReactions": 1,
+      "windowHours": 168,
+      "minComments": 2,
+      "minRawScore": 5,
+      "fetchPerQuery": 30,
+      "maxItems": 15,
+      "sourceTimeoutSeconds": 90,
+      "minRepositoryStars": 20,
+      "excludeLabels": ["good first issue","hacktoberfest","up-for-grabs","first-timers-only","ready-for-agent","fabrik:","stage:","tracking","epic","meta"],
+      "titleSignalWords": ["support","add support","feature request","please add","is there a way","integration","allow","option to","configurable","would be","bug","error","fail","fails","failed","broken","not working","doesn't work","can't","cannot","unable","timeout","crash","regression","rejects","drops","lost","403","429","500"],
+      "excludeTitlePatterns": ["^track","follow-up","tracking issue","\\bepic\\b","meta issue","roadmap"],
+      "commentItems": 10,
+      "includeDiscussions": true,
+      "profile": ["demand-signal"]
+    },
     { "id": "hf", "enabled": true },
     { "id": "reddit", "enabled": false },
     { "id": "ph", "enabled": false },

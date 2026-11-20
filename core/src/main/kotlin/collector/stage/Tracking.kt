@@ -8,6 +8,7 @@ import collector.refine.RuleFilter
 import collector.refine.SpamClusterFilter
 import collector.refine.UrlNormalizer
 import collector.source.SourceAdapter
+import collector.source.GitHubAdapter
 import kotlinx.coroutines.*
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
@@ -49,7 +50,8 @@ class TrackingSearch(private val config: PipelineConfig.Tracking) {
                 minRawScore = minimum)
             else -> return emptyList()
         }
-        val filtered = RuleFilter(excluded).filter(adapter.fetch(search, now), mapOf(source.sourceId to search), now)
+        val items = if (adapter is GitHubAdapter) adapter.fetchTracking(search, now) else adapter.fetch(search, now)
+        val filtered = RuleFilter(excluded).filter(items, mapOf(source.sourceId to search), now)
         return SpamClusterFilter().filter(filtered.kept).kept.sortedByDescending { it.rawScore }
             .distinctBy { UrlNormalizer.normalize(it.url) }.take(10).map {
             it.copy(trackHint = listOf(idea.id), profileHint = it.profileHint.ifEmpty { source.profile })

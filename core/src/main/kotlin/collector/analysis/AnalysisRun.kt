@@ -54,19 +54,34 @@ internal class AnalysisReports(private val directory: File) {
             "${index + 1}. ${entry.score?.let { String.format(Locale.ROOT, "%.1f", it) } ?: "INVALID"} · " +
                 "${entry.validated.name} · ${entry.reason}" + if (entry.provisional) " · 잠정" else ""
         }
+        val citations = run.opportunities.map { entry ->
+            entry.validated.refs().distinctBy { it.url }.map { ref ->
+                listOfNotNull(ref.sourceLabel, ref.url, ref.note).joinToString(" · ")
+            }
+        }
         val usage = "LLM ${run.llmCalls.size}회 · 입력 ${run.llmCalls.sumOf { it.inputTokens }} 토큰 " +
             "(캐시 ${run.llmCalls.sumOf { it.cachedInputTokens }}) · 출력 ${run.llmCalls.sumOf { it.outputTokens }} 토큰 · " +
             "추정 ${usd(run.estimatedUsd)} · 실제 ${usd(run.actualUsd)}"
         val fit = run.fit?.takeIf { it.step > 0 }?.display()
         val notes = run.budgetWarnings + run.issues
         val text = listOf(title, "", run.judgment) + listOfNotNull(fit) +
-            listOf("", "검토 분야") + opportunities + listOf("", usage) + notes
+            listOf("", "검토 분야") + opportunities.flatMapIndexed { index, entry ->
+                listOf(entry) + citations[index].map { "  근거 · $it" }
+            } + listOf("", usage) + notes
         val html = buildString {
             appendLine("<!doctype html><html lang=\"ko\"><meta charset=\"utf-8\"><title>${escape(title)}</title>")
             appendLine("<body><h1>${escape(title)}</h1><section><h2>판단</h2><p>${escape(run.judgment)}</p></section>")
             fit?.let { appendLine("<p>${escape(it)}</p>") }
             appendLine("<section><h2>검토 분야</h2><ul>")
-            opportunities.forEach { appendLine("<li>${escape(it)}</li>") }
+            opportunities.forEachIndexed { index, entry ->
+                appendLine("<li>" + escape(entry))
+                if (citations[index].isNotEmpty()) {
+                    appendLine("<ul>")
+                    citations[index].forEach { appendLine("<li>" + escape(it) + "</li>") }
+                    appendLine("</ul>")
+                }
+                appendLine("</li>")
+            }
             appendLine("</ul></section><section><h2>사용량·비용</h2><p>${escape(usage)}</p></section>")
             notes.forEach { appendLine("<p>${escape(it)}</p>") }
             appendLine("</body></html>")
@@ -112,7 +127,9 @@ internal class AnalysisReports(private val directory: File) {
             }
             entry.gates.forEach { appendLine(it) }
             appendLine(entry.reason)
-            opportunity.refs().map { it.url }.distinct().take(3).forEach { appendLine("근거 · $it") }
+            opportunity.refs().distinctBy { it.url }.take(3).forEach { ref ->
+                appendLine(listOfNotNull("근거", ref.sourceLabel, ref.url).joinToString(" · "))
+            }
             append("무엇이 바뀌면 의뢰 가능한가 · ${opportunity.whatWouldChange}")
         }
     }

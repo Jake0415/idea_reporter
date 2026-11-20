@@ -69,6 +69,47 @@ data class GitHubConfig(
 }
 
 @Serializable
+@SerialName("github-issues")
+data class GitHubIssuesConfig(
+    override val enabled: Boolean = true,
+    val queries: List<String> = listOf(
+        "ollama", "\"local model\"", "mcp", "\"claude code\"", "vllm", "\"lm studio\"",
+        "langchain", "\"open webui\"", "\"ai agent\"", "llm", "\"embedding model\""
+    ),
+    val titleIntents: Map<String, String> = mapOf(
+        "\"local model\"" to "support", "vllm" to "\"add support\"",
+        "\"ai agent\"" to "\"feature request\"", "llm" to "support",
+        "\"embedding model\"" to "\"please add\""
+    ),
+    val ambiguousTerms: List<String> = listOf("mcp", "local model", "ai agent", "embedding model"),
+    val minPositiveReactions: Int = 1,
+    val windowHours: Int = 168,
+    val minComments: Int = 2,
+    override val minRawScore: Int = 5,
+    override val fetchPerQuery: Int = 30,
+    override val maxItems: Int = 15,
+    val sourceTimeoutSeconds: Int = 90,
+    val minRepositoryStars: Int = 20,
+    val excludeLabels: List<String> = listOf(
+        "good first issue", "hacktoberfest", "up-for-grabs", "first-timers-only", "ready-for-agent",
+        "fabrik:", "stage:", "tracking", "epic", "meta"
+    ),
+    val commentItems: Int = 10,
+    val includeDiscussions: Boolean = true,
+    val sort: String = "reactions",
+    override val profile: List<String> = listOf("demand-signal"),
+    val titleSignalWords: List<String> = listOf(
+        "support", "add support", "feature request", "please add", "is there a way", "integration", "allow", "option to", "configurable", "would be",
+        "bug", "error", "fail", "fails", "failed", "broken", "not working", "doesn't work", "can't",
+        "cannot", "unable", "timeout", "crash", "regression", "rejects", "drops", "lost", "403", "429", "500"
+    ),
+    val excludeTitlePatterns: List<String> = listOf("^track", "follow-up", "tracking issue", "\\bepic\\b", "meta issue", "roadmap")
+) : SourceConfig() {
+    override val sourceId: String get() = "github-issues"
+    override fun window(): Duration = Duration.ofHours(windowHours.toLong())
+}
+
+@Serializable
 @SerialName("hf")
 data class HfConfig(
     override val enabled: Boolean = true,

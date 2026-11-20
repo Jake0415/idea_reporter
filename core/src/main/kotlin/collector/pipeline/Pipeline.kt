@@ -10,6 +10,9 @@ import collector.refine.SourceCap
 import collector.refine.SpamClusterFilter
 import collector.source.SourceAdapter
 import collector.source.GitHubAdapter
+import collector.source.GitHubIssuesAdapter
+import collector.source.GitHubCollectionException
+import collector.config.GitHubIssuesConfig
 import collector.config.RssConfig
 import collector.config.SourceConfig
 import collector.source.RssAdapter
@@ -83,8 +86,19 @@ class Pipeline(
         onStage("collect")
         var t = System.nanoTime()
         val (fetches, search) = coroutineScope {
-            val regular = configs.map { config -> async { fetchOne(config, startedAt) } }
-            val tracking = async { paid?.search(tracked, configs, adapterById, startedAt, file.excludeKeywords) }
+            val repositories = configs.filter { it.sourceId == "github" }
+                .associateWith { config -> async { fetchOne(config, startedAt) } }
+            val regular = configs.map { config ->
+                repositories[config] ?: async {
+                    if (config.sourceId == "github-issues") repositories.values.awaitAll()
+                    fetchOne(config, startedAt)
+                }
+            }
+            val dailyGitHub = configs.indices.filter { configs[it].sourceId in setOf("github", "github-issues") }
+                .map(regular::get)
+            val tracking = async {
+                paid?.search(tracked, configs, adapterById, startedAt, file.excludeKeywords) { dailyGitHub.awaitAll() }
+            }
             regular.awaitAll() to tracking.await()
         }
         val normal = fetches.flatMap { it.items }
@@ -143,7 +157,9 @@ class Pipeline(
                 val result = adapter.fetchWithSummary(config, now, sourceTimeout)
                 result.items to result.warning
             } else if (adapter is GitHubAdapter) {
-                withTimeout(sourceTimeout) { adapter.fetchWithWarning(config, now) }
+                adapter.fetchWithWarning(config, now, sourceTimeout)
+            } else if (adapter is GitHubIssuesAdapter && config is GitHubIssuesConfig) {
+                adapter.fetchWithWarning(config, now, config.sourceTimeoutSeconds.seconds)
             } else withTimeout(sourceTimeout) { adapter.fetch(config, now) } to null
             val items = fetched.map { if (it.profileHint.isEmpty()) it.copy(profileHint = config.profile) else it }
             Fetch(SourceResult(config.sourceId, items.size, millis = ms(start)), items, warning)
@@ -151,6 +167,8 @@ class Pipeline(
             failure("시간 초과(${sourceTimeout})")
         } catch (e: CancellationException) {
             throw e
+        } catch (e: GitHubCollectionException) {
+            failure(e.message)
         } catch (e: RssFetchException) {
             failure(e.message)
         } catch (e: MissingSourceSecret) {

@@ -153,6 +153,20 @@ class TrendTest {
         assertTrue(theme.candidate)
     }
 
+    @Test fun githubIssuesCountAsACurrentSourceOutsideTheBackfillComparison() {
+        val config = singleItemThemes.copy(minimumDataDays = 1)
+        val signals = listOf(
+            signal("hn-post", "runtime", profile = "demand-signal"),
+            signal("issue", "runtime", "github-issues", "demand-signal")
+        )
+        val prior = date.minusDays(7)
+        val input = TrendInput(mapOf(date to run(date, signals), prior to run(prior)), backfillDates = setOf(prior))
+        val theme = TrendAnalyzer.analyze(input, date, config).themes.single()
+        assertEquals(listOf("github-issues", "hn"), theme.sources)
+        assertEquals(1, theme.comparableCount)
+        assertEquals(2, theme.demandCount)
+    }
+
     @Test fun matchedSourcesCountsGitHubItemOnlyOnFirstObservation() {
         val older = date.minusDays(14)
         val recent = date.minusDays(7)

@@ -438,7 +438,7 @@ data class SourceStats(val source: String, val days: Int, val fetched: Int, val 
 
 | 출처 | 판단 | 근거(공식 문서) |
 |---|---|---|
-| GitHub Issues·Discussions 검색 | **1순위 후보** — API 수집은 금지 대상 아님(금지는 스팸·개인정보 판매), AI 조항은 상용 모델 *학습*에만 해당. 검색 30회/분(인증). 작성자 정보 저장 최소화 | docs.github.com: search, Acceptable Use Policies, Terms of Service |
+| GitHub Issues·Discussions 검색 | **채택(P10, 출처 ID `github-issues`, 기본 켬)** — 공개 저장소만(`is:public`), 작성자 미저장·댓글 작성자 익명·`@멘션` 가림, 제목에 AI 용어 + 기능 라벨 또는 요청·불편 표현, 긍정 반응 ≥1·저장소 스타 ≥20, 하루 약 8건. 근거 — API 수집은 금지 대상 아님(금지는 스팸·개인정보 판매), AI 조항은 상용 모델 *학습*에만 해당. 검색 30회/분(인증). 작성자 정보 저장 최소화 | docs.github.com: search, Acceptable Use Policies, Terms of Service |
 | Hugging Face 토론 | 2순위 후보 — 금지 조항 없음(명시 허용은 아님, 약관 2022년판). 익명 500회/5분. 버그 위주일 수 있음 | huggingface.co: terms-of-service, docs/hub/rate-limits |
 | Bluesky | 3순위 후보 — 키 없이 공개 읽기, AI 조항 없음. **사용자 삭제 요청 반영 의무** → 로컬 보관분 삭제 절차 필요, 검색 엔드포인트 인증 요구 가능성(미확인) | bsky-docs developer-guidelines, bsky.social ToS |
 | Stack Exchange | 보류 — 생성형 AI의 "개발·학습·테스트·인덱싱·개선" 목적 자동 수집 금지, LLM 판단 입력 포함 여부 불명확, API 약관 일부 미확인 | policies.stackoverflow.co acceptable-use-policy(2025-11-17) |

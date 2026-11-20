@@ -4,6 +4,7 @@ import collector.NOW
 import collector.budget.BudgetSettings
 import collector.budget.MonthlyBudget
 import collector.config.GitHubConfig
+import collector.config.GitHubIssuesConfig
 import collector.config.PipelineConfig
 import collector.config.SourceConfig
 import collector.config.SourcesFile
@@ -21,12 +22,18 @@ import collector.profile.ProfileLoader
 import collector.prompt.FilePromptStore
 import collector.prompt.PromptResolver
 import collector.source.SourceAdapter
+import collector.source.GitHubIssuesAdapter
+import collector.source.GitHubAdapter
+import collector.source.GitHubSearch
 import collector.stage.HistoryHit
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.*
 import okhttp3.OkHttpClient
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
 import java.time.Instant
@@ -39,6 +46,81 @@ class TrackingPipelineTest {
     private val day = LocalDate.of(2026, 11, 19)
     private val idea = TrackedIdea("tracking", "card", "Local runtime", "dev-tools", listOf("runtime"),
         emptyList(), TrackedIdea.Status.TRACKING, NOW.minusSeconds(120 * 86400L), null, 0.0, TrackedIdea.Trend.FLAT)
+
+    @Test fun gitHubIssuesAreCollectedAndClassifiedAsDemandSignals() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("""{"incomplete_results":true,"items":[
+                {"id":1,"number":1,"title":"Support local inference","html_url":"https://github.com/owner/repo/issues/1",
+                 "created_at":"$NOW","comments":2,"reactions":{"+1":5},"body":"Please add local inference."},
+                {"id":2,"number":2,"title":"Streaming request","html_url":"https://github.com/owner/repo/issues/2",
+                 "created_at":"$NOW","comments":3,"reactions":{"+1":2},"body":"Can streaming be added?"}]}"""))
+            server.enqueue(MockResponse().setBody("""{"stargazers_count":50}"""))
+            val fake = object : LlmProvider {
+                override val id = ProviderId.ANTHROPIC
+                override suspend fun listModels() = emptyList<ModelInfo>()
+                override suspend fun complete(req: LlmRequest): LlmResult {
+                    assertEquals("classify", req.schemaName)
+                    val input = Json.parseToJsonElement(req.user).jsonObject.getValue("items").jsonArray.single().jsonObject
+                    assertEquals("GitHub 이슈", input.getValue("source").jsonPrimitive.content)
+                    assertEquals("github-issues:1", input.getValue("itemId").jsonPrimitive.content)
+                    assertEquals(listOf("demand-signal"), input.getValue("candidates").jsonArray.map { it.jsonPrimitive.content })
+                    val row = ClassifiedItem("github-issues:1", "demand-signal", 8.0, "reason", "summary",
+                        listOf("inference"), "local-inference", "Local inference")
+                    return LlmResult("""{"items":[${Json.encodeToString(row)}]}""", id, req.model, 0, 0, 0, 0.0)
+                }
+            }
+            server.enqueue(MockResponse().setBody("""{"items":[]}"""))
+            val adapter = GitHubIssuesAdapter(OkHttpClient(), { null }, server.url("/").toString(), directory.resolve("github-repos.json").toFile(), directory.toFile())
+            val config = GitHubIssuesConfig(queries = listOf("inference"), commentItems = 0,
+                includeDiscussions = false, maxItems = 1)
+            val result = Pipeline(listOf(adapter), JsonFileSeenStore(directory.resolve("seen.json").toFile()),
+                clock = { NOW }, zone = ZoneOffset.UTC, full = full(fake)).run(SourcesFile(listOf(config)))
+            assertEquals("github-issues", result.report.sources.single().source)
+            assertEquals(2, result.report.sources.single().fetched)
+            assertTrue(result.report.issues.any { "부분 결과" in it })
+            assertEquals("github-issues:1", result.items.single().key)
+            assertEquals("demand-signal", result.classified.single().classification.profile)
+            assertEquals(3, server.requestCount)
+        }
+    }
+
+    @Test fun dailyGitHubSearchesPrecedeTrackingWhenRemainingIsLow() = runBlocking {
+        MockWebServer().use { server ->
+            val http = OkHttpClient()
+            var time = NOW
+            val waits = mutableListOf<Pair<Int, Long>>()
+            GitHubSearch.shared(http) {
+                GitHubSearch({ time }, { waits += server.requestCount to it; time = time.plusMillis(it) })
+            }
+            repeat(3) {
+                server.enqueue(MockResponse().setBody("""{"items":[]}""")
+                    .setHeader("X-RateLimit-Remaining", "2")
+                    .setHeader("X-RateLimit-Reset", NOW.plusSeconds(120).epochSecond))
+            }
+            repeat(3) { server.enqueue(MockResponse().setBody("""{"items":[]}""")) }
+            val base = server.url("/").toString()
+            val repositories = GitHubAdapter(http, { null }, base)
+            val issues = GitHubIssuesAdapter(http, { null }, base, directory.resolve("github-repos.json").toFile(), directory.toFile())
+            val tracked = JsonFileTrackedStore(directory.resolve("tracked.json").toFile())
+            tracked.save(listOf(idea))
+            val pipeline = Pipeline(listOf(repositories, issues), JsonFileSeenStore(directory.resolve("seen.json").toFile()),
+                clock = { NOW }, full = full(tracked = tracked))
+            val result = pipeline.run(SourcesFile(listOf(
+                GitHubIssuesConfig(queries = listOf("ollama"), includeDiscussions = false), GitHubConfig())))
+            assertTrue(result.report.failedSources.isEmpty())
+            assertTrue(result.report.sources.single { it.source == "github" }.millis < 45_000)
+            assertEquals(listOf(3 to 120_000L), waits)
+            repeat(3) {
+                val request = server.takeRequest().requestUrl!!
+                assertEquals("/search/repositories", request.encodedPath)
+                assertFalse("runtime" in request.queryParameter("q").orEmpty())
+            }
+            repeat(2) { assertEquals("/search/issues", server.takeRequest().requestUrl!!.encodedPath) }
+            val tracking = server.takeRequest().requestUrl!!
+            assertEquals("/search/repositories", tracking.encodedPath)
+            assertContains(tracking.queryParameter("q").orEmpty(), "runtime")
+        }
+    }
 
     @Test fun monthlyCapSkipsPaidStagesAndRecordsReasonAfterCodeStages() = runTest {
         val out = directory.toFile()

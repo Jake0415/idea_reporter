@@ -4,6 +4,7 @@ import collector.pipeline.PipelineResult
 import collector.stage.Category
 import collector.model.TrackedIdea
 import collector.model.SignalRef
+import collector.source.GitHubIssuesAdapter
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.time.LocalDate
 import java.util.Locale
@@ -80,8 +81,11 @@ class HtmlRenderer(categories: List<Category>) {
         return Rendered(subject, html, text)
     }
 
-    private fun evidenceNote(ref: SignalRef): String =
-        ref.license?.let { "${ref.note} · 라이선스 $it" } ?: ref.note
+    private fun evidenceNote(ref: SignalRef): String {
+        val note = ref.license?.let { "${ref.note} · 라이선스 $it" } ?: ref.note
+        return if (ref.itemId.startsWith("github-issues:"))
+            "${GitHubIssuesAdapter.evidenceLabel(ref.url)} · $note" else note
+    }
 
     private fun <T> evidence(tech: List<T>, other: List<T>) = tech.take(1) + other.take(1)
     private fun pill(text: String) =

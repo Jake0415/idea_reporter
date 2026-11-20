@@ -51,7 +51,7 @@ class FullPipeline(
     }
 
     internal suspend fun search(tracked: List<TrackedIdea>, sources: List<SourceConfig>, adapters: Map<String, SourceAdapter>,
-                                now: Instant, excluded: List<String>): Pair<List<Item>, List<String>> = coroutineScope {
+                                now: Instant, excluded: List<String>, awaitDailyGitHub: suspend () -> Unit = {}): Pair<List<Item>, List<String>> = coroutineScope {
         val search = TrackingSearch(config.tracking)
         val github = Mutex()
         val jobs = tracked.filter { it.status != TrackedIdea.Status.STOPPED }.flatMap { idea ->
@@ -60,7 +60,10 @@ class FullPipeline(
                 async {
                     val items = try {
                         suspend fun fetch() = withTimeoutOrNull(45_000) { search.fetch(idea, source, adapter, now, excluded) }
-                        if (source is GitHubConfig) github.withLock { fetch() } else fetch()
+                        if (source is GitHubConfig) {
+                            awaitDailyGitHub()
+                            github.withLock { fetch() }
+                        } else fetch()
                     } catch (e: CancellationException) {
                         throw e
                     } catch (_: Exception) {

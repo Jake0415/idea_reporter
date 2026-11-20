@@ -4,6 +4,9 @@ import collector.config.GitHubConfig
 import collector.config.SourceConfig
 import collector.model.Item
 import collector.port.SecretProvider
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.time.Duration
 import kotlinx.coroutines.delay
 import kotlinx.serialization.Serializable
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -12,7 +15,6 @@ import okhttp3.Request
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
-import java.time.Duration
 
 /**
  * GitHub — 저장소 검색 API. 최근 [createdWithinDays]일 안에 만들어지고 스타가 기준 이상인 저장소를 스타순으로.
@@ -29,16 +31,45 @@ class GitHubAdapter(
     override suspend fun fetch(config: SourceConfig, now: Instant): List<Item> =
         fetchWithWarning(config, now).first
 
-    internal suspend fun fetchWithWarning(config: SourceConfig, now: Instant): Pair<List<Item>, String?> {
+    internal suspend fun fetchTracking(config: SourceConfig, now: Instant): List<Item> =
+        fetchWithWarning(config, now, priority = GitHubSearch.Priority.TRACKING).first
+
+    internal suspend fun fetchWithWarning(
+        config: SourceConfig, now: Instant, timeout: Duration = Duration.INFINITE,
+        priority: GitHubSearch.Priority = GitHubSearch.Priority.DAILY_REPOSITORIES
+    ): Pair<List<Item>, String?> {
         require(config is GitHubConfig) { "GitHubAdapter에는 GitHubConfig가 필요합니다" }
         val sinceDate = now.minus(config.window()).atOffset(ZoneOffset.UTC).toLocalDate()
-        var incomplete = false
-        val items = search(config, ">=$sinceDate", token()) {
-            decode(Http.getText(http, it)).also { response ->
-                incomplete = incomplete || response.incompleteResults
+        val warnings = linkedSetOf<String>()
+        val token = token()
+        val repos = linkedMapOf<Long, Repo>()
+        suspend fun collect() {
+            search(config, ">=$sinceDate", token, repos) {
+                try {
+                    GitHubSearch.shared(http).get(http, it, token, retryLimited = false, priority = priority) { body, _ -> decode(body) }.also { response ->
+                        if (response.incompleteResults) warnings += "GitHub 검색 응답에 부분 결과가 포함되었습니다."
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    if (repos.isEmpty() || e is HttpStatusException && e.status in setOf(403, 429)) throw e
+                    warnings += "GitHub 저장소 검색 일부 실패"
+                    Response()
+                }
             }
         }
-        return items to if (incomplete) "GitHub 검색 응답에 부분 결과가 포함되었습니다." else null
+        try {
+            if (timeout.isInfinite()) {
+                collect()
+            } else if (withTimeoutOrNull(timeout) { collect() } == null) {
+                if (repos.isEmpty()) throw GitHubCollectionException("GitHub 저장소 수집 시간 초과")
+                warnings += "GitHub 저장소 수집 시간 초과로 부분 결과를 사용합니다."
+            }
+        } catch (e: HttpStatusException) {
+            if (repos.isEmpty() || e.status !in setOf(403, 429)) throw e
+            warnings += "GitHub 저장소 검색 한도에 도달해 부분 결과를 사용합니다."
+        }
+        return repoItems(repos) to warnings.joinToString(" · ").ifBlank { null }
     }
 
     private fun token() = secrets.get("GITHUB_TOKEN")?.takeIf { it.isNotBlank() }
@@ -55,54 +86,30 @@ class GitHubAdapter(
         warn: (String) -> Unit
     ) {
         private val token = token()
-        private var nextRequest = Instant.MIN
+        private val limiter = GitHubSearch(clock, wait, historical = true)
 
         init {
             if (token == null) warn("GITHUB_TOKEN 없음 · GitHub 과거 검색 요청 간격을 늘립니다.")
         }
 
         suspend fun fetch(config: GitHubConfig, day: LocalDate): List<Item> =
-            search(config, day.toString(), token, ::get)
+            repoItems(linkedMapOf<Long, Repo>().also { search(config, day.toString(), token, it, ::get) })
 
-        private suspend fun get(request: Request): Response {
-            repeat(3) { attempt ->
-                val now = clock()
-                if (nextRequest > now) wait(Duration.between(now, nextRequest).toMillis())
-                val response = Http.readResponse(http, request, includeErrorBody = false, requireSuccess = false) {
-                    SearchResponse(it.code, it.header("X-RateLimit-Remaining")?.toIntOrNull(),
-                        it.header("X-RateLimit-Reset")?.toLongOrNull(), it.header("Retry-After")?.toLongOrNull(),
-                        if (it.isSuccessful) it.body?.string().orEmpty() else "")
-                }
-                val received = clock()
-                val limited = response.code == 429 || response.code == 403
-                nextRequest = received.plusSeconds(if (token == null) 7 else 2)
-                if (response.remaining == 0 || limited) {
-                    val reset = response.reset?.let(Instant::ofEpochSecond)
-                    if (reset != null) nextRequest = maxOf(nextRequest, reset)
-                    if (response.retryAfter != null) nextRequest = maxOf(nextRequest, received.plusSeconds(response.retryAfter))
-                    if (limited && (reset == null || reset <= received) && response.retryAfter == null)
-                        nextRequest = maxOf(nextRequest, received.plusSeconds(60L shl attempt))
-                }
-                if (response.code in 200..299) {
-                    val result = decode(response.body)
-                    if (!result.incompleteResults) return result
-                    if (attempt == 2) error("GitHub 검색 응답에 부분 결과가 포함되었습니다.")
-                } else if (!limited || attempt == 2) {
-                    throw HttpStatusException(response.code, null)
+        private suspend fun get(request: Request): Response =
+            limiter.get(http, request, token) { body, attempt ->
+                val result = decode(body)
+                when {
+                    !result.incompleteResults -> result
+                    attempt == 2 -> error("GitHub 검색 응답에 부분 결과가 포함되었습니다.")
+                    else -> null
                 }
             }
-            error("Unreachable")
-        }
     }
 
-    private data class SearchResponse(
-        val code: Int, val remaining: Int?, val reset: Long?, val retryAfter: Long?, val body: String
-    )
-
     private suspend fun search(
-        config: GitHubConfig, created: String, token: String?, get: suspend (Request) -> Response
-    ): List<Item> {
-        val repos = LinkedHashMap<Long, Repo>()
+        config: GitHubConfig, created: String, token: String?, repos: MutableMap<Long, Repo>,
+        get: suspend (Request) -> Response
+    ) {
         for (query in config.queries) {
             val url = baseUrl.toHttpUrl().newBuilder()
                 .addPathSegments("search/repositories")
@@ -118,6 +125,9 @@ class GitHubAdapter(
                 .build()
             get(request).items.forEach { repos.putIfAbsent(it.id, it) }
         }
+    }
+
+    private fun repoItems(repos: Map<Long, Repo>): List<Item> {
         // 출처당 최대 건수(maxItems)는 스팸을 거른 뒤 파이프라인이 적용한다(SourceCap)
         return repos.values
             .sortedByDescending { it.stargazers_count }

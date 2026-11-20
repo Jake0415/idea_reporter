@@ -73,6 +73,27 @@ class BackfillAdapterTest {
         }
     }
 
+    @Test fun githubUsesDifferentResetThresholdsForHistoricalAndDailySearch() = runTest {
+        MockWebServer().use { server ->
+            val http = OkHttpClient()
+            val request = okhttp3.Request.Builder().url(server.url("/search/repositories")).build()
+            for (historical in listOf(true, false)) {
+                var now = Instant.ofEpochSecond(100)
+                val waits = mutableListOf<Long>()
+                val search = GitHubSearch({ now }, { millis ->
+                    waits += millis
+                    now = now.plusMillis(millis)
+                }, historical = historical)
+                for (remaining in listOf(2, 1, 0, 3)) {
+                    server.enqueue(MockResponse().setBody("{}").setHeader("X-RateLimit-Remaining", remaining)
+                        .setHeader("X-RateLimit-Reset", now.plusSeconds(10).epochSecond))
+                    search.get(http, request, "test-token") { body, _ -> body }
+                }
+                assertEquals(if (historical) listOf(2000L, 2000L, 8000L) else listOf(10000L, 10000L), waits)
+            }
+        }
+    }
+
     @Test fun githubWaitsForResetAndRetriesRateLimit() = runTest {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setBody("{}").setHeader("X-RateLimit-Remaining", 0)

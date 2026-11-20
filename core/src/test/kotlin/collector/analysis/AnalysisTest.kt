@@ -546,6 +546,20 @@ class AnalysisTest {
         val singleSource = result(opportunity.copy(materials = emptyList(), techRefs = emptyList(),
             demandRefs = listOf(ref(demand), ref(sameSourceDemand))), input(listOf(demand, sameSourceDemand)))
         assertTrue(singleSource.gateFailures.any { "인용 출처 1종" in it })
+        val githubIssue = demand2.copy(item = demand2.item.copy(source = "github-issues",
+            url = "https://github.com/owner/repo/issues/2"))
+        val mixed = result(opportunity.copy(materials = emptyList(), techRefs = emptyList(),
+            demandRefs = listOf(ref(demand), ref(githubIssue))), input(listOf(demand, githubIssue)))
+        assertTrue(mixed.gateFailures.none { "인용 출처" in it })
+        val label = "GitHub 이슈 · owner/repo"
+        assertEquals(label, mixed.validated.demandRefs.last().sourceLabel)
+        val reports = out.resolve("analysis")
+        val id = "20261120-012345000-1234abcd"
+        AnalysisReports(reports).save(AnalysisRun(id, now.toString(), date.toString(), listOf("local-doc"),
+            config.model, config.effort, 0.0, 0.0, emptyList(), AnalysisRun.InputSummary(2, 0),
+            listOf(mixed), "판단", emptyList()))
+        for (extension in listOf("txt", "html"))
+            assertContains(reports.resolve("$id.$extension").readText(), "$label · ${githubIssue.item.url}")
         val unlicensed = result(opportunity, input(listOf(demand, demand2, repo.copy(item = repo.item.copy(extra = emptyMap())))))
         assertTrue(unlicensed.gateFailures.any { "허용 라이선스" in it })
         val excluded = result(opportunity.copy(excludedByCriteria = true, excludedReason = "제외 분야"))

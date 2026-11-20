@@ -1,5 +1,6 @@
 package collector.analysis
 
+import collector.source.GitHubIssuesAdapter
 import collector.stage.array
 import collector.stage.schema
 import collector.stage.string
@@ -11,7 +12,9 @@ import kotlinx.serialization.json.*
 import kotlin.math.roundToInt
 
 @Serializable
-internal data class OpportunityRef(val itemId: String, val url: String, val note: String)
+internal data class OpportunityRef(
+    val itemId: String, val url: String, val note: String, val sourceLabel: String? = null
+)
 
 @Serializable
 internal data class OpportunityScore(
@@ -87,7 +90,11 @@ internal class OpportunityJudge(
                 false
             }
             if (counts.isNotEmpty()) invalid[block] = counts
-            return accepted
+            return accepted.map { ref ->
+                val label = if (evidence.getValue(ref.itemId to ref.url).source == "github-issues")
+                    GitHubIssuesAdapter.evidenceLabel(ref.url) else null
+                ref.copy(sourceLabel = label)
+            }
         }
 
         val scores = scoreLabels.keys.mapNotNull { key ->
