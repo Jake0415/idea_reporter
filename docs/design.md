@@ -434,6 +434,18 @@ data class SourceStats(val source: String, val days: Int, val fetched: Int, val 
 
 **피드 이용 범위:** 각 사이트가 제공하는 공식 피드만 읽고, 웹페이지는 긁지 않는다. 출시 피드(Product Hunt 공개 피드, BetaList)는 기본 목록에서 뺐다 — PH는 피드 주소를 안내하지만 일반 약관에 크롤링·복제·저장 제한이 있고, BetaList 약관은 개인 열람 범위로 좁아 **자동 수집·저장·외부 LLM 전송의 허용 범위가 확인되지 않았다**. 시장 신호가 더 필요하면 사용자가 약관을 확인한 뒤 피드를 직접 추가하거나, PH API(토큰, `ph` 출처)를 쓴다.
 
+**수요 신호 대체 출처 검토 (2026-11-20, 공식 약관 확인 — Reddit 보류에 따른 조사):**
+
+| 출처 | 판단 | 근거(공식 문서) |
+|---|---|---|
+| GitHub Issues·Discussions 검색 | **1순위 후보** — API 수집은 금지 대상 아님(금지는 스팸·개인정보 판매), AI 조항은 상용 모델 *학습*에만 해당. 검색 30회/분(인증). 작성자 정보 저장 최소화 | docs.github.com: search, Acceptable Use Policies, Terms of Service |
+| Hugging Face 토론 | 2순위 후보 — 금지 조항 없음(명시 허용은 아님, 약관 2022년판). 익명 500회/5분. 버그 위주일 수 있음 | huggingface.co: terms-of-service, docs/hub/rate-limits |
+| Bluesky | 3순위 후보 — 키 없이 공개 읽기, AI 조항 없음. **사용자 삭제 요청 반영 의무** → 로컬 보관분 삭제 절차 필요, 검색 엔드포인트 인증 요구 가능성(미확인) | bsky-docs developer-guidelines, bsky.social ToS |
+| Stack Exchange | 보류 — 생성형 AI의 "개발·학습·테스트·인덱싱·개선" 목적 자동 수집 금지, LLM 판단 입력 포함 여부 불명확, API 약관 일부 미확인 | policies.stackoverflow.co acceptable-use-policy(2025-11-17) |
+| Product Hunt API, Dev.to | 제외 — 상업적 이용 금지 | api.producthunt.com/v2/docs, dev.to/terms |
+| Cursor 포럼, Lobsters | 제외 — 자동 접근 금지 / robots.txt가 AI input 금지 신호 | forum.cursor.com/tos, lobste.rs/robots.txt |
+| Hacker News(사용 중) | 확인 필요 — 공식 API는 속도 제한 없음, 그러나 YC 약관이 "사이트"의 data mining·scraping·파생물 판매를 금지하며 공식 API와의 관계는 문서에 없음(회색 지대). Algolia 약관 미확인 | github.com/HackerNews/API, ycombinator.com/legal |
+
 공통 제외 키워드: crypto, giveaway, hiring. 앱의 출처 설정 화면에서 수정한 값은 Room에 덮어써 저장한다.
 
 **RSS 안전 규칙(P3):** 피드마다 격리(한 피드 실패는 "RSS 부분 실패" 경고만, 전부 실패할 때만 출처 실패). 피드별 기한 = min(남은 출처 시간, 피드당 상한), 출처 기한이 먼저 끝나도 완료된 피드는 반환하고 진행 중 HTTP 호출은 취소. 피드 URL의 비밀 후보(쿼리 값 6자 이상·userinfo)는 결과의 모든 문자열에서 `[redacted]`로 치환, 오류에는 상태 코드만. 피드 이름은 설정 라벨이며 중복 이름·비밀값 포함 이름은 설정 단계에서 거부.
