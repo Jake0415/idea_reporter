@@ -58,15 +58,19 @@ data class TrendInput(
                 val fullRuns = listOfNotNull(published) + archives[day.toString()].orEmpty()
                     .mapNotNull { readJson<PipelineResult>(it) }
                     .filter { it.report.runDate == day.toString() }
-                val historical = backfill.resolve("$day.json").takeIf { stateRun == null && fullRuns.isEmpty() }
+                val classifiedState = stateRun?.takeUnless { it.report.paidStagesSkipped }
+                val classifiedRuns = fullRuns.filterNot { it.report.paidStagesSkipped }
+                val historical = backfill.resolve("$day.json").takeIf { classifiedState == null && classifiedRuns.isEmpty() }
                     ?.let { readJson<PipelineResult>(it) }
                     ?.takeIf { it.report.runDate == day.toString() }
-                (fullRuns + listOfNotNull(stateRun, historical))
+                (classifiedRuns + listOfNotNull(classifiedState, historical))
                     .sortedBy { Instant.parse(it.report.startedAt) }
                     .forEach(::index)
                 if (day >= start) {
-                    val latest = fullRuns.maxByOrNull { Instant.parse(it.report.startedAt) }
-                    val run = preferredRun(stateRun, latest, published) ?: historical?.also { backfillDates += day }
+                    val latest = classifiedRuns.maxByOrNull { Instant.parse(it.report.startedAt) }
+                    val run = preferredRun(classifiedState, latest, published?.takeUnless { it.report.paidStagesSkipped })
+                        ?: historical?.also { backfillDates += day }
+                        ?: preferredRun(stateRun, fullRuns.maxByOrNull { Instant.parse(it.report.startedAt) }, published)
                         ?: continue
                     runs[day] = run
                 }
@@ -78,8 +82,18 @@ data class TrendInput(
     }
 }
 
-internal fun hasDailyRun(out: File, day: LocalDate): Boolean =
-    out.resolve("$day.json").isFile || out.resolve("state/$day.json").isFile ||
-        out.resolve("runs").listFiles().orEmpty().any {
-            it.isFile && it.name.startsWith("$day-") && it.extension == "json"
+internal fun hasDailyRun(out: File, day: LocalDate, print: (String) -> Unit = ::println): Boolean {
+    fun counts(file: File): Boolean {
+        if (!file.isFile) return false
+        val run = readJson<PipelineResult>(file)
+        if (run == null) {
+            print("읽을 수 없는 실행 파일: ${file.path}")
+            return false
         }
+        return !run.report.paidStagesSkipped
+    }
+    return counts(out.resolve("$day.json")) || counts(out.resolve("state/$day.json")) ||
+        out.resolve("runs").listFiles().orEmpty().any {
+            it.name.startsWith("$day-") && it.extension == "json" && counts(it)
+        }
+}

@@ -1,9 +1,14 @@
 package collector.dev
 
+import collector.analysis.AnalysisCommand
+import collector.analysis.AnalysisConfig
 import collector.backfill.Backfill
+import collector.budget.BudgetSettings
+import collector.budget.MonthlyBudget
 import collector.config.ConfigLoader
 import collector.config.DuplicateRssFeedNameException
 import collector.config.PipelineConfig
+import collector.config.SourcesFile
 import collector.llm.*
 import collector.model.DropReason
 import collector.model.Item
@@ -23,6 +28,7 @@ import collector.source.ProductHuntAdapter
 import collector.source.RedditAdapter
 import collector.source.RssAdapter
 import collector.source.Http
+import collector.source.SourceAdapter
 import collector.stage.Classifier
 import collector.stage.IdeaGenerator
 import collector.trend.publishTrend
@@ -49,14 +55,43 @@ fun main(args: Array<String>) {
         when (e) {
             is DuplicateRssFeedNameException -> println("출처 설정 오류 · ${e.message}")
             is IllegalArgumentException -> println("사용법 · --keep-unseen --no-llm --budget <USD> | --trend [--date yyyy-MM-dd] | " +
-                "--backfill <4w|Nd> [--dry-run] [--yes] [--force] [--budget <usd>] [--date yyyy-MM-dd]")
+                "--backfill <4w|Nd> [--dry-run] [--yes] [--force] [--budget <usd>] [--date yyyy-MM-dd] | " +
+                "--analyze <테마ID…> [--date yyyy-MM-dd] [--yes] [--force] [--budget <usd>] [--fit <n>] | " +
+                "--analysis-detail <분석ID> <번호|기회 ID> | --analysis-list | --budget-status | --set-budget key=value [key=value…]")
+            is LlmKeyMissingException -> println(e.message)
             is RunLockedException -> println("다른 실행이 진행 중입니다.")
         }
         exitProcess(1)
     }
 }
 
-private suspend fun runMain(args: Array<String>) {
+internal suspend fun runMain(
+    args: Array<String>,
+    out: File = File("out"),
+    dailySources: Pair<SourcesFile, List<SourceAdapter>>? = null,
+    dailyProviders: (() -> List<LlmProvider>)? = null
+) {
+    when (args.firstOrNull()) {
+        "--set-budget" -> {
+            out.mkdirs()
+            withRunLock(out) {
+                val updated = BudgetSettings.update(out, args.drop(1))
+                if ("analysisRequestUsd" in updated || "analysisMonthlyUsd" in updated) {
+                    MonthlyBudget(out, BudgetSettings.load(out)).analysisBlockReason(LocalDate.now())
+                }
+                updated.forEach { (key, value) -> println("$key=$value") }
+            }
+            return
+        }
+        "--budget-status" -> {
+            require(args.size == 1)
+            out.mkdirs()
+            withRunLock(out) {
+                MonthlyBudget(out, BudgetSettings.load(out)).status(LocalDate.now()).forEach(::println)
+            }
+            return
+        }
+    }
     if (args.firstOrNull() == "--trend") {
         val date = when {
             args.size == 1 -> LocalDate.now()
@@ -67,7 +102,7 @@ private suspend fun runMain(args: Array<String>) {
             )
             else -> throw IllegalArgumentException("지원하지 않는 트렌드 옵션입니다.")
         }
-        val out = File("out").apply { mkdirs() }
+        out.mkdirs()
         withRunLock(out) {
             println(publishTrend(out, date))
         }
@@ -79,11 +114,26 @@ private suspend fun runMain(args: Array<String>) {
         return
     }
     val defaults = PipelineConfig.defaults
-    if (args.firstOrNull() == "--backfill") {
-        runBackfill(args, secrets, defaults)
+    if (args.firstOrNull() in setOf("--analyze", "--analysis-detail", "--analysis-list")) {
+        val local = File("config/analysis.local.json")
+        val config = AnalysisConfig.load(local, defaults.analysis)
+        val prompts = PromptResolver(FilePromptStore(File("config/prompts").toPath()))
+        try {
+            AnalysisCommand(out, config, prompts, provider = {
+                OpenAiProvider(secrets.get("OPENAI_API_KEY")?.takeIf { it.isNotBlank() }
+                    ?: throw LlmKeyMissingException(ProviderId.OPENAI))
+            }).run(args)
+        } catch (e: IllegalArgumentException) {
+            e.message?.let { println("분석 입력 오류 · $it") }
+            throw e
+        }
         return
     }
-    var budget = defaults.dailyBudgetUsd
+    if (args.firstOrNull() == "--backfill") {
+        runBackfill(args, secrets, defaults, out)
+        return
+    }
+    var budgetOverride: Double? = null
     var keepUnseen = false
     var noLlm = false
     var index = 0
@@ -91,14 +141,17 @@ private suspend fun runMain(args: Array<String>) {
         when (args[index++]) {
             "--keep-unseen" -> keepUnseen = true
             "--no-llm" -> noLlm = true
-            "--budget" -> budget = requireNotNull(args.getOrNull(index++)?.toDoubleOrNull())
+            "--budget" -> budgetOverride = requireNotNull(args.getOrNull(index++)?.toDoubleOrNull())
             else -> throw IllegalArgumentException("지원하지 않는 실행 옵션입니다.")
         }
     }
-    require(budget.isFinite() && budget >= 0.0)
-    val out = File("out").apply { mkdirs() }
+    budgetOverride?.let { require(it.isFinite() && it >= 0.0) }
+    out.mkdirs()
     withRunLock(out) {
-        val sources = ConfigLoader.load(File("config/sources.local.json"))
+        val settings = BudgetSettings.load(out)
+        val config = defaults.copy(dailyBudgetUsd = budgetOverride ?: settings.dailyCardUsd)
+        val monthlyBudget = MonthlyBudget(out, settings)
+        val sources = dailySources?.first ?: ConfigLoader.load(File("config/sources.local.json"))
         val profiles = ProfileLoader.loadDefaults()
         val routingIssues = ProfileLoader.validateRouting(sources, profiles)
         if (routingIssues.isNotEmpty()) {
@@ -112,13 +165,20 @@ private suspend fun runMain(args: Array<String>) {
         }
         val history = FileHistorySearch(out, defaults.historyDays)
         val ledger = if (noLlm) null else costLedger(out, history)
-        val costs = CostGuard(budget, ledger = ledger)
+        val startedAt = Instant.now()
+        val today = LocalDate.ofInstant(startedAt, java.time.ZoneId.systemDefault())
+        val skipReason = if (noLlm) null else monthlyBudget.dailySkipReason(today, config.dailyBudgetUsd)
+        val costs = CostGuard(config.dailyBudgetUsd, ledger = ledger, allowsReservation = monthlyBudget::allows)
         val http = Http.client()
         val providers = mutableListOf<LlmProvider>()
         try {
-            if (!noLlm) {
-                secrets.get("ANTHROPIC_API_KEY")?.let { providers += AnthropicProvider(it) }
-                secrets.get("OPENAI_API_KEY")?.let { providers += OpenAiProvider(it) }
+            if (!noLlm && skipReason == null) {
+                if (dailyProviders != null) {
+                    providers += dailyProviders()
+                } else {
+                    secrets.get("ANTHROPIC_API_KEY")?.let { providers += AnthropicProvider(it) }
+                    secrets.get("OPENAI_API_KEY")?.let { providers += OpenAiProvider(it) }
+                }
             }
             val models = if (providers.any { it.id == ProviderId.ANTHROPIC } || providers.isEmpty()) {
                 mapOf("classify" to defaults.models.classify, "generate" to defaults.models.generate, "track" to defaults.models.classify)
@@ -127,13 +187,13 @@ private suspend fun runMain(args: Array<String>) {
             val tracked = JsonFileTrackedStore(out.resolve("tracked.json"))
             val seen = JsonFileSeenStore(out.resolve("seen.json"))
             val reddit = RedditAdapter(http, secrets)
-            val full = FullPipeline(defaults, profiles, prompts, router, costs, http, history, tracked,
+            val full = FullPipeline(config, profiles, prompts, router, costs, http, history, tracked,
                 collectOnly = noLlm, reddit = reddit)
-            val startedAt = Instant.now()
-            val adapters = listOf(HackerNewsAdapter(http), GitHubAdapter(http, secrets), HuggingFaceAdapter(http),
+            val adapters = dailySources?.second ?: listOf(HackerNewsAdapter(http), GitHubAdapter(http, secrets), HuggingFaceAdapter(http),
                 reddit, ProductHuntAdapter(http, secrets), RssAdapter(http))
             val pipeline = Pipeline(adapters, seen, clock = { startedAt },
-                onStage = { println("· 단계 \u00b7 ${HtmlRenderer.stageName(it)}") }, full = full)
+                onStage = { println("· 단계 \u00b7 ${HtmlRenderer.stageName(it)}") }, full = full,
+                paidStageSkipReason = skipReason)
             val result = try {
                 pipeline.run(sources)
             } catch (e: Exception) {
@@ -151,6 +211,12 @@ private suspend fun runMain(args: Array<String>) {
                 throw e
             }
             val day = LocalDate.parse(result.report.runDate)
+            if (skipReason != null) {
+                val archived = archiveFile(out, result.report)
+                archived.writeAtomically(outputJson.encodeToString(result))
+                println("$skipReason · ${archived.path}")
+                return@withRunLock
+            }
             if (noLlm) {
                 out.resolve("$day-collect.json").writeAtomically(outputJson.encodeToString(result))
                 if (!keepUnseen) seen.markSeen(result.items, day)
@@ -176,13 +242,13 @@ private suspend fun runMain(args: Array<String>) {
     }
 }
 
-private fun costLedger(out: File, history: FileHistorySearch) = FileCostLedger(out.resolve("cost-ledger")) { day ->
+internal fun costLedger(out: File, history: FileHistorySearch) = FileCostLedger(out.resolve("cost-ledger")) { day ->
     val prior = history.runs(day.plusDays(1), 1).firstOrNull()
     history.archivedCost(day, day, reserved = true, skipStartedAt = prior?.report?.startedAt) +
         (prior?.report?.llmCalls?.sumOf { maxOf(it.costUsd, it.reservedUsd) } ?: 0.0)
 }
 
-private suspend fun runBackfill(args: Array<String>, secrets: SecretProvider, defaults: PipelineConfig) {
+private suspend fun runBackfill(args: Array<String>, secrets: SecretProvider, defaults: PipelineConfig, out: File) {
     val period = args.getOrNull(1).orEmpty()
     val days = if (period == "4w") 28 else {
         val match = requireNotNull(Regex("([1-9][0-9]*)d").matchEntire(period))
@@ -191,7 +257,7 @@ private suspend fun runBackfill(args: Array<String>, secrets: SecretProvider, de
     var dryRun = false
     var yes = false
     var force = false
-    var budget = defaults.backfillBudgetUsd
+    var budgetOverride: Double? = null
     var date = LocalDate.now()
     var index = 2
     while (index < args.size) {
@@ -199,7 +265,7 @@ private suspend fun runBackfill(args: Array<String>, secrets: SecretProvider, de
             "--dry-run" -> dryRun = true
             "--yes" -> yes = true
             "--force" -> force = true
-            "--budget" -> budget = requireNotNull(args.getOrNull(index++)?.toDoubleOrNull())
+            "--budget" -> budgetOverride = requireNotNull(args.getOrNull(index++)?.toDoubleOrNull())
             "--date" -> {
                 val value = args.getOrNull(index++)
                 date = requireNotNull(runCatching { LocalDate.parse(value) }.getOrNull()?.takeIf {
@@ -209,13 +275,17 @@ private suspend fun runBackfill(args: Array<String>, secrets: SecretProvider, de
             else -> throw IllegalArgumentException("지원하지 않는 백필 옵션입니다.")
         }
     }
-    require(budget.isFinite() && budget >= 0.0)
-    val out = File("out").apply { mkdirs() }
+    budgetOverride?.let { require(it.isFinite() && it >= 0.0) }
+    out.mkdirs()
     withRunLock(out) {
+        val settings = BudgetSettings.load(out)
+        val monthlyBudget = MonthlyBudget(out, settings)
         val sources = ConfigLoader.load(File("config/sources.local.json"))
         val execute = yes && !dryRun
         val history = FileHistorySearch(out, defaults.historyDays)
-        val costs = CostGuard(budget, ledger = if (execute) costLedger(out, history) else null, budgetPerRun = true)
+        val costs = CostGuard(budgetOverride ?: settings.backfillRunUsd,
+            ledger = if (execute) costLedger(out, history) else null, budgetPerRun = true,
+            allowsReservation = monthlyBudget::allows)
         val anthropicKey = secrets.get("ANTHROPIC_API_KEY")
         val openAiKey = secrets.get("OPENAI_API_KEY")
         val model = if (anthropicKey != null || openAiKey == null) defaults.models.classify else
@@ -235,7 +305,8 @@ private suspend fun runBackfill(args: Array<String>, secrets: SecretProvider, de
                 Classifier(defaults, profiles, PromptResolver(FilePromptStore(File("config/prompts").toPath())),
                     LlmRouter(providers, costs, mapOf("classify" to model), defaults.models.fallback, preflightBudget = true))
             } else null
-            Backfill(out, sources, HackerNewsAdapter(http), GitHubAdapter(http, secrets), model, costs, classifier)
+            Backfill(out, sources, HackerNewsAdapter(http), GitHubAdapter(http, secrets), model, costs, classifier,
+                monthlyBudget = monthlyBudget)
                 .run(date, days, dryRun, yes, force)
         } finally {
             providers.filterIsInstance<AutoCloseable>().forEach { it.close() }

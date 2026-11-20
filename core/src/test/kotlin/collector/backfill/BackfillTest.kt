@@ -1,5 +1,7 @@
 package collector.backfill
 
+import collector.budget.BudgetSettings
+import collector.budget.MonthlyBudget
 import collector.config.HnConfig
 import collector.config.GitHubConfig
 import collector.config.PipelineConfig
@@ -12,6 +14,7 @@ import collector.dev.readJson
 import collector.dev.writeAtomically
 import collector.llm.*
 import collector.model.DropReason
+import collector.model.RunReport
 import collector.pipeline.PipelineResult
 import collector.pipeline.Pipeline
 import collector.profile.ProfileLoader
@@ -20,8 +23,10 @@ import collector.prompt.PromptResolver
 import collector.source.GitHubAdapter
 import collector.source.HackerNewsAdapter
 import collector.stage.Classifier
+import collector.trend.TrendInput
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.*
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
@@ -48,7 +53,8 @@ class BackfillTest {
     private fun backfill(server: MockWebServer, budget: Double, github: MockWebServer? = null,
                          batchSize: Int = defaults.classifyBatchSize,
                          hnConfig: HnConfig = HnConfig(queries = listOf("AI")),
-                         writeCache: (File, String) -> Unit = File::writeAtomically): Backfill {
+                         writeCache: (File, String) -> Unit = File::writeAtomically,
+                         monthlyBudget: MonthlyBudget? = null): Backfill {
         val http = OkHttpClient()
         val guard = CostGuard(budget, ledger = FileCostLedger(out.resolve("cost-ledger")), budgetPerRun = true)
         val fake = object : LlmProvider {
@@ -75,7 +81,46 @@ class BackfillTest {
         return Backfill(out, SourcesFile(sources),
             HackerNewsAdapter(http, server.url("/").toString()), githubAdapter,
             model, guard, classifier, messages::add,
-            clock = { date.atStartOfDay().toInstant(ZoneOffset.UTC) }, writeCache = writeCache)
+            clock = { date.atStartOfDay().toInstant(ZoneOffset.UTC) }, writeCache = writeCache, monthlyBudget = monthlyBudget)
+    }
+
+    @Test fun overallMonthlyCapRejectsBeforeCollectionOrClassification() = runTest {
+        FileCostLedger(out.resolve("cost-ledger-analysis")).reserve(date, "analysis", 0.25)
+        val monthly = MonthlyBudget(out, BudgetSettings(monthlyTotalUsd = 0.50))
+        MockWebServer().use { server ->
+            backfill(server, 0.50, monthlyBudget = monthly).run(date, 1, false, true, false)
+            assertEquals(0, server.requestCount)
+            assertEquals(0, llmCalls)
+            assertContains(messages.single(), "전체 월 상한")
+        }
+    }
+
+    @Test fun backfillRestoresClassificationsForDailyRunSkippedByMonthlyCap() = runTest {
+        val capped = MonthlyBudget(out, BudgetSettings(monthlyTotalUsd = 0.0))
+        val skipped = Pipeline(emptyList(), JsonFileSeenStore(out.resolve("seen.json")),
+            clock = { newest.atStartOfDay().toInstant(ZoneOffset.UTC) }, zone = ZoneOffset.UTC,
+            paidStageSkipReason = checkNotNull(capped.dailySkipReason(newest, 0.50))).run(SourcesFile(emptyList()))
+        val archive = out.resolve("runs/$newest-skipped.json")
+        val skippedJson = outputJson.encodeToString(skipped)
+        archive.writeAtomically(skippedJson)
+        val state = out.resolve("state/$newest.json")
+        val brokenJson = "{"
+        state.writeAtomically(brokenJson)
+        assertEquals(skipped, TrendInput.read(out, date).runs[newest])
+
+        MockWebServer().use { server ->
+            server.story(newest)
+            val uncapped = MonthlyBudget(out, BudgetSettings())
+            backfill(server, 0.50, monthlyBudget = uncapped).run(date, 1, false, true, false)
+            assertEquals(1, llmCalls)
+            val trend = TrendInput.read(out, date)
+            assertEquals(setOf(newest), trend.backfillDates)
+            assertEquals(result(newest)!!.classified.single(), trend.runs.getValue(newest).classified.single())
+        }
+        assertContains(messages, "읽을 수 없는 실행 파일: ${state.path}")
+        assertEquals(brokenJson, state.readText())
+        assertEquals(skippedJson, archive.readText())
+        assertFalse(out.resolve("$newest.json").exists())
     }
 
     private fun MockWebServer.story(day: LocalDate, id: String = "story") {
@@ -84,6 +129,11 @@ class BackfillTest {
     }
 
     private fun result(day: LocalDate) = readJson<PipelineResult>(out.resolve("backfill/$day.json"))
+
+    private fun dailyResultJson(day: String): String {
+        val report = RunReport(day, "${day}T00:00:00Z", emptyList(), emptyList(), emptyMap(), 0)
+        return outputJson.encodeToString(PipelineResult(emptyList(), emptyList(), report))
+    }
 
     @Test fun forceDryRunPreservesInterruptedReplacement() = runTest {
         MockWebServer().use { server ->
@@ -178,7 +228,8 @@ class BackfillTest {
             val seenContent = """{"keyDates":{"hn:story":"$previous"}}"""
             val seen = out.resolve("seen.json").apply { writeText(seenContent) }
             val metrics = out.resolve("metrics.json").apply { writeText("[]") }
-            val daily = out.resolve("$previous.json").apply { writeText("{}") }
+            val dailyContent = dailyResultJson(previous.toString())
+            val daily = out.resolve("$previous.json").apply { writeText(dailyContent) }
             server.story(newest)
             val backfill = backfill(server, 0.5)
             backfill.run(date, 2, dryRun = true, yes = true, force = false)
@@ -198,7 +249,7 @@ class BackfillTest {
             assertEquals(1, llmCalls)
             assertEquals(seenContent, seen.readText())
             assertEquals("[]", metrics.readText())
-            assertEquals("{}", daily.readText())
+            assertEquals(dailyContent, daily.readText())
             assertTrue(FileHistorySearch(out, 30).runs(date, 1).isEmpty())
         }
     }
@@ -206,7 +257,10 @@ class BackfillTest {
     @Test fun skipsCompletedAndActualRunsEvenWhenForcingBackfill() = runTest {
         MockWebServer().use { server ->
             val paths = listOf("$previous.json", "state/${date.minusDays(3)}.json", "runs/${date.minusDays(4)}-archive.json")
-            paths.forEach { out.resolve(it).apply { parentFile.mkdirs(); writeText("{}") } }
+            val dailyFiles = paths.associateWith { path ->
+                dailyResultJson(path.substringAfterLast('/').take(10))
+                    .also { out.resolve(path).writeAtomically(it) }
+            }
             server.story(newest)
             val backfill = backfill(server, 0.5)
             backfill.run(date, 4, dryRun = false, yes = true, force = false)
@@ -216,7 +270,7 @@ class BackfillTest {
             backfill.run(date, 4, dryRun = false, yes = true, force = true)
             assertEquals(2, server.requestCount)
             assertEquals("replacement", result(newest)!!.items.single().externalId)
-            paths.forEach { assertEquals("{}", out.resolve(it).readText()) }
+            dailyFiles.forEach { (path, json) -> assertEquals(json, out.resolve(path).readText()) }
         }
     }
 

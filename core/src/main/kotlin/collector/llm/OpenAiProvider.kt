@@ -41,7 +41,7 @@ class OpenAiProvider(
             .addUserMessage(req.user)
             .maxCompletionTokens(req.maxOutputTokens.toLong())
             .jsonSchemaResponseFormat(JsonSchema.builder().name(req.schemaName).schema(schema).strict(true).build())
-        if (req.model.startsWith("gpt-5") || Regex("^o[134](?:-|$)").containsMatchIn(req.model)) {
+        if (req.model.startsWith("gpt-5") || req.model.startsWith("gpt-6.2-sol") || Regex("^o[134](?:-|$)").containsMatchIn(req.model)) {
             params.reasoningEffort(ReasoningEffort.of(req.effort.name.lowercase()))
         }
 

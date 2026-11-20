@@ -30,11 +30,12 @@ internal sealed interface Response<out T> {
 
 internal suspend inline fun <reified T> structuredCall(
     router: LlmRouter, stage: String, prompts: List<ResolvedPrompt>, system: String,
-    user: JsonObject, schema: JsonObject, tokens: Int, retryInvalid: Boolean = false, allowFallback: Boolean = true
+    user: JsonObject, schema: JsonObject, tokens: Int, retryInvalid: Boolean = false, allowFallback: Boolean = true,
+    effort: Effort = Effort.LOW
 ): Response<T> {
     repeat(if (retryInvalid) 2 else 1) {
         try {
-            val response = router.complete(stage, LlmRequest("", system, user.toString(), schema, stage, tokens, Effort.LOW),
+            val response = router.complete(stage, LlmRequest("", system, user.toString(), schema, stage, tokens, effort),
                 prompts.first().promptId, prompts.first().version, prompts.associate { it.promptId to it.version },
                 fallbackOnInvalidJson = false, allowFallback = allowFallback)
             if (response.refused) return Response.Failed("응답 거절")

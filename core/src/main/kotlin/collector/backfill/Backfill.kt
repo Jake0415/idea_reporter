@@ -1,5 +1,7 @@
 package collector.backfill
 
+import collector.budget.MONTHLY_TOTAL_EXCEEDED
+import collector.budget.MonthlyBudget
 import collector.config.GitHubConfig
 import collector.config.HnConfig
 import collector.config.SourcesFile
@@ -35,6 +37,7 @@ import java.security.MessageDigest
 import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
 import java.time.ZoneOffset
 import java.util.HexFormat
 import java.util.Locale
@@ -50,7 +53,8 @@ internal class Backfill(
     private val classifier: Classifier?,
     private val print: (String) -> Unit = ::println,
     private val clock: () -> Instant = Instant::now,
-    private val writeCache: (File, String) -> Unit = File::writeAtomically
+    private val writeCache: (File, String) -> Unit = File::writeAtomically,
+    private val monthlyBudget: MonthlyBudget? = null
 ) {
     @Serializable
     private data class CollectedSource(
@@ -70,6 +74,10 @@ internal class Backfill(
         val configById = configs.associateBy { it.sourceId }
         val githubSearch by lazy { github.historicalSearch(warn = print) }
         val execute = yes && !dryRun
+        if (execute && monthlyBudget?.allows(LocalDate.ofInstant(clock(), ZoneId.systemDefault()), costs.dailyBudgetUsd) == false) {
+            print("과거 채우기 실행 불가 · $MONTHLY_TOTAL_EXCEEDED")
+            return
+        }
         var collected = 0
         var filled = 0
         var filledItems = 0
@@ -78,7 +86,7 @@ internal class Backfill(
         for (offset in 1..days) {
             val day = date.minusDays(offset.toLong())
             val resultFile = directory.resolve("$day.json")
-            if (hasDailyRun(out, day)) continue
+            if (hasDailyRun(out, day, print)) continue
             val cache = directory.resolve("collected/$day.json")
             val cached = readJson<CollectionCache>(cache)
             if (!force && resultFile.isFile && cached?.replacing != true) continue

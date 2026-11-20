@@ -1,11 +1,14 @@
 package collector.pipeline
 
 import collector.NOW
+import collector.budget.BudgetSettings
+import collector.budget.MonthlyBudget
 import collector.config.GitHubConfig
 import collector.config.PipelineConfig
 import collector.config.SourceConfig
 import collector.config.SourcesFile
 import collector.dev.FileHistorySearch
+import collector.dev.FileCostLedger
 import collector.dev.JsonFileSeenStore
 import collector.dev.JsonFileTrackedStore
 import collector.dev.outputJson
@@ -36,6 +39,32 @@ class TrackingPipelineTest {
     private val day = LocalDate.of(2026, 11, 19)
     private val idea = TrackedIdea("tracking", "card", "Local runtime", "dev-tools", listOf("runtime"),
         emptyList(), TrackedIdea.Status.TRACKING, NOW.minusSeconds(120 * 86400L), null, 0.0, TrackedIdea.Trend.FLAT)
+
+    @Test fun monthlyCapSkipsPaidStagesAndRecordsReasonAfterCodeStages() = runTest {
+        val out = directory.toFile()
+        val today = LocalDate.ofInstant(NOW, ZoneOffset.UTC)
+        FileCostLedger(out.resolve("cost-ledger-analysis")).reserve(today, "analysis", 0.25)
+        val monthly = MonthlyBudget(out, BudgetSettings(monthlyTotalUsd = 0.50))
+        val collected = item("github", rawScore = 250)
+        val adapter = object : SourceAdapter {
+            override val id = "github"
+            override suspend fun fetch(config: SourceConfig, now: Instant) = listOf(collected)
+        }
+        val fake = object : LlmProvider {
+            override val id = ProviderId.ANTHROPIC
+            override suspend fun listModels() = emptyList<ModelInfo>()
+            override suspend fun complete(req: LlmRequest): LlmResult = error("unexpected paid stage")
+        }
+        val result = Pipeline(listOf(adapter), JsonFileSeenStore(out.resolve("seen.json")), clock = { NOW },
+            zone = ZoneOffset.UTC, full = full(fake), paidStageSkipReason = monthly.dailySkipReason(today, 0.50))
+            .run(SourcesFile(listOf(GitHubConfig())))
+
+        assertEquals(listOf(collected.key), result.items.map { it.key })
+        assertEquals(listOf("collect", "filter", "dedupe", "score"), result.report.stages.map { it.stage })
+        assertTrue(result.report.llmCalls.isEmpty())
+        assertContains(result.report.issues.single(), "전체 월 상한")
+        assertNull(MonthlyBudget(out, BudgetSettings()).dailySkipReason(today, 0.50))
+    }
 
     @Test
     fun `추적 근거는 재분류 없이 점수 또는 댓글이 증가한 항목만 다시 인용한다`() = runTest {

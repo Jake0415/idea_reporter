@@ -11,6 +11,12 @@ internal fun estimateInputTokens(vararg texts: String): Int {
     return ceil(ascii / 4.0 + nonAscii / 1.5).toInt()
 }
 
+internal fun analysisInputTokens(vararg texts: String): Int =
+    ceil((texts.sumOf { it.length } / 2.0 + 1000) * 1.2).toInt()
+
+internal fun ModelCatalog.analysisCostUsd(model: StageModel, input: Int, output: Int): Double =
+    costUsd(model.provider, model.model, input, output, 0, useLongContextPrice = input >= 217_000)
+
 @Serializable
 data class StageModel(val provider: ProviderId, val model: String)
 
@@ -32,12 +38,14 @@ class LlmRouter(
                          allowFallback: Boolean = true): LlmResult {
         val defaultTier = when (stage) {
             "classify", "track" -> ModelTier.FAST
-            "generate" -> ModelTier.STRONG
+            "generate", "analysis" -> ModelTier.STRONG
             "test" -> if (promptId == "ideas" || promptId == "criteria") ModelTier.STRONG else ModelTier.FAST
             else -> throw IllegalArgumentException("알 수 없는 LLM 단계입니다.")
         }
         val preferred = if (ProviderId.ANTHROPIC in providers) ProviderId.ANTHROPIC else ProviderId.OPENAI
-        val primary = stageModels[stage] ?: checkNotNull(catalog.defaultModel(preferred, defaultTier))
+        val primary = stageModels[stage] ?: if (stage == "analysis") StageModel(ProviderId.OPENAI, "gpt-6.2-sol")
+            else checkNotNull(catalog.defaultModel(preferred, defaultTier))
+        require(stage != "analysis" || primary.provider == ProviderId.OPENAI)
         val call = LlmCall(stage, primary.provider, primary.model, promptId, promptVersion, promptVersions = promptVersions)
         if (primary.provider !in providers) {
             costGuard.record(call.copy(error = "key_missing"))
@@ -45,7 +53,7 @@ class LlmRouter(
         }
         val tier = catalog.requirePrice(primary.provider, primary.model).tier
         val alternate = providers.keys.firstOrNull { it != primary.provider }
-            ?.takeIf { allowFallback && fallback && stageFallback[stage] != false }
+            ?.takeIf { stage != "analysis" && allowFallback && fallback && stageFallback[stage] != false }
             ?.let { catalog.defaultModel(it, tier) }
 
         val first = try {
@@ -71,8 +79,11 @@ class LlmRouter(
     }
 
     private suspend fun attempt(request: LlmRequest, call: LlmCall): LlmResult {
-        val timeout = stageTimeoutMillis[call.stage] ?: timeoutMillis ?: if (call.stage == "generate") 600_000 else 60_000
-        val projected = if (preflightBudget) {
+        val timeout = stageTimeoutMillis[call.stage] ?: timeoutMillis ?: if (call.stage in setOf("generate", "analysis")) 600_000 else 60_000
+        val projected = if (call.stage == "analysis" && preflightBudget) {
+            catalog.analysisCostUsd(StageModel(call.provider, call.model),
+                analysisInputTokens(request.system, request.user, request.jsonSchema.toString()), request.maxOutputTokens)
+        } else if (preflightBudget) {
             val price = catalog.requirePrice(call.provider, call.model)
             val input = estimateInputTokens(request.system, request.user, request.jsonSchema.toString()) + 1024
             val long = price.longContext?.takeIf { input > it.thresholdInputTokens }

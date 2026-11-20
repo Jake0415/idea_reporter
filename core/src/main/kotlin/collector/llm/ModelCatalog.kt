@@ -45,7 +45,11 @@ class ModelCatalog(private val prices: List<ModelPrice>) {
         find(provider, model) ?: throw LlmConfigException(model)
 
     fun costUsd(provider: ProviderId, model: String, input: Int, output: Int, cached: Int): Double =
-        costUsd(requirePrice(provider, model), LlmUsage(input, output, cached))
+        costUsd(provider, model, input, output, cached, useLongContextPrice = false)
+
+    internal fun costUsd(provider: ProviderId, model: String, input: Int, output: Int, cached: Int,
+                         useLongContextPrice: Boolean): Double =
+        costUsd(requirePrice(provider, model), LlmUsage(input, output, cached), useLongContextPrice)
 
     internal fun response(provider: ProviderId, model: String, usage: LlmUsage, content: () -> String?): LlmResult {
         val price = find(provider, model)
@@ -69,8 +73,8 @@ class ModelCatalog(private val prices: List<ModelPrice>) {
             usage.cachedInputTokens, cost, text == null, usage.cacheWriteTokens, fallback, unverified)
     }
 
-    private fun costUsd(price: ModelPrice, usage: LlmUsage): Double {
-        val long = price.longContext?.takeIf { usage.inputTokens > it.thresholdInputTokens }
+    private fun costUsd(price: ModelPrice, usage: LlmUsage, useLongContextPrice: Boolean = false): Double {
+        val long = price.longContext?.takeIf { useLongContextPrice || usage.inputTokens > it.thresholdInputTokens }
         val inputPrice = long?.input ?: price.inputUsd
         val outputPrice = long?.output ?: price.outputUsd
         val uncached = usage.inputTokens - usage.cachedInputTokens - usage.cacheWriteTokens

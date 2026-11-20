@@ -64,14 +64,16 @@ class Pipeline(
     private val zone: ZoneId = ZoneId.systemDefault(),
     private val sourceTimeout: Duration = 45.seconds,
     private val onStage: (String) -> Unit = {},
-    private val full: FullPipeline? = null
+    private val full: FullPipeline? = null,
+    private val paidStageSkipReason: String? = null
 ) {
     private val adapterById = adapters.associateBy { it.id }
 
     suspend fun run(file: SourcesFile): PipelineResult {
         val startedAt = clock()
         val today = LocalDate.ofInstant(startedAt, zone)
-        val tracked = full?.tracked().orEmpty()
+        val paid = full?.takeIf { paidStageSkipReason == null }
+        val tracked = paid?.tracked().orEmpty()
         val totalStart = System.nanoTime()
         val stages = mutableListOf<StageResult>()
         val dropped = mutableListOf<DroppedItem>()
@@ -82,7 +84,7 @@ class Pipeline(
         var t = System.nanoTime()
         val (fetches, search) = coroutineScope {
             val regular = configs.map { config -> async { fetchOne(config, startedAt) } }
-            val tracking = async { full?.search(tracked, configs, adapterById, startedAt, file.excludeKeywords) }
+            val tracking = async { paid?.search(tracked, configs, adapterById, startedAt, file.excludeKeywords) }
             regular.awaitAll() to tracking.await()
         }
         val normal = fetches.flatMap { it.items }
@@ -122,10 +124,11 @@ class Pipeline(
             stages = stages,
             dropCounts = dropped.groupingBy { it.reason }.eachCount(),
             totalMillis = ms(totalStart),
-            issues = trackingIssues + fetches.mapNotNull { it.warning }
+            issues = trackingIssues + fetches.mapNotNull { it.warning } + listOfNotNull(paidStageSkipReason),
+            paidStagesSkipped = paidStageSkipReason != null
         )
         val base = PipelineResult(scored, dropped, report)
-        return full?.takeUnless { it.collectOnly }?.run(base, collected, tracking, tracked, startedAt, today, onStage) ?: base
+        return paid?.takeUnless { it.collectOnly }?.run(base, collected, tracking, tracked, startedAt, today, onStage) ?: base
     }
 
     private data class Fetch(val source: SourceResult, val items: List<Item> = emptyList(), val warning: String? = null)

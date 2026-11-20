@@ -12,6 +12,7 @@ object PromptCatalog {
     val entries: Map<String, PromptInfo> = buildMap {
         put("classify", PromptInfo("prompts/classify.md", "1차 분류", "classify", "수집 항목과 프로필", "분류 결과"))
         put("ideas", PromptInfo("prompts/ideas.md", "아이디어 작성", "generate", "후보와 평가 기준", "아이디어 카드"))
+        put("analysis-opportunity", PromptInfo("prompts/analysis-opportunity.md", "사업성 분석", "analysis", "테마 지표와 근거", "기회 분야"))
         put("track", PromptInfo("prompts/track.md", "관심 아이디어 추적", "track", "추적 아이디어와 새 항목", "업데이트 요약"))
         put("criteria", PromptInfo("prompts/criteria.default.md", "평가 기준", "generate", "사용자 기준", "카드 작성 지침"))
         for (profile in listOf("tech-signal", "demand-signal", "market-signal")) {

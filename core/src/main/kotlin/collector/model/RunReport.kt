@@ -15,7 +15,8 @@ data class RunReport(
     val llmCalls: List<LlmCall> = emptyList(),
     val cardCount: Int = 0,
     val trackingUpdateCount: Int = 0,
-    val issues: List<String> = emptyList()
+    val issues: List<String> = emptyList(),
+    val paidStagesSkipped: Boolean = false
 ) {
     val costUsd: Double get() = llmCalls.sumOf { it.costUsd }
     val fetchedTotal: Int get() = sources.sumOf { it.fetched + it.trackingFetched }

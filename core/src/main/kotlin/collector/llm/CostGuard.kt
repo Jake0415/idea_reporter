@@ -42,7 +42,8 @@ class CostGuard(
     private val clock: Clock = Clock.systemDefaultZone(),
     initialSpentUsd: Double = 0.0,
     private val ledger: CostLedger? = null,
-    private val budgetPerRun: Boolean = false
+    private val budgetPerRun: Boolean = false,
+    private val allowsReservation: (LocalDate, Double) -> Boolean = { _, _ -> true }
 ) {
     internal data class Reservation(val day: LocalDate, val id: String, val amount: Double)
 
@@ -63,7 +64,8 @@ class CostGuard(
 
     internal suspend fun reserve(projectedUsd: Double): Reservation = mutex.withLock {
         resetIfNewDay()
-        if (spent >= dailyBudgetUsd || spent + projectedUsd > dailyBudgetUsd) throw BudgetExceededException()
+        if (spent >= dailyBudgetUsd || spent + projectedUsd > dailyBudgetUsd ||
+            !allowsReservation(date, projectedUsd)) throw BudgetExceededException()
         val reservation = Reservation(date, UUID.randomUUID().toString(), projectedUsd)
         ledger?.reserve(date, reservation.id, projectedUsd)
         spent += projectedUsd

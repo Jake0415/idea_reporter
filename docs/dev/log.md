@@ -103,3 +103,14 @@
 - 리뷰 4회차: Claude 통과 + 노이즈 분석, OpenAI 중간 1. `P8-fix-r4.md`(신규 3건·2일, 스무딩, risingCount 3·◆ 2일, 희소 태그 3건/3일 미만 제외, 모델 이름 태그 제외, 동의어 10개, 비교 건수 표시). 결과: 희소 태그 635개 제외, 뜨는 테마 coding-agent·claude-code·agent-skill·developer-tool, 지는 테마 local-llm·quantization·mcp.
 - 리뷰 5회차(마지막): 양쪽 높음 0, **중간 3 이관** — ① 증가율 1배 이하 테마가 뜨는 테마 표에도 들어가 지는 테마와 겹침(양쪽, 실제 출력에서 보임) ② 스무딩 식에 이번 주 일수 정규화 누락(Claude) ③ 수집 캐시 교체 실패 시 체크포인트 손실(OpenAI). 테스트 194개.
 - 이관 중간 3건 처리(사용자 요청, Claude 직접): ① 뜨는 테마 자격 = 비교 건수(출처 맞춤 시) ≥ risingCount **그리고** (데이터 부족 / 신규 / 증가율 > 1.0) — 하락 테마가 뜨는 표에 들어가던 문제 해결 ② 스무딩 증가율에 이번 주 일수 보정 `(이번 주 ÷ 실행 일수 × 7 + 1) ÷ (앞 주 일평균 × 7 + 1)` ③ 수집 캐시를 먼저 저장한 뒤 체크포인트 삭제(저장 실패 시 체크포인트 보존). 기존 기대값 4개 갱신(새 식으로 직접 계산: 같은 일평균 → ×1.0 등), 회귀 테스트 3개 추가(하락 테마 뜨는 표 제외, 일부 일수 주 ×1.0, 캐시 저장 실패 시 체크포인트 유지). 테스트 197개. 리포트: 뜨는 claude-code·developer-tool·coding-agent, 지는 local-llm·quantization·claude·benchmark·mcp(겹침 없음).
+
+## P9 S3 요청형 사업성 분석 + 사용자 금액 상한
+- 단가 확인(2026-11-20, OpenAI 공식 모델 페이지): `gpt-6.2-sol` 100만 토큰당 입력 $2.00·캐시 $0.10·출력 $10.00(추론 토큰 포함), 272K 초과 입력 2배·출력 1.5배, 추론 강도 low~max, structured outputs 지원. `models.default.json`에 priceVerified true로 추가.
+- 지시: `docs/dev/P9-S3-analysis.md`. 개발: Codex. 실행: `Main --analyze <테마…> [--yes] [--force] [--fit n] [--budget]`, `--analysis-detail`, `--analysis-list`. 결과 `out/analysis/<ID>.json/.txt/.html`. 프롬프트 `analysis-opportunity.md`(사용자 수정 가능). 분석은 OpenAI만(대체 공급자 없음), 별도 원장 `out/cost-ledger-analysis`.
+- 리뷰 1회차: Claude 중간 1(themeId 자유 문자열), OpenAI 높음 1(문자÷3 토큰 추정 과소 → 상한 초과 가능). `P9-fix-r1.md`(보수적 추정 (문자÷2+1000)×1.2·90% 예약·217K 할증, themeId enum, 댓글 출처, 리포트 근거 우선, 성공 실행만 재사용).
+- **사용자 요청: 금액 상한을 사용자가 설정·운용, 상한에 따라 동작** → 플랜 v4 §7-1, `P9-budget-settings.md`: `out/settings/budget.json`(일일 카드·분석 1건·분석 월·과거 채우기·전체 월(선택)·알림 80%·초과 동작 ASK/AUTO_FIT/STOP), `--set-budget`, `--budget-status`, 시나리오 A~F(맞춤안: 근거 줄이기→추론 medium→테마 축소), 전체 월 상한 시 일일 유료 단계 생략.
+- 리뷰 2회차: Claude 통과, OpenAI 높음 1(일회성 --budget 초과 정산 후 차단 자동 해제). `P9-fix-r2.md`(설정 변경·다음 달에만 해제, 효과 있는 맞춤안만, 실제 구성 값 재사용 키, 프롬프트 버전 키 등).
+- 리뷰 3회차: Claude 통과, OpenAI 높음 1(유료 단계 생략 날을 과거 채우기로 복구 불가). `P9-fix-r3.md`(paidStagesSkipped, 해제 시 차단 기록 삭제, 입력 해시 재사용 키).
+- 리뷰 4회차: Claude 통과, OpenAI 중간 2. `P9-fix-r4.md`(판정 설정 해시 재사용 키, 깨진 일일 결과 경고·집계 제외).
+- 리뷰 5회차(마지막): **Claude 통과**, OpenAI 높음 0·**중간 1 이관** — 손상 일일 결과의 특이 경우(파일명과 runDate 불일치, 잘못된 startedAt·publishedAt 문자열, 읽기 IOException)를 과거 채우기·트렌드 두 경로에서 같은 유효성 검사로 처리. 테스트 234개.
+- 실제 추정(호출 0회): 테마 3개(coding-agent·claude-code·developer-tool) 추정 $0.19·예약 $0.35, 이번 달 분석 $0/$5. 실제 분석은 사용자 승인 대기.

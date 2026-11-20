@@ -1,5 +1,6 @@
 package collector.config
 
+import collector.analysis.AnalysisConfig
 import collector.llm.StageModel
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -23,7 +24,8 @@ data class PipelineConfig(
     val dailyBudgetUsd: Double,
     val minDemandCandidates: Int = 2,
     val classifyConcurrency: Int = 3,
-    val backfillBudgetUsd: Double = 0.5
+    val backfillBudgetUsd: Double = 0.5,
+    val analysis: AnalysisConfig = AnalysisConfig()
 ) {
     init {
         require(classifyConcurrency >= 1) { "classifyConcurrency must be at least 1" }
