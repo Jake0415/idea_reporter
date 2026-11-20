@@ -22,7 +22,8 @@ data class PipelineConfig(
     val supplementSearch: Search,
     val dailyBudgetUsd: Double,
     val minDemandCandidates: Int = 2,
-    val classifyConcurrency: Int = 3
+    val classifyConcurrency: Int = 3,
+    val backfillBudgetUsd: Double = 0.5
 ) {
     init {
         require(classifyConcurrency >= 1) { "classifyConcurrency must be at least 1" }

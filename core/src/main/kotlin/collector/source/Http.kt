@@ -40,7 +40,8 @@ object Http {
         readResponse(client, request, includeErrorBody) { it.body?.string().orEmpty() }
 
     internal suspend fun <T> readResponse(
-        client: OkHttpClient, request: Request, includeErrorBody: Boolean, read: (Response) -> T
+        client: OkHttpClient, request: Request, includeErrorBody: Boolean,
+        requireSuccess: Boolean = true, read: (Response) -> T
     ): T = suspendCancellableCoroutine { continuation ->
         val call = client.newCall(request)
         continuation.invokeOnCancellation { call.cancel() }
@@ -52,7 +53,7 @@ object Http {
             override fun onResponse(call: Call, response: Response) {
                 continuation.resumeWith(runCatching {
                     response.use { resp ->
-                        if (!resp.isSuccessful) throw HttpStatusException(
+                        if (requireSuccess && !resp.isSuccessful) throw HttpStatusException(
                             resp.code, if (includeErrorBody) resp.body?.string().orEmpty().take(200) else null
                         )
                         read(resp)

@@ -15,7 +15,9 @@ class RuleFilter(excludeKeywords: List<String>) {
         .filter { it.isNotBlank() }
         .map { it to Regex("(?<![\\p{L}\\p{N}])" + Regex.escape(it.trim()) + "(?![\\p{L}\\p{N}])", RegexOption.IGNORE_CASE) }
 
-    fun filter(items: List<Item>, configs: Map<String, SourceConfig>, now: Instant): FilterResult {
+    fun filter(
+        items: List<Item>, configs: Map<String, SourceConfig>, now: Instant, historicalStart: Instant? = null
+    ): FilterResult {
         val kept = mutableListOf<Item>()
         val dropped = mutableListOf<DroppedItem>()
         for (item in items) {
@@ -24,7 +26,8 @@ class RuleFilter(excludeKeywords: List<String>) {
             val window = override?.window() ?: config?.window()
             val minRawScore = override?.minRawScore ?: config?.minRawScore
             val reason = when {
-                window != null && item.publishedAt.isBefore(now.minus(window)) ->
+                historicalStart != null && (item.publishedAt < historicalStart || item.publishedAt >= now) ||
+                    historicalStart == null && window != null && item.publishedAt.isBefore(now.minus(window)) ->
                     DropReason.OUT_OF_WINDOW to "게시 ${item.publishedAt}"
                 minRawScore != null && item.rawScore < minRawScore ->
                     DropReason.LOW_SOURCE_SCORE to "점수 ${item.rawScore} < $minRawScore"

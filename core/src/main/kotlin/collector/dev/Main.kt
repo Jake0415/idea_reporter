@@ -1,5 +1,6 @@
 package collector.dev
 
+import collector.backfill.Backfill
 import collector.config.ConfigLoader
 import collector.config.DuplicateRssFeedNameException
 import collector.config.PipelineConfig
@@ -10,6 +11,7 @@ import collector.model.RunReport
 import collector.pipeline.FullPipeline
 import collector.pipeline.Pipeline
 import collector.pipeline.PipelineResult
+import collector.port.SecretProvider
 import collector.profile.ProfileLoader
 import collector.prompt.FilePromptStore
 import collector.prompt.PromptResolver
@@ -21,6 +23,7 @@ import collector.source.ProductHuntAdapter
 import collector.source.RedditAdapter
 import collector.source.RssAdapter
 import collector.source.Http
+import collector.stage.Classifier
 import collector.stage.IdeaGenerator
 import collector.trend.publishTrend
 import kotlinx.coroutines.runBlocking
@@ -45,7 +48,8 @@ fun main(args: Array<String>) {
         println("실행 실패 · ${safeFailure(e)}")
         when (e) {
             is DuplicateRssFeedNameException -> println("출처 설정 오류 · ${e.message}")
-            is IllegalArgumentException -> println("사용법 · --keep-unseen --no-llm --budget <USD> | --trend [--date yyyy-MM-dd]")
+            is IllegalArgumentException -> println("사용법 · --keep-unseen --no-llm --budget <USD> | --trend [--date yyyy-MM-dd] | " +
+                "--backfill <4w|Nd> [--dry-run] [--yes] [--force] [--budget <usd>] [--date yyyy-MM-dd]")
             is RunLockedException -> println("다른 실행이 진행 중입니다.")
         }
         exitProcess(1)
@@ -75,6 +79,10 @@ private suspend fun runMain(args: Array<String>) {
         return
     }
     val defaults = PipelineConfig.defaults
+    if (args.firstOrNull() == "--backfill") {
+        runBackfill(args, secrets, defaults)
+        return
+    }
     var budget = defaults.dailyBudgetUsd
     var keepUnseen = false
     var noLlm = false
@@ -103,11 +111,7 @@ private suspend fun runMain(args: Array<String>) {
             prompts.resolve("profile.$id.analysis")
         }
         val history = FileHistorySearch(out, defaults.historyDays)
-        val ledger = if (noLlm) null else FileCostLedger(out.resolve("cost-ledger")) { day ->
-            val prior = history.runs(day.plusDays(1), 1).firstOrNull()
-            history.archivedCost(day, day, reserved = true, skipStartedAt = prior?.report?.startedAt) +
-                (prior?.report?.llmCalls?.sumOf { maxOf(it.costUsd, it.reservedUsd) } ?: 0.0)
-        }
+        val ledger = if (noLlm) null else costLedger(out, history)
         val costs = CostGuard(budget, ledger = ledger)
         val http = Http.client()
         val providers = mutableListOf<LlmProvider>()
@@ -164,6 +168,75 @@ private suspend fun runMain(args: Array<String>) {
             result.report.issues.forEach { println("· $it") }
             if (rendered == null) println("기존 카드 결과 유지 · 새 실행은 out/runs/에 보관")
             else println("결과 저장 · out/$day.json · out/$day.html · out/$day.txt")
+        } finally {
+            providers.filterIsInstance<AutoCloseable>().forEach { it.close() }
+            http.dispatcher.executorService.shutdown()
+            http.connectionPool.evictAll()
+        }
+    }
+}
+
+private fun costLedger(out: File, history: FileHistorySearch) = FileCostLedger(out.resolve("cost-ledger")) { day ->
+    val prior = history.runs(day.plusDays(1), 1).firstOrNull()
+    history.archivedCost(day, day, reserved = true, skipStartedAt = prior?.report?.startedAt) +
+        (prior?.report?.llmCalls?.sumOf { maxOf(it.costUsd, it.reservedUsd) } ?: 0.0)
+}
+
+private suspend fun runBackfill(args: Array<String>, secrets: SecretProvider, defaults: PipelineConfig) {
+    val period = args.getOrNull(1).orEmpty()
+    val days = if (period == "4w") 28 else {
+        val match = requireNotNull(Regex("([1-9][0-9]*)d").matchEntire(period))
+        requireNotNull(match.groupValues[1].toIntOrNull())
+    }
+    var dryRun = false
+    var yes = false
+    var force = false
+    var budget = defaults.backfillBudgetUsd
+    var date = LocalDate.now()
+    var index = 2
+    while (index < args.size) {
+        when (args[index++]) {
+            "--dry-run" -> dryRun = true
+            "--yes" -> yes = true
+            "--force" -> force = true
+            "--budget" -> budget = requireNotNull(args.getOrNull(index++)?.toDoubleOrNull())
+            "--date" -> {
+                val value = args.getOrNull(index++)
+                date = requireNotNull(runCatching { LocalDate.parse(value) }.getOrNull()?.takeIf {
+                    value?.length == 10 && it.toString() == value
+                })
+            }
+            else -> throw IllegalArgumentException("지원하지 않는 백필 옵션입니다.")
+        }
+    }
+    require(budget.isFinite() && budget >= 0.0)
+    val out = File("out").apply { mkdirs() }
+    withRunLock(out) {
+        val sources = ConfigLoader.load(File("config/sources.local.json"))
+        val execute = yes && !dryRun
+        val history = FileHistorySearch(out, defaults.historyDays)
+        val costs = CostGuard(budget, ledger = if (execute) costLedger(out, history) else null, budgetPerRun = true)
+        val anthropicKey = secrets.get("ANTHROPIC_API_KEY")
+        val openAiKey = secrets.get("OPENAI_API_KEY")
+        val model = if (anthropicKey != null || openAiKey == null) defaults.models.classify else
+            checkNotNull(ModelCatalog.defaults.defaultModel(ProviderId.OPENAI, ModelTier.FAST))
+        val providers = mutableListOf<LlmProvider>()
+        val http = Http.client()
+        try {
+            val classifier = if (execute) {
+                anthropicKey?.let { providers += AnthropicProvider(it) }
+                openAiKey?.let { providers += OpenAiProvider(it) }
+                val profiles = ProfileLoader.loadDefaults()
+                val routingIssues = ProfileLoader.validateRouting(sources, profiles)
+                if (routingIssues.isNotEmpty()) {
+                    println("출처 설정 오류:\n- " + routingIssues.joinToString("\n- "))
+                    throw InvalidSourceRoutingException()
+                }
+                Classifier(defaults, profiles, PromptResolver(FilePromptStore(File("config/prompts").toPath())),
+                    LlmRouter(providers, costs, mapOf("classify" to model), defaults.models.fallback, preflightBudget = true))
+            } else null
+            Backfill(out, sources, HackerNewsAdapter(http), GitHubAdapter(http, secrets), model, costs, classifier)
+                .run(date, days, dryRun, yes, force)
         } finally {
             providers.filterIsInstance<AutoCloseable>().forEach { it.close() }
             http.dispatcher.executorService.shutdown()

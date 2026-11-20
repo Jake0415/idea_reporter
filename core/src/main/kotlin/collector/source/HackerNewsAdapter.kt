@@ -8,6 +8,8 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneOffset
 
 /**
  * Hacker News — Algolia 검색 API. 검색어별로 [window] 안의 story를 최소 점수 이상만 가져온다.
@@ -21,16 +23,27 @@ class HackerNewsAdapter(
 
     override suspend fun fetch(config: SourceConfig, now: Instant): List<Item> {
         require(config is HnConfig) { "HackerNewsAdapter에는 HnConfig가 필요합니다" }
+        return search(config) { override ->
+            "created_at_i>${now.minus(override ?: config.window()).epochSecond}"
+        }
+    }
+
+    internal suspend fun fetchDay(config: HnConfig, day: LocalDate): List<Item> {
+        val start = day.atStartOfDay().toEpochSecond(ZoneOffset.UTC)
+        val end = day.plusDays(1).atStartOfDay().toEpochSecond(ZoneOffset.UTC)
+        return search(config) { "created_at_i>${start - 1},created_at_i<$end" }
+    }
+
+    private suspend fun search(config: HnConfig, window: (java.time.Duration?) -> String): List<Item> {
         val hits = LinkedHashMap<String, Item>()
         for (query in config.queries) {
             val override = config.overrideFor(query)
-            val since = now.minus(override?.window() ?: config.window()).epochSecond
             val minRawScore = override?.minRawScore ?: config.minRawScore
             val url = baseUrl.toHttpUrl().newBuilder()
                 .addPathSegments("api/v1/search_by_date")
                 .addQueryParameter("query", query)
                 .addQueryParameter("tags", "story")
-                .addQueryParameter("numericFilters", "created_at_i>$since,points>=$minRawScore")
+                .addQueryParameter("numericFilters", "${window(override?.window())},points>=$minRawScore")
                 .addQueryParameter("hitsPerPage", config.fetchPerQuery.coerceIn(1, 100).toString())
                 .build()
             val body = Http.getText(http, Request.Builder().url(url).build())

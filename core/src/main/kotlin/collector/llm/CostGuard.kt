@@ -41,14 +41,15 @@ class CostGuard(
     val dailyBudgetUsd: Double,
     private val clock: Clock = Clock.systemDefaultZone(),
     initialSpentUsd: Double = 0.0,
-    private val ledger: CostLedger? = null
+    private val ledger: CostLedger? = null,
+    private val budgetPerRun: Boolean = false
 ) {
     internal data class Reservation(val day: LocalDate, val id: String, val amount: Double)
 
     private val mutex = Mutex()
     private val history = mutableListOf<LlmCall>()
     private var date = LocalDate.now(clock)
-    private var spent = ledger?.total(date) ?: initialSpentUsd
+    private var spent = if (budgetPerRun) initialSpentUsd else ledger?.total(date) ?: initialSpentUsd
 
     init {
         require(dailyBudgetUsd.isFinite() && dailyBudgetUsd >= 0) { "일일 예산은 0 이상의 유한한 값이어야 합니다." }
@@ -74,7 +75,7 @@ class CostGuard(
             val reservedUsd = if (settled) 0.0 else reservation?.amount ?: 0.0
             if (reservation != null && settled) ledger?.settle(reservation.day, reservation.id, call.costUsd)
             resetIfNewDay()
-            if (reservation == null || reservation.day == date) {
+            if (budgetPerRun || reservation == null || reservation.day == date) {
                 spent += maxOf(call.costUsd, reservedUsd) - (reservation?.amount ?: 0.0)
             }
             synchronized(history) { history.add(if (reservedUsd > call.costUsd) call.copy(reservedUsd = reservedUsd) else call) }
@@ -85,7 +86,7 @@ class CostGuard(
         val today = LocalDate.now(clock)
         if (date != today) {
             date = today
-            spent = ledger?.total(today) ?: 0.0
+            if (!budgetPerRun) spent = ledger?.total(today) ?: 0.0
         }
     }
 }

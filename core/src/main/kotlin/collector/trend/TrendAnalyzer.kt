@@ -28,6 +28,9 @@ object TrendAnalyzer {
         fun week(dateOfRun: LocalDate) = 3 - (ChronoUnit.DAYS.between(dateOfRun, date) / config.weekDays).toInt()
         val runDays = runs.keys.groupingBy(::week).eachCount()
         val priorWeeks = (0..2).filter { it in runDays }
+        val backfillDays = runs.keys.count { it in input.backfillDates }
+        val comparableSources = setOf("hn", "github")
+        val matchSources = runs.keys.any { it in input.backfillDates && week(it) in 0..3 }
         fun priorDailyAverage(count: (Int) -> Int) =
             priorWeeks.map { count(it).toDouble() / runDays.getValue(it) }.average()
         val insufficient = runs.size < config.minimumDataDays || priorWeeks.size < 2
@@ -57,15 +60,30 @@ object TrendAnalyzer {
             .sortedWith(compareByDescending<Observation> { it.fresh }.thenByDescending { it.date })
             .distinctBy { week(it.date) to it.signal.item.key }
         val normalizer = TagNormalizer(config, input.themeMap.overrides)
-        val tagged = weeklyObservations.flatMap { row ->
-            normalizer.themes(row.signal.classification.tags).map { it to row }
-        }.groupBy({ it.first }, { it.second })
+        fun taggedRows(row: Observation): List<Pair<String, Observation>> {
+            val classification = row.signal.classification
+            return normalizer.themes(classification.tags, classification.topicKey).map { it to row }
+        }
+        val comparableByTheme = if (matchSources) observations.asSequence()
+            .filter { week(it.date) in 0..3 && it.fresh && (it.signal.item.source in comparableSources ||
+                it.signal.item.alsoSeenIn.any(comparableSources::contains)) }
+            .distinctBy { it.signal.item.key }
+            .flatMap(::taggedRows)
+            .groupBy({ it.first }, { it.second })
+        else emptyMap()
+        val tagged = weeklyObservations.flatMap(::taggedRows).groupBy({ it.first }, { it.second })
+        val tagDays = observations.asSequence().filter { week(it.date) in 0..3 }.flatMap(::taggedRows)
+            .groupBy({ it.first }, { it.second.date }).mapValues { (_, days) -> days.toSet().size }
+        val sparseTags = tagged.filter { (tag, rows) ->
+            rows.distinctBy { it.signal.item.key }.size < config.minThemeItems &&
+                tagDays.getValue(tag) < config.minThemeDays
+        }.keys
         val observedItems = weeklyObservations.map { it.signal.item.key }.toSet().size
         val broadTags = tagged.filterValues { rows ->
             rows.map { it.signal.item.key }.toSet().size * 10L >= observedItems * 3L
         }.keys.sorted()
         val themeMap = ThemeMap(input.themeMap.overrides, ThemeMapper.VERSION, broadTags)
-        val byTheme = tagged - broadTags.toSet()
+        val byTheme = tagged - broadTags.toSet() - sparseTags
         val examplesByTheme = byTheme.mapValues { (_, rows) -> topicExamples(rows.map { it.signal }, config) }
         val names = examplesByTheme.mapValues { (id, examples) ->
             if (examples.isEmpty()) id else "$id · 예: ${examples.take(2).joinToString(", ")}"
@@ -88,22 +106,33 @@ object TrendAnalyzer {
             card.id to (card.techSignals + card.demandSignals + card.competitors).map { it.itemId }.toSet()
         }
         val feedback = input.feedback.filter { it.cardId in cards }
+        val priorByTheme = mutableMapOf<String, Double>()
         val themes = byTheme.map { (id, rows) ->
             val weeks = (0..3).map { index -> rows.filter { week(it.date) == index } }
             val counts = weeks.map { it.size }
-            val prior = priorDailyAverage(counts::get)
+            val comparableWeeks = if (matchSources) (0..3).map { index ->
+                comparableByTheme[id].orEmpty().filter { week(it.date) == index }
+            } else weeks
+            val prior = priorDailyAverage { comparableWeeks[it].size }
+            priorByTheme[id] = prior
             val thisWeek = weeks.last().map { it.signal }
+            val comparableWeek = comparableWeeks.last().map { it.signal }
+            val comparableDays = comparableWeeks.last().map { it.date }.toSet().size
             val currentDays = runDays[3] ?: 1
-            val isNew = !insufficient && prior == 0.0 && thisWeek.isNotEmpty()
-            val growth = if (!insufficient && prior > 0) thisWeek.size.toDouble() / currentDays / prior else null
+            val weeklyPrior = prior * config.weekDays
+            val isNew = !insufficient && weeklyPrior == 0.0 && comparableWeek.size >= config.newMinCount &&
+                comparableDays >= config.newMinDays
+            val growth = if (!insufficient && weeklyPrior >= 1.0) (comparableWeek.size + 1) / (weeklyPrior + 1) else null
             val sources = thisWeek.flatMap { listOf(it.item.source) + it.item.alsoSeenIn }.distinct().sorted()
             val demand = thisWeek.count { it.classification.profile == "demand-signal" }
             val market = thisWeek.count { it.classification.profile == "market-signal" }
+            val comparableMarket = comparableWeek.count { it.classification.profile == "market-signal" }
+            val candidateDemand = comparableWeek.count { it.classification.profile == "demand-signal" }
             val priorMarket = priorWeeks.map { index ->
-                weeks[index].count { it.signal.classification.profile == "market-signal" }.toDouble() / runDays.getValue(index)
+                comparableWeeks[index].count { it.signal.classification.profile == "market-signal" }.toDouble() / runDays.getValue(index)
             }.average()
-            val overheated = !insufficient && market >= config.marketCount &&
-                market.toDouble() / currentDays >= config.marketGrowth * priorMarket
+            val overheated = !insufficient && comparableMarket >= config.marketCount &&
+                comparableMarket.toDouble() / currentDays >= config.marketGrowth * priorMarket
             val repos = repositoriesByTheme[id].orEmpty()
             val keys = rows.map { it.signal.item.key }.toSet()
             val reactions = feedback.filter { reaction -> cards.getValue(reaction.cardId).any { it in keys } }
@@ -122,14 +151,16 @@ object TrendAnalyzer {
                 stars = reactions.count { it.kind == Feedback.Kind.STAR },
                 notInterested = reactions.count { it.kind == Feedback.Kind.NOT_INTERESTED },
                 evidence = evidence, overheated = overheated, examples = examplesByTheme.getValue(id),
-                candidate = CandidateMarker.matches(growth, isNew, demand, sources.size, overheated, counts.last(), config))
+                candidate = CandidateMarker.matches(growth, isNew, candidateDemand, sources.size, overheated,
+                    comparableWeek.size, comparableDays, config), matchedSources = matchSources,
+                comparableCount = comparableWeek.size.takeIf { matchSources })
         }.sortedBy { it.id }
         val rising = themes.sortedWith(compareByDescending<ThemeRow> { it.isNew }.thenByDescending { it.growth }
             .thenByDescending { it.weeklyCounts.last() }.thenBy { it.id })
             .filter { it.weeklyCounts.last() >= config.risingCount }
         val risingRows = rising
             .sortedByDescending { it.candidate }.take(config.risingLimit.coerceAtMost(10))
-        val falling = themes.filter { row -> priorDailyAverage(row.weeklyCounts::get) * config.weekDays >= config.fallingAverage &&
+        val falling = themes.filter { row -> priorByTheme.getValue(row.id) * config.weekDays >= config.fallingAverage &&
             row.growth != null && row.growth <= config.fallingGrowth }
             .sortedWith(compareBy<ThemeRow> { it.growth }.thenBy { it.id }).take(config.fallingLimit)
         val spam = spamClusters(runs.filterKeys { it >= weekStart }, config)
@@ -142,7 +173,8 @@ object TrendAnalyzer {
         return TrendReport(date.toString(), start.toString(), insufficient, runs.size, themes, risingRows, falling,
             repositories.take(config.repositoryLimit), distribution(repositories.mapNotNull { it.language }),
             distribution(repositories.mapNotNull { it.license }), spam, summary, unmapped,
-            runs.values.flatMap { run -> run.report.failedSources.map { it.source } }.distinct().sorted(), broadTags) to themeMap
+            runs.values.flatMap { run -> run.report.failedSources.map { it.source } }.distinct().sorted(), broadTags,
+            backfillDays, sparseTags.size) to themeMap
     }
 
     private fun topicExamples(signals: List<Signal>, config: TrendConfig): List<String> {

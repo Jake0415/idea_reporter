@@ -18,7 +18,9 @@ data class TrendReport(
     val summary: List<String> = emptyList(),
     val unmappedRepeatCount: Int = 0,
     val failedSources: List<String> = emptyList(),
-    val broadTags: List<String> = emptyList()
+    val broadTags: List<String> = emptyList(),
+    val backfillDays: Int = 0,
+    val sparseTagCount: Int = 0
 )
 
 @Serializable
@@ -41,7 +43,9 @@ data class ThemeRow(
     val evidence: Map<String, List<TrendEvidence>> = emptyMap(),
     val overheated: Boolean = false,
     val candidate: Boolean = false,
-    val examples: List<String> = emptyList()
+    val examples: List<String> = emptyList(),
+    val matchedSources: Boolean = false,
+    val comparableCount: Int? = null
 )
 
 @Serializable

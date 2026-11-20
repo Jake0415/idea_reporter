@@ -14,12 +14,14 @@ class TrendTest {
     @TempDir lateinit var out: File
     private val date = LocalDate.parse("2026-11-20")
     private val now = date.atStartOfDay(java.time.ZoneOffset.UTC).toInstant()
+    private val singleItemThemes = TrendConfig.defaults.copy(minThemeItems = 1)
 
     private fun signal(id: String, topic: String, source: String = "hn", profile: String = "tech-signal",
-                       label: String = topic, tags: List<String> = listOf(topic)): Signal {
+                       label: String = topic, tags: List<String> = listOf(topic),
+                       topicKey: String = "product-$topic"): Signal {
         val item = Item(source, id, id, "https://example.com/$id", 40, publishedAt = now.minusSeconds(4 * 86400),
             extra = mapOf("forks" to "10", "language" to "Kotlin", "license" to "MIT"))
-        return Signal(item, ClassifiedItem(id, profile, 80.0, "", "", tags, topic, label))
+        return Signal(item, ClassifiedItem(id, profile, 80.0, "", "", tags, topicKey, label))
     }
 
     private fun run(day: LocalDate, signals: List<Signal> = emptyList(), drops: List<DroppedItem> = emptyList()) =
@@ -31,6 +33,188 @@ class TrendTest {
         out.resolve(path).apply { parentFile.mkdirs(); writeText(outputJson.encodeToString(run)) }
     }
 
+    @Test fun newThemesAndCandidatesRequireThreeItemsAcrossTwoDays() {
+        val config = TrendConfig.defaults.copy(minThemeItems = 2)
+        fun analyze(count: Int, spread: Boolean): TrendReport {
+            val runs = (0L..27L).associate { offset ->
+                val day = date.minusDays(offset)
+                val signals = when (offset) {
+                    0L -> (1..(count - if (spread) 1 else 0)).map {
+                        signal("current-$it", "product-$it", profile = "demand-signal", tags = listOf("target"))
+                    }
+                    1L -> if (spread) listOf(signal("repo", "repo", "github", tags = listOf("target"))) else emptyList()
+                    else -> emptyList()
+                }
+                day to run(day, signals)
+            }
+            return TrendAnalyzer.analyze(TrendInput(runs), date, config)
+        }
+        val two = analyze(2, true)
+        assertEquals("—", TrendAnalyzer.growthLabel(two.themes.single()))
+        assertTrue(two.rising.isEmpty())
+        val oneDay = analyze(3, false).rising.single()
+        assertEquals("—", TrendAnalyzer.growthLabel(oneDay))
+        assertFalse(oneDay.candidate)
+        val twoDays = analyze(3, true).rising.single()
+        assertEquals("신규", TrendAnalyzer.growthLabel(twoDays))
+        assertTrue(twoDays.candidate)
+    }
+
+    @Test fun themesExcludeSparseAndProductTagsAndApplyNewSynonyms() {
+        val repo = signal("repo", "product", "github",
+            tags = listOf("product", "GPT-5", "qwen3", "gpt-tools", "mcp-server", "rare"), topicKey = "product")
+        val runs = (0L..2L).associate { offset ->
+            val day = date.minusDays(offset)
+            day to if (offset == 2L) run(day, listOf(repo) + (1..2).map {
+                signal("tool-$it", "tool-$it", tags = listOf("mcp-tool"))
+            }) else run(day, drops = listOf(DroppedItem(repo.item, DropReason.ALREADY_SEEN)))
+        }
+        val report = TrendAnalyzer.analyze(TrendInput(runs), date)
+        assertEquals(listOf("gpt-tool", "mcp", "rare"), report.themes.map { it.id })
+        assertEquals(1, report.themes.single { it.id == "gpt-tool" }.weeklyCounts.last())
+        assertEquals(3, report.themes.single { it.id == "mcp" }.weeklyCounts.last())
+        val singleDay = TrendAnalyzer.analyze(TrendInput(mapOf(date to runs.getValue(date.minusDays(2)))), date)
+        assertEquals(listOf("mcp"), singleDay.themes.map { it.id })
+        val rendered = TrendReportRenderer().render(singleDay)
+        assertContains(rendered.text, "희소 태그 2개 제외")
+        assertContains(rendered.html, "희소 태그 2개 제외")
+    }
+
+    @Test fun defaultSynonymsIncludeNoiseReductionAliases() {
+        val config = TrendConfig.defaults.copy(excludeThemes = emptyList())
+        val normalizer = TagNormalizer(config, emptyMap())
+        for ((alias, theme) in mapOf(
+            "llm-benchmark" to "benchmark", "claude-model" to "claude", "mcp-server" to "mcp",
+            "mcp-tool" to "mcp", "llm-inference" to "inference-optimization", "ai-coding" to "coding-agent",
+            "coding-assistant" to "coding-agent", "model-compression" to "quantization",
+            "quantized-model" to "quantization", "ai-agents" to "ai-agent"
+        )) assertEquals(setOf(theme), normalizer.themes(listOf(alias)))
+        assertTrue(TagNormalizer(TrendConfig.defaults, emptyMap()).themes(listOf("ai-agents")).isEmpty())
+    }
+
+    @Test fun backfillUsesActualRunsFirstAndMatchesSourcesForGrowth() {
+        val older = date.minusDays(14)
+        val recent = date.minusDays(7)
+        val repeat = signal("repeat", "target")
+        val olderRepeats = (1..3).map { signal("repeat-$it", "target", source = "github") }
+        val outsideWindow = date.minusDays(30)
+        save("$outsideWindow.json", run(outsideWindow, olderRepeats))
+        save("backfill/$older.json", run(older, listOf(repeat)))
+        save("backfill/$recent.json", run(recent, listOf(signal("shadow", "target"))))
+        save("runs/$recent-archive.json", run(recent, listOf(
+            signal("prior-hn", "target"), signal("prior-rss", "target", source = "rss")
+        )))
+        save("$date.json", run(date, listOf(
+            signal("current-gh", "target", source = "github", profile = "demand-signal"),
+            signal("current-market", "target", source = "rss", profile = "market-signal"),
+            signal("current-demand", "target", source = "rss", profile = "demand-signal")
+        ), (olderRepeats + repeat).map { DroppedItem(it.item, DropReason.ALREADY_SEEN) }))
+        val config = TrendConfig.defaults.copy(minimumDataDays = 3, risingCount = 1, marketCount = 1,
+            candidateDemand = 1, candidateGrowth = 2.0, candidateSources = 2)
+        val input = TrendInput.read(out, date, config)
+        assertEquals(setOf(older), input.backfillDates)
+        assertEquals(setOf("prior-hn", "prior-rss"), input.runs.getValue(recent).items.map { it.externalId }.toSet())
+        val report = TrendAnalyzer.analyze(input, date, config)
+        val theme = report.themes.single()
+        assertEquals(1, report.backfillDays)
+        assertEquals(listOf(0, 1, 2, 7), theme.weeklyCounts)
+        assertEquals(0.25, theme.growth)
+        assertTrue(input.earlierClassifications.none { it.item.externalId == "shadow" })
+        assertEquals(0, report.unmappedRepeatCount)
+        assertFalse(theme.overheated)
+        assertFalse(theme.candidate)
+        val rendered = TrendReportRenderer().render(report)
+        for (body in listOf(rendered.html, rendered.text)) {
+            assertContains(body, "7 (비교 1)")
+            assertContains(body, "HN·GH 새 항목 기준")
+            assertContains(body, "과거 채우기 1일(HN·GitHub만, 점수는 채운 시점 기준)")
+        }
+    }
+
+    @Test fun matchedSourcesCandidateUsesAllCurrentSources() {
+        val older = date.minusDays(14)
+        val recent = date.minusDays(7)
+        save("backfill/$older.json", run(older, listOf(signal("older", "target"))))
+        save("$recent.json", run(recent, listOf(signal("recent", "target"))))
+        val first = date.minusDays(1)
+        save("$first.json", run(first, listOf(signal("earlier-current", "target"))))
+        save("$date.json", run(date, listOf(
+            signal("first", "target", profile = "demand-signal"),
+            signal("second", "target"),
+            signal("rss", "target", source = "rss")
+        )))
+        val config = TrendConfig.defaults.copy(minimumDataDays = 3, candidateGrowth = 0.5)
+        val theme = TrendAnalyzer.analyze(TrendInput.read(out, date, config), date, config).themes.single()
+        assertTrue(theme.candidate)
+    }
+
+    @Test fun matchedSourcesCountsGitHubItemOnlyOnFirstObservation() {
+        val older = date.minusDays(14)
+        val recent = date.minusDays(7)
+        val repo = signal("repo", "target", source = "github")
+        save("backfill/$older.json", run(older, listOf(repo)))
+        save("$recent.json", run(recent, listOf(signal("prior", "target"))))
+        save("$date.json", run(date, listOf(repo, signal("current", "target"))))
+        val config = TrendConfig.defaults.copy(minimumDataDays = 3)
+        val theme = TrendAnalyzer.analyze(TrendInput.read(out, date, config), date, config).themes.single()
+        assertEquals(listOf(0, 1, 1, 2), theme.weeklyCounts)
+        assertEquals(0.25, theme.growth)
+    }
+
+    @Test fun matchedSourcesFiltersBeforeDeduplicating() {
+        val older = date.minusDays(14)
+        val recent = date.minusDays(7)
+        val first = date.minusDays(1)
+        val rss = signal("rss", "target", source = "rss")
+        save("backfill/$older.json", run(older, listOf(signal("older", "target"))))
+        save("$recent.json", run(recent, listOf(signal("recent", "target"))))
+        save("$first.json", run(first, listOf(rss)))
+        save("$date.json", run(date, listOf(rss.copy(item = rss.item.copy(alsoSeenIn = listOf("hn"))))))
+        val config = TrendConfig.defaults.copy(minimumDataDays = 3)
+        val theme = TrendAnalyzer.analyze(TrendInput.read(out, date, config), date, config).themes.single()
+        assertEquals(listOf(0, 1, 1, 1), theme.weeklyCounts)
+        assertEquals(0.25, theme.growth)
+    }
+
+    @Test fun candidateUsesSameDeduplicatedSourcesAsTable() {
+        val older = date.minusDays(14)
+        val recent = date.minusDays(7)
+        val first = date.minusDays(1)
+        val demand = signal("demand", "target", profile = "demand-signal")
+        save("$older.json", run(older))
+        save("$recent.json", run(recent))
+        val earlier = signal("earlier-tech", "target")
+        val later = signal("later-tech", "target")
+        save("$first.json", run(first, listOf(earlier, demand.copy(item = demand.item.copy(alsoSeenIn = listOf("github"))))))
+        save("$date.json", run(date, listOf(later, demand)))
+        val config = TrendConfig.defaults.copy(minimumDataDays = 3)
+        fun theme() = TrendAnalyzer.analyze(TrendInput.read(out, date, config), date, config).themes.single()
+        assertEquals(listOf("hn"), theme().sources)
+        assertFalse(theme().candidate)
+        save("$date.json", run(date, listOf(later, demand.copy(item = demand.item.copy(alsoSeenIn = listOf("rss"))))))
+        assertEquals(listOf("hn", "rss"), theme().sources)
+        assertTrue(theme().candidate)
+    }
+
+    @Test fun matchedSourcesCandidateIgnoresSourcesFromDiscardedObservations() {
+        val older = date.minusDays(14)
+        val recent = date.minusDays(7)
+        val first = date.minusDays(1)
+        val demand = signal("demand", "target", profile = "demand-signal")
+        save("backfill/$older.json", run(older))
+        save("$recent.json", run(recent))
+        val earlier = signal("earlier-tech", "target")
+        val later = signal("later-tech", "target")
+        save("$first.json", run(first, listOf(earlier, demand.copy(item = demand.item.copy(alsoSeenIn = listOf("rss"))))))
+        save("$date.json", run(date, listOf(later, demand)))
+        val config = TrendConfig.defaults.copy(minimumDataDays = 3)
+        fun theme() = TrendAnalyzer.analyze(TrendInput.read(out, date, config), date, config).themes.single()
+        assertEquals(listOf("hn"), theme().sources)
+        assertFalse(theme().candidate)
+        save("$date.json", run(date, listOf(later, demand.copy(item = demand.item.copy(alsoSeenIn = listOf("rss"))))))
+        assertTrue(theme().candidate)
+    }
+
     @Test fun history() {
         val old = signal("old", "rising")
         val fading = (1..2).map { signal("fade$it", "fading") }
@@ -40,6 +224,7 @@ class TrendTest {
                 21L -> fading + old
                 14L, 7L -> fading
                 0L -> listOf(signal("now", "rising"), signal("new1", "fresh"), signal("new2", "fresh"))
+                1L -> listOf(signal("new3", "fresh"))
                 else -> emptyList()
             }
             val dropped = if (offset == 0L) listOf(DroppedItem(old.item, DropReason.ALREADY_SEEN)) else emptyList()
@@ -50,8 +235,9 @@ class TrendTest {
         val report = TrendAnalyzer.analyze(TrendInput.read(out, date), date)
         val rows = report.themes.associateBy { it.id }
         assertEquals(28, report.dataDays)
+        assertFalse(report.insufficientData)
         assertEquals(listOf(1, 0, 0, 3), rows.getValue("rising").weeklyCounts)
-        assertEquals(9.0, rows.getValue("rising").growth)
+        assertEquals("—", TrendAnalyzer.growthLabel(rows.getValue("rising")))
         assertEquals(2, rows.getValue("rising").newCount)
         assertTrue(rows.getValue("fresh").isNew)
         assertEquals(listOf("fading"), report.falling.map { it.id })
@@ -81,7 +267,7 @@ class TrendTest {
         assertEquals(listOf(publishedCard), representative.cards)
         assertEquals(listOf(old.item), representative.items)
         out.resolve("feedback.json").writeText(outputJson.encodeToString(listOf(Feedback("published", Feedback.Kind.STAR))))
-        val report = TrendAnalyzer.analyze(TrendInput.read(out, date), date)
+        val report = TrendAnalyzer.analyze(TrendInput.read(out, date), date, singleItemThemes)
         assertEquals(1, report.dataDays)
         assertEquals(1, report.unmappedRepeatCount)
         assertEquals(setOf(old.item.key, missing.item.key), report.repositories.map { it.itemKey }.toSet())
@@ -113,7 +299,7 @@ class TrendTest {
         save("runs/$date-later.json", archived)
         out.resolve("feedback.json").writeText(outputJson.encodeToString(listOf(Feedback(card.id, Feedback.Kind.STAR))))
 
-        val report = TrendAnalyzer.analyze(TrendInput.read(out, date), date)
+        val report = TrendAnalyzer.analyze(TrendInput.read(out, date), date, singleItemThemes)
         val rows = report.themes.associateBy { it.id }
         assertEquals(1, rows.getValue("published").newCount)
         assertEquals(1, rows.getValue("published").stars)
@@ -131,7 +317,7 @@ class TrendTest {
         save("runs/$date-noon.json", noon.copy(report = noon.report.copy(startedAt = now.plusSeconds(60).toString())))
         save("$date.json", afternoon.copy(report = afternoon.report.copy(startedAt = now.plusSeconds(120).toString())))
 
-        val report = TrendAnalyzer.analyze(TrendInput.read(out, date), date)
+        val report = TrendAnalyzer.analyze(TrendInput.read(out, date), date, singleItemThemes)
         val theme = report.themes.single()
         assertEquals("original", theme.id)
         assertEquals(1, theme.weeklyCounts.last())
@@ -153,7 +339,7 @@ class TrendTest {
             DroppedItem(it.item, DropReason.ALREADY_SEEN)
         }))
 
-        val report = TrendAnalyzer.analyze(TrendInput.read(out, date), date)
+        val report = TrendAnalyzer.analyze(TrendInput.read(out, date), date, singleItemThemes)
         assertEquals(1, report.dataDays)
         assertEquals(1, report.unmappedRepeatCount)
         val theme = report.themes.single()
@@ -179,7 +365,7 @@ class TrendTest {
         val report = TrendAnalyzer.analyze(TrendInput(runs), date, TrendConfig.defaults.copy(minimumDataDays = 9))
         val fading = report.falling.single()
         assertEquals("fading", fading.id)
-        assertEquals(1.0 / 7.0, fading.growth)
+        assertEquals(0.25, fading.growth)
     }
 
     @Test fun spamNameMatchingIgnoresOwnerCaseAndSeparators() {
@@ -255,7 +441,7 @@ class TrendTest {
             signal.copy(item = signal.item.copy(tags = listOf("source-only")))
         }
         val day = run(date, signals).copy(classified = signals)
-        val (report, themes) = TrendAnalyzer.analyzeWithThemes(TrendInput(mapOf(date to day)), date)
+        val (report, themes) = TrendAnalyzer.analyzeWithThemes(TrendInput(mapOf(date to day)), date, singleItemThemes)
         assertEquals(listOf("wide"), report.broadTags)
         assertEquals(report.broadTags, themes.broadTags)
         assertEquals("narrow", report.themes.single().id)
@@ -292,7 +478,8 @@ class TrendTest {
             val day = date.minusDays(offset)
             day to run(day, if (offset == 0L) listOf(
                 signal("1", "topic", label = "<script>", profile = "demand-signal"),
-                signal("2", "topic", source = "github", label = "<script>")
+                signal("2", "topic", source = "github", label = "<script>"),
+                signal("3", "topic")
             ) else emptyList())
         }
         val report = TrendAnalyzer.analyze(TrendInput(runs), date)
@@ -358,7 +545,7 @@ class TrendTest {
             listOf(original, repeatOnly, ignored, tracked).map { DroppedItem(it.item, DropReason.ALREADY_SEEN) })
             .copy(trackingOnlyKeys = setOf(tracked.item.key))
         val report = TrendAnalyzer.analyze(TrendInput(mapOf(date to current),
-            earlierClassifications = listOf(original, repeatOnly, ignored)), date)
+            earlierClassifications = listOf(original, repeatOnly, ignored)), date, singleItemThemes)
         assertEquals(listOf("current", "original", "shared"), report.themes.map { it.id })
         assertTrue(report.themes.all { it.weeklyCounts.last() == 1 })
         assertTrue(report.repositories.isEmpty())
@@ -378,10 +565,10 @@ class TrendTest {
         }
         val report = TrendAnalyzer.analyze(TrendInput(runs), date)
         assertFalse(report.insufficientData)
-        assertEquals(4.0 / 7.0, report.themes.single().growth)
+        assertEquals(2.0 / 3.0, report.themes.single().growth)
         assertFalse(report.themes.single().candidate)
         val insufficient = TrendAnalyzer.analyze(TrendInput(runs.keys.sorted().takeLast(14)
-            .associateWith { runs.getValue(it) }), date, TrendConfig.defaults.copy(minimumDataDays = 14))
+            .associateWith { runs.getValue(it) }), date, singleItemThemes.copy(minimumDataDays = 14))
         assertTrue(insufficient.insufficientData)
         assertNull(insufficient.themes.single().growth)
         assertFalse(insufficient.themes.single().isNew)
@@ -395,8 +582,9 @@ class TrendTest {
         val chain = listOf(signal("a", "a", label = "voice speech"), signal("b", "b", label = "voice speech audio"),
             signal("c", "c", label = "speech audio"))
         val mapped = ThemeMapper.groupTopics(chain, TrendConfig.defaults)
-        assertEquals(mapped["a"], mapped["b"])
-        assertNotEquals(mapped["a"], mapped["c"])
+        val representatives = chain.map { mapped.getValue(it.classification.topicKey) }
+        assertEquals(representatives[0], representatives[1])
+        assertNotEquals(representatives[0], representatives[2])
         val same = (1..9).map { signal("$it", "topic$it", label = "voice speech") }
         assertEquals(listOf(1, 8), ThemeMapper.groupTopics(same, TrendConfig.defaults).values.groupingBy { it }.eachCount().values.sorted())
         val tags = listOf("waveform", "phoneme")
@@ -415,7 +603,8 @@ class TrendTest {
         val migrated = outputJson.decodeFromString<ThemeMap>(file.readText())
         assertEquals(3, migrated.version)
         assertEquals(mapOf("manual-topic" to "manual"), migrated.overrides)
-        assertEquals(listOf("manual", "topic"), TrendAnalyzer.analyze(TrendInput.read(out, date), date).themes.map { it.id })
+        assertEquals(listOf("manual", "topic"),
+            TrendAnalyzer.analyze(TrendInput.read(out, date), date, singleItemThemes).themes.map { it.id })
         assertFalse("stale" in file.readText())
         val next = date.plusDays(28)
         save("$next.json", run(next, listOf(signal("new", "topic", label = "Changed label"))))
@@ -461,17 +650,21 @@ class TrendTest {
         val candidates = (1..11).flatMap { index ->
             val topic = "candidate-$index"
             listOf(signal("demand-$index", topic, profile = "demand-signal"),
-                signal("repo-$index", topic, source = "github"))
+                signal("repo-$index", topic, source = "github"), signal("tech-$index", topic))
         }
         val demand = signal("single", "single", profile = "demand-signal")
         val signals = candidates + demand.copy(item = demand.item.copy(alsoSeenIn = listOf("github"))) +
-            listOf(signal("other1", "aaa-other"), signal("other2", "aaa-other"))
+            listOf(signal("other1", "aaa-other"), signal("other2", "aaa-other"), signal("other3", "aaa-other"))
         val runs = (0L..27L).associate { offset ->
             val day = date.minusDays(offset)
-            day to run(day, if (offset == 0L) signals else emptyList())
+            day to run(day, when (offset) {
+                0L -> signals.filterNot { it.item.externalId.startsWith("tech-") }
+                1L -> candidates.filter { it.item.externalId.startsWith("tech-") }
+                else -> emptyList()
+            })
         }
         val report = TrendAnalyzer.analyze(TrendInput(runs), date)
-        assertFalse(report.themes.single { it.id == "single" }.candidate)
+        assertTrue(report.themes.none { it.id == "single" })
         assertEquals(11, report.themes.count { it.candidate })
         assertEquals(10, report.rising.size)
         assertTrue(report.rising.all { it.candidate })
@@ -489,6 +682,7 @@ class TrendTest {
                 0L -> listOf(signal("demand", "candidate", profile = "demand-signal"),
                     signal("repo", "candidate", source = "github"), signal("tech", "candidate")) +
                     (1..5).map { signal("fast-$it", "fast") }
+                1L -> listOf(signal("second-day", "candidate"))
                 7L, 14L, 21L -> listOf(signal("prior-$offset-a", "candidate"),
                     signal("prior-$offset-b", "candidate"), signal("prior-$offset-fast", "fast"))
                 else -> emptyList()
@@ -500,11 +694,11 @@ class TrendTest {
         val fastest = report.themes.single { it.id == "fast" }
         assertEquals("candidate", candidate.id)
         assertTrue(candidate.candidate)
-        assertEquals(1.5, candidate.growth)
+        assertEquals(5.0 / 3.0, candidate.growth)
         assertFalse(fastest.candidate)
         assertEquals(0, fastest.demandCount)
-        assertEquals(5.0, fastest.growth)
-        assertContains(report.summary.first(), "${fastest.name} ×5.00")
+        assertEquals(3.0, fastest.growth)
+        assertContains(report.summary.first(), "${fastest.name} ×3.00")
     }
 
     @Test fun summaryRanksNewThemesFirstAndUsesWeeklyCountWhenHistoryIsInsufficient() {
@@ -514,13 +708,14 @@ class TrendTest {
             val day = date.minusDays(offset)
             day to when (offset) {
                 0L -> current
+                1L -> run(day, listOf(signal("new-3", "fresh")))
                 7L, 14L, 21L -> run(day, listOf(signal("prior-$offset", "rapid")))
                 else -> run(day)
             }
         }
         val complete = TrendAnalyzer.analyze(TrendInput(runs), date)
         assertFalse(complete.insufficientData)
-        assertEquals(5.0, complete.themes.single { it.id == "rapid" }.growth)
+        assertEquals(3.0, complete.themes.single { it.id == "rapid" }.growth)
         val fresh = complete.themes.single { it.id == "fresh" }
         assertTrue(fresh.isNew)
         assertEquals("가장 뜬 테마 · ${fresh.name} 신규", complete.summary.first())
@@ -553,7 +748,7 @@ class TrendTest {
                 }
                 day to run(day, (1..count).map { signal("$offset-$it", "market", profile = "market-signal") })
             }
-            return TrendAnalyzer.analyze(TrendInput(runs), date).themes.single().overheated
+            return TrendAnalyzer.analyze(TrendInput(runs), date, singleItemThemes).themes.single().overheated
         }
         assertFalse(overheated(2, 0))
         assertFalse(overheated(3, 2))
@@ -580,14 +775,15 @@ class TrendTest {
     }
 
     @Test fun candidateBoundaries() {
-        assertTrue(CandidateMarker.matches(1.5, false, 1, 2, false, 2))
-        assertFalse(CandidateMarker.matches(1.5, false, 1, 2, false, 1))
-        assertTrue(CandidateMarker.matches(null, true, 1, 2, false, 2))
-        assertFalse(CandidateMarker.matches(null, false, 1, 2, false, 2))
-        assertFalse(CandidateMarker.matches(1.49, false, 1, 2, false, 2))
-        assertFalse(CandidateMarker.matches(1.5, false, 0, 2, false, 2))
-        assertFalse(CandidateMarker.matches(1.5, false, 1, 1, false, 2))
-        assertFalse(CandidateMarker.matches(1.5, false, 1, 2, true, 2))
+        assertTrue(CandidateMarker.matches(1.5, false, 1, 2, false, 3, 2))
+        assertFalse(CandidateMarker.matches(1.5, false, 1, 2, false, 2, 2))
+        assertFalse(CandidateMarker.matches(1.5, false, 1, 2, false, 3, 1))
+        assertTrue(CandidateMarker.matches(null, true, 1, 2, false, 3, 2))
+        assertFalse(CandidateMarker.matches(null, false, 1, 2, false, 3, 2))
+        assertFalse(CandidateMarker.matches(1.49, false, 1, 2, false, 3, 2))
+        assertFalse(CandidateMarker.matches(1.5, false, 0, 2, false, 3, 2))
+        assertFalse(CandidateMarker.matches(1.5, false, 1, 1, false, 3, 2))
+        assertFalse(CandidateMarker.matches(1.5, false, 1, 2, true, 3, 2))
     }
 
     @Test fun cliWithoutKeys() {

@@ -28,7 +28,12 @@ data class TrendConfig(
     val synonyms: Map<String, String> = emptyMap(),
     val excludeThemes: List<String> = emptyList(),
     val suspectedForkRatio: Double = 0.005,
-    val suspectedMinStars: Int = 200
+    val suspectedMinStars: Int = 200,
+    val newMinCount: Int = 3,
+    val newMinDays: Int = 2,
+    val minThemeItems: Int = 3,
+    val minThemeDays: Int = 3,
+    val modelNamePrefixes: List<String> = listOf("gpt-", "claude-", "gemini-", "qwen", "llama-", "deepseek", "mistral-", "grok-")
 ) {
     companion object {
         val defaults: TrendConfig by lazy {

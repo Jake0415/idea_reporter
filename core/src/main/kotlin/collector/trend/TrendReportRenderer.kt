@@ -34,7 +34,11 @@ class TrendReportRenderer {
         val status = listOf("기간 ${report.startDate} ~ ${report.date} · 데이터 ${report.dataDays}일",
             "재등장 미매핑 ${report.unmappedRepeatCount}건",
             "수집 실패 출처 · ${report.failedSources.joinToString(", ").ifEmpty { "없음" }}",
-            "너무 넓어 제외한 태그 · ${report.broadTags.joinToString(", ").ifEmpty { "없음" }}")
+            "너무 넓어 제외한 태그 · ${report.broadTags.joinToString(", ").ifEmpty { "없음" }}",
+            "희소 태그 ${report.sparseTagCount}개 제외") +
+            listOfNotNull(report.backfillDays.takeIf { it > 0 }?.let {
+                "과거 채우기 ${it}일(HN·GitHub만, 점수는 채운 시점 기준)"
+            })
         val tables = listOf(
             Triple("뜨는 테마", themeHeaders + "예시", report.rising.map {
                 themeRow(it) + it.examples.take(2).joinToString(", ") { label -> label.take(30) }.ifEmpty { "—" }
@@ -98,7 +102,10 @@ class TrendReportRenderer {
 
     private fun themeRow(row: ThemeRow): List<String> {
         val name = (if (row.candidate) "◆ " else "") + row.id + (if (row.overheated) " (과열)" else "")
-        return listOf(name, (row.weeklyCounts.lastOrNull() ?: 0).toString(), TrendAnalyzer.growthLabel(row),
+        val growth = TrendAnalyzer.growthLabel(row) + if (row.matchedSources) " (HN·GH 새 항목 기준)" else ""
+        val count = (row.weeklyCounts.lastOrNull() ?: 0).toString() +
+            row.comparableCount?.takeIf { row.matchedSources }?.let { " (비교 $it)" }.orEmpty()
+        return listOf(name, count, growth,
             row.sources.size.toString(), row.demandCount.toString(), row.marketCount.toString())
     }
 

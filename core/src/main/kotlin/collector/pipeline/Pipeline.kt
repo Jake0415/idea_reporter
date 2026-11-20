@@ -9,7 +9,9 @@ import collector.refine.Scorer
 import collector.refine.SourceCap
 import collector.refine.SpamClusterFilter
 import collector.source.SourceAdapter
+import collector.source.GitHubAdapter
 import collector.config.RssConfig
+import collector.config.SourceConfig
 import collector.source.RssAdapter
 import collector.source.RssFetchException
 import collector.source.MissingSourceSecret
@@ -25,6 +27,16 @@ import java.time.LocalDate
 import java.time.ZoneId
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
+
+internal fun filterCollected(
+    items: List<Item>, configs: Map<String, SourceConfig>, excludeKeywords: List<String>,
+    now: Instant, historicalStart: Instant? = null
+): collector.refine.FilterResult {
+    val ruled = RuleFilter(excludeKeywords).filter(items, configs, now, historicalStart)
+    val despammed = SpamClusterFilter().filter(ruled.kept)
+    val capped = SourceCap.cap(despammed.kept, configs)
+    return capped.copy(dropped = ruled.dropped + despammed.dropped + capped.dropped)
+}
 
 @kotlinx.serialization.Serializable
 data class PipelineResult(
@@ -82,10 +94,8 @@ class Pipeline(
         onStage("filter")
         t = System.nanoTime()
         val configById = configs.associateBy { it.sourceId }
-        val ruled = RuleFilter(file.excludeKeywords).filter(normal, configById, startedAt)
-        val despammed = SpamClusterFilter().filter(ruled.kept)
-        val filtered = SourceCap.cap(despammed.kept, configById)
-        dropped += ruled.dropped + despammed.dropped + filtered.dropped
+        val filtered = filterCollected(normal, configById, file.excludeKeywords, startedAt)
+        dropped += filtered.dropped
         stages += StageResult("filter", normal.size, filtered.kept.size, ms(t))
 
         // ③ 이전 날짜에 본 글 제외 + 중복 제거
@@ -129,6 +139,8 @@ class Pipeline(
             val (fetched, warning) = if (adapter is RssAdapter && config is RssConfig) {
                 val result = adapter.fetchWithSummary(config, now, sourceTimeout)
                 result.items to result.warning
+            } else if (adapter is GitHubAdapter) {
+                withTimeout(sourceTimeout) { adapter.fetchWithWarning(config, now) }
             } else withTimeout(sourceTimeout) { adapter.fetch(config, now) } to null
             val items = fetched.map { if (it.profileHint.isEmpty()) it.copy(profileHint = config.profile) else it }
             Fetch(SourceResult(config.sourceId, items.size, millis = ms(start)), items, warning)
