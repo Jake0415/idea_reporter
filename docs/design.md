@@ -427,7 +427,7 @@ data class SourceStats(val source: String, val days: Int, val fetched: Int, val 
 | hn | Algolia 검색 API | queries: LLM, AI agent, Show HN AI, GPT, Claude, open source model / 24h, 검색어당 50. **수요형 검색어**(Ask HN, alternative to, looking for a tool, frustrated with)는 72h·5점 이상(`queryOverrides`) | minScore 20, 최대 60 | 후보 3종 |
 | github | 저장소 검색 API | topic:llm, ai-agent, generative-ai / 14일 내 생성, 스타순, 검색어당 100 | minStars 200, 최대 50 | tech-signal |
 | hf | 모델·Spaces API | 트렌딩 정렬 | 종류별 15(`maxItemsPerKind`) 후 출처 상한 | tech-signal |
-| reddit | 서브레딧 인기글(OAuth, 키 필요 — 기본 꺼짐) | LocalLLaMA, SaaS, ChatGPT, artificial / day. 본문 전문 3,000자는 작성 단계, 상위 댓글 5개는 분류 입력 | minUpvotes 100 | demand-signal (`subredditProfiles`: LocalLLaMA → tech·demand) |
+| reddit | 서브레딧 인기글(OAuth, 키 필요 — 기본 꺼짐). **2026-11-20 확인(Reddit Help "Reddit Data API Wiki"·"책임 있는 빌더 정책"): API 접근은 사전 요청·명시적 승인 필수(비상업은 Devvit 권장, 그 밖은 티켓), 승인 없는 상업·비상업 "마이닝"·AI 학습 금지, Reddit에서 삭제된 글·계정 관련 데이터 삭제 의무(48시간 내 정기 삭제 권장), 무료 100 QPM, User-Agent `<platform>:<app ID>:<version> (by /u/<username>)` → 승인 전 사용 보류** | LocalLLaMA, SaaS, ChatGPT, artificial / day. 본문 전문 3,000자는 작성 단계, 상위 댓글 5개는 분류 입력 | minUpvotes 100 | demand-signal (`subredditProfiles`: LocalLLaMA → tech·demand) |
 | ph | GraphQL API(토큰 — 기본 꺼짐) | topic artificial-intelligence, 최근 24시간 이동 창 | minVotes 50 | market-signal |
 | arxiv | 공개 API (기본 꺼짐) | cs.AI, cs.CL | 상위 30 | tech-signal |
 | rss | RSS/Atom (피드 목록, **기본 켜짐**, 48h) | HF Blog(tech, 5), Simon Willison `ai` 태그 피드(tech·demand, 5), Latent Space(tech, 3) | 피드별 `maxItems`(최신순, 필터 뒤 SourceCap에서) | 피드별 프로필 목록 |
