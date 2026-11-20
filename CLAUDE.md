@@ -33,3 +33,4 @@
 4. `app`: WorkManager, Room, Keystore, SMTP 메일
 5. 앱 화면: 오늘 카드·보관함·출처/평가 기준 수정·실행 기록
 6. (선택) 보충 검색, Batch API, runner + GitHub Actions
+7. 기술 트렌드 리포트 + 요청형 사업성 분석([docs/business-scout-plan.md](docs/business-scout-plan.md), 시안 `mockup/trend.html`) — S1 트렌드 리포트 완료(`Main --trend`, 코드만·LLM 0원, 테마 = 정규화한 분류 태그). 다음 S2 과거 채우기, S3~S4 요청형 사업성 분석(OpenAI `gpt-6.2-sol` 추론 high, 요청할 때만·실행 전 추정 비용 확인)

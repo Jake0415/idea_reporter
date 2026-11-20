@@ -1,0 +1,37 @@
+{
+  "days": 28,
+  "weekDays": 7,
+  "minimumDataDays": 14,
+  "topicSimilarity": 0.5,
+  "sharedTags": 2,
+  "maxThemeTopics": 8,
+  "synonyms": {
+    "on-device-llm": "local-llm",
+    "tts": "text-to-speech",
+    "text-to-image": "image-generation",
+    "gpus": "gpu",
+    "apis": "api",
+    "loras": "lora",
+    "llamas": "llama"
+  },
+  "excludeThemes": [
+    "open-source", "open-source-model", "hf-space", "hugging-face-space", "huggingface-space", "model-release", "ai", "llm",
+    "agent", "ai-agent", "github", "productivity"
+  ],
+  "suspectedForkRatio": 0.005,
+  "suspectedMinStars": 200,
+  "spamClusterSize": 20,
+  "marketGrowth": 3.0,
+  "marketCount": 3,
+  "candidateGrowth": 1.5,
+  "candidateDemand": 1,
+  "candidateSources": 2,
+  "risingLimit": 10,
+  "fallingLimit": 5,
+  "repositoryLimit": 10,
+  "risingCount": 2,
+  "fallingAverage": 2.0,
+  "fallingGrowth": 0.8,
+  "evidenceLimit": 3,
+  "allowedLicenses": ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MPL-2.0"]
+}

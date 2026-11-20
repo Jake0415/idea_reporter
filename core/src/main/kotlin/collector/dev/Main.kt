@@ -22,6 +22,7 @@ import collector.source.RedditAdapter
 import collector.source.RssAdapter
 import collector.source.Http
 import collector.stage.IdeaGenerator
+import collector.trend.publishTrend
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.encodeToString
 import java.io.File
@@ -44,7 +45,7 @@ fun main(args: Array<String>) {
         println("실행 실패 · ${safeFailure(e)}")
         when (e) {
             is DuplicateRssFeedNameException -> println("출처 설정 오류 · ${e.message}")
-            is IllegalArgumentException -> println("사용법 · --keep-unseen --no-llm --budget <USD>")
+            is IllegalArgumentException -> println("사용법 · --keep-unseen --no-llm --budget <USD> | --trend [--date yyyy-MM-dd]")
             is RunLockedException -> println("다른 실행이 진행 중입니다.")
         }
         exitProcess(1)
@@ -52,6 +53,22 @@ fun main(args: Array<String>) {
 }
 
 private suspend fun runMain(args: Array<String>) {
+    if (args.firstOrNull() == "--trend") {
+        val date = when {
+            args.size == 1 -> LocalDate.now()
+            args.size == 3 && args[1] == "--date" -> requireNotNull(
+                runCatching { LocalDate.parse(args[2]) }.getOrNull()?.takeIf {
+                    args[2].length == 10 && it.toString() == args[2]
+                }
+            )
+            else -> throw IllegalArgumentException("지원하지 않는 트렌드 옵션입니다.")
+        }
+        val out = File("out").apply { mkdirs() }
+        withRunLock(out) {
+            println(publishTrend(out, date))
+        }
+        return
+    }
     val secrets = DotEnv.secretProvider(DotEnv.load(File(".env")))
     if (args.contentEquals(arrayOf("--llm-smoke"))) {
         if (!llmSmoke(secrets)) exitProcess(1)

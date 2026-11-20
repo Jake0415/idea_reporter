@@ -92,7 +92,7 @@ class JsonFileTrackedStore(private val file: File) : TrackedStore {
     override fun save(ideas: List<TrackedIdea>) = file.writeAtomically(outputJson.encodeToString(ideas))
 }
 
-private inline fun <reified T> readJson(file: File): T? = try {
+internal inline fun <reified T> readJson(file: File): T? = try {
     if (file.isFile) outputJson.decodeFromString<T>(file.readText()) else null
 } catch (_: SerializationException) {
     null

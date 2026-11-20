@@ -81,3 +81,15 @@
 - 지시: `docs/dev/P6-card-drop-reasons.md`. 개발: Codex(IdeaGenerator·FullPipeline·RunMetrics·PipelineStagesTest), 테스트 138개.
 - 탈락 7종(필수 항목·분류 id·태그·인용·중복·분류 상한·카드 수 상한)을 `카드 제외 (제목) · 상세`로 실행 기록에 남김. 인용 일부 제거 별도 기록, 재시도 시 `1차 시도: ` 접두어, `metrics.cardRejections`는 최종 시도 기준.
 - 리뷰 1회차: **Claude 통과**(낮음 2: 긴 제목 줄임, 같은 줄 반복 가능 — 참고만), **OpenAI 통과**(지적 없음). P6 완료.
+
+## P7 S1 기술 트렌드 리포트 (코드만, LLM 0원)
+- 플랜: `docs/business-scout-plan.md` v3 §4, 시안 `mockup/trend.html`. 지시: `docs/dev/P7-S1-trend.md`. 개발: Codex. 실행: `Main --trend [--date]` → `out/trend/<날짜>.json/.html/.txt`, `themes.json`.
+- 1차 개발(테스트 145): 실제 출력에서 흔한 태그 연쇄 묶임(한 테마에 주제 31개).
+- 리뷰 1회차: Claude·OpenAI 수정 필요(연쇄 묶임, state 보완, none 집계, 부분 데이터 증가율 부풀림 등). 수정 지시 `P7-fix-r1.md` → 연쇄는 해결됐지만 테마 89개가 거의 1개짜리(주제 키가 제품 단위).
+  - Claude 직접 재설계 `P7-fix-r2.md`: **테마 = 정규화한 분류 태그**, 주제는 예시, OSS 속도는 스냅샷 간격 1일 이상일 때만(Blender 저장소 1707→409/일), 의심 표시. `hugging-face-space` 제외는 Claude 직접.
+- 리뷰 2회차: Claude 통과, OpenAI 수정 필요(높음 1: 같은 날 재실행 원본 분류). `P7-fix-r3.md`(◆에 이번 주 ≥2건, 공개 순서 json 마지막, 복수형 예외, 과열 설명 20자 등).
+- 리뷰 3회차: Claude 통과, OpenAI 수정 필요(높음 1: 기간 밖 원본). `P7-fix-r4.md`(원본 색인 기준일 이하 전체, 요약은 증가율 순위, 동의어).
+- 리뷰 4회차: Claude 통과, OpenAI 중간 1(state 없을 때 대표 관측). `P7-fix-r5.md`.
+- 리뷰 5회차(마지막): **Claude 통과**, OpenAI 높음 0·중간 1 — 미매핑 재등장을 넓은 태그 30% 판정 분모에 넣을지(실제 미매핑 0건, 해석 여지) → **이관**. 테스트 170개.
+- 실제 출력(2일치, 데이터 부족): 테마 `local-llm`·`image-generation`·`mcp`·`video-generation`·`small-llm` 등, 과열 `ai--manus` 77·`Gemini-Config-Checker-` 21. 증가율·◆는 14일·앞 주 2개 이상 쌓이면 표시.
+- 남은 일: 데이터 축적(또는 S2 과거 채우기), 원본 색인 전체 파일 읽기 성능(데이터 쌓인 뒤), 위 이관 1건, 테마 236개 롱테일 조정(데이터 쌓인 뒤).
