@@ -111,6 +111,24 @@ class BackfillTest {
         }
     }
 
+    @Test fun failedCacheReplacementKeepsCheckpoint() = runTest {
+        MockWebServer().use { server ->
+            server.story(newest, "old")
+            backfill(server, 0.5).run(date, 1, dryRun = false, yes = true, force = false)
+            server.story(newest, "replacement")
+            backfill(server, 0.0).run(date, 1, dryRun = false, yes = true, force = true)
+            val checkpoint = out.resolve("backfill/interrupted/$newest.json")
+            assertTrue(checkpoint.isFile)
+            val saved = checkpoint.readText()
+            server.story(newest, "replacement-2")
+            val failing = backfill(server, 0.5, writeCache = { _, _ -> throw IOException("cache write failed") })
+            assertFailsWith<IOException> { failing.run(date, 1, dryRun = true, yes = true, force = true) }
+            // The old cache was not replaced, so its paired checkpoint must survive for the next resume.
+            assertTrue(checkpoint.isFile)
+            assertEquals(saved, checkpoint.readText())
+        }
+    }
+
     @Test fun identicalForcedRefreshDoesNotMatchPreviousResultHash() = runTest {
         MockWebServer().use { server ->
             repeat(3) { server.story(newest) }

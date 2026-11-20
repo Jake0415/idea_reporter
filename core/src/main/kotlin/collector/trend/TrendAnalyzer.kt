@@ -122,7 +122,9 @@ object TrendAnalyzer {
             val weeklyPrior = prior * config.weekDays
             val isNew = !insufficient && weeklyPrior == 0.0 && comparableWeek.size >= config.newMinCount &&
                 comparableDays >= config.newMinDays
-            val growth = if (!insufficient && weeklyPrior >= 1.0) (comparableWeek.size + 1) / (weeklyPrior + 1) else null
+            // Normalize this week to a full week like the prior average, so weeks with missing run days are not undercounted.
+            val weeklyCurrent = comparableWeek.size.toDouble() / currentDays * config.weekDays
+            val growth = if (!insufficient && weeklyPrior >= 1.0) (weeklyCurrent + 1) / (weeklyPrior + 1) else null
             val sources = thisWeek.flatMap { listOf(it.item.source) + it.item.alsoSeenIn }.distinct().sorted()
             val demand = thisWeek.count { it.classification.profile == "demand-signal" }
             val market = thisWeek.count { it.classification.profile == "market-signal" }
@@ -157,7 +159,11 @@ object TrendAnalyzer {
         }.sortedBy { it.id }
         val rising = themes.sortedWith(compareByDescending<ThemeRow> { it.isNew }.thenByDescending { it.growth }
             .thenByDescending { it.weeklyCounts.last() }.thenBy { it.id })
-            .filter { it.weeklyCounts.last() >= config.risingCount }
+            .filter { row ->
+                val count = if (row.matchedSources) row.comparableCount ?: 0 else row.weeklyCounts.last()
+                // Rising means new or growing; with insufficient data every growth is null, so rank by count only.
+                count >= config.risingCount && (insufficient || row.isNew || (row.growth ?: 0.0) > 1.0)
+            }
         val risingRows = rising
             .sortedByDescending { it.candidate }.take(config.risingLimit.coerceAtMost(10))
         val falling = themes.filter { row -> priorByTheme.getValue(row.id) * config.weekDays >= config.fallingAverage &&

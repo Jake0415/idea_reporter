@@ -123,8 +123,9 @@ internal class Backfill(
             val collection = CollectionCache(successful.filterKeys { it in configById }, replacing, replacementId)
             val collectionJson = outputJson.encodeToString(collection)
             if (force || collection != cached) {
-                Files.deleteIfExists(checkpoint.toPath())
+                // Write the new cache first: if that fails, the old cache and its checkpoint stay paired and resumable.
                 writeCache(cache, collectionJson)
+                Files.deleteIfExists(checkpoint.toPath())
             }
 
             val start = day.atStartOfDay().toInstant(ZoneOffset.UTC)

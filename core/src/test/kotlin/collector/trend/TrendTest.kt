@@ -52,7 +52,10 @@ class TrendTest {
         val two = analyze(2, true)
         assertEquals("—", TrendAnalyzer.growthLabel(two.themes.single()))
         assertTrue(two.rising.isEmpty())
-        val oneDay = analyze(3, false).rising.single()
+        // Three items on one day are neither new nor growing, so they stay out of the rising table.
+        val oneDayReport = analyze(3, false)
+        assertTrue(oneDayReport.rising.isEmpty())
+        val oneDay = oneDayReport.themes.single()
         assertEquals("—", TrendAnalyzer.growthLabel(oneDay))
         assertFalse(oneDay.candidate)
         val twoDays = analyze(3, true).rising.single()
@@ -106,6 +109,7 @@ class TrendTest {
         )))
         save("$date.json", run(date, listOf(
             signal("current-gh", "target", source = "github", profile = "demand-signal"),
+            signal("current-hn", "target"),
             signal("current-market", "target", source = "rss", profile = "market-signal"),
             signal("current-demand", "target", source = "rss", profile = "demand-signal")
         ), (olderRepeats + repeat).map { DroppedItem(it.item, DropReason.ALREADY_SEEN) }))
@@ -117,15 +121,16 @@ class TrendTest {
         val report = TrendAnalyzer.analyze(input, date, config)
         val theme = report.themes.single()
         assertEquals(1, report.backfillDays)
-        assertEquals(listOf(0, 1, 2, 7), theme.weeklyCounts)
-        assertEquals(0.25, theme.growth)
+        assertEquals(listOf(0, 1, 2, 8), theme.weeklyCounts)
+        // Two comparable items on the single current run day: 14/week against a prior 7/week, smoothed.
+        assertEquals(15.0 / 8.0, theme.growth)
         assertTrue(input.earlierClassifications.none { it.item.externalId == "shadow" })
         assertEquals(0, report.unmappedRepeatCount)
         assertFalse(theme.overheated)
         assertFalse(theme.candidate)
         val rendered = TrendReportRenderer().render(report)
         for (body in listOf(rendered.html, rendered.text)) {
-            assertContains(body, "7 (비교 1)")
+            assertContains(body, "8 (비교 2)")
             assertContains(body, "HN·GH 새 항목 기준")
             assertContains(body, "과거 채우기 1일(HN·GitHub만, 점수는 채운 시점 기준)")
         }
@@ -158,7 +163,7 @@ class TrendTest {
         val config = TrendConfig.defaults.copy(minimumDataDays = 3)
         val theme = TrendAnalyzer.analyze(TrendInput.read(out, date, config), date, config).themes.single()
         assertEquals(listOf(0, 1, 1, 2), theme.weeklyCounts)
-        assertEquals(0.25, theme.growth)
+        assertEquals(1.0, theme.growth)
     }
 
     @Test fun matchedSourcesFiltersBeforeDeduplicating() {
@@ -173,7 +178,41 @@ class TrendTest {
         val config = TrendConfig.defaults.copy(minimumDataDays = 3)
         val theme = TrendAnalyzer.analyze(TrendInput.read(out, date, config), date, config).themes.single()
         assertEquals(listOf(0, 1, 1, 1), theme.weeklyCounts)
-        assertEquals(0.25, theme.growth)
+        // One item over two current run days is 3.5 per week against a prior 7 per week.
+        assertEquals(0.5625, theme.growth)
+    }
+
+    @Test fun shrinkingThemesStayOutOfRisingTable() {
+        val runs = (0L..27L).associate { offset ->
+            val day = date.minusDays(offset)
+            val signals = if (offset <= 6L) {
+                // This week: "up" daily (7), "down" only 3 items — enough to pass the count bar but shrinking.
+                listOf(signal("up-$offset", "up", tags = listOf("up"))) +
+                    if (offset % 2L == 0L && offset <= 4L) listOf(signal("down-now-$offset", "down", tags = listOf("down"))) else emptyList()
+            } else {
+                (if (offset % 7L == 0L) listOf(signal("up-old-$offset", "up", tags = listOf("up"))) else emptyList()) +
+                    if (offset % 2L == 0L) (1..3).map { signal("down-$offset-$it", "down", tags = listOf("down")) } else emptyList()
+            }
+            day to run(day, signals)
+        }
+        val report = TrendAnalyzer.analyze(TrendInput(runs), date, TrendConfig.defaults)
+        val rising = report.rising.map { it.id }
+        assertTrue("up" in rising)
+        assertFalse("down" in rising)
+        assertTrue(report.themes.single { it.id == "down" }.let { it.growth != null && it.growth < 1.0 })
+        assertTrue(report.falling.none { it.id in rising })
+    }
+
+    @Test fun growthNormalizesCurrentWeekByRunDays() {
+        // Current week has runs on only 3 of 7 days; every run day carries one item, like the prior weeks.
+        val runs = (0L..27L).filter { it <= 2L || it >= 7L }.associate { offset ->
+            val day = date.minusDays(offset)
+            day to run(day, listOf(signal("item-$offset", "same", tags = listOf("steady"))))
+        }
+        val config = TrendConfig.defaults.copy(minThemeItems = 1)
+        val theme = TrendAnalyzer.analyze(TrendInput(runs), date, config).themes.single()
+        // Same one-per-day rate with only part of the current week covered must read as flat, not falling.
+        assertEquals(1.0, theme.growth)
     }
 
     @Test fun candidateUsesSameDeduplicatedSourcesAsTable() {
