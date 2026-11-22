@@ -559,7 +559,7 @@ class AnalysisTest {
         val judged = OpportunityJudge(config).judge(listOf(missing, clamped), input())
         assertEquals("opp-2", judged.first().id)
         assertEquals(opportunity.demandRefs, judged.first().validated.demandRefs)
-        assertEquals(mapOf("항목 ID–URL 불일치" to 1, "블록-프로필 불일치" to 1),
+        assertEquals(mapOf("항목 ID–URL 불일치" to 1, "근거 칸과 분류가 맞지 않음" to 1),
             judged.first().invalidCitations["demandRefs"])
         assertEquals(5.0, judged.first().validated.scores.getValue("demand").score)
         assertEquals(4.3, judged.first().score)
@@ -577,16 +577,16 @@ class AnalysisTest {
         assertContains(judge.summary(listOf(provisional)), "의뢰 후보 1건")
 
         val duplicate = result(opportunity.copy(demandRefs = listOf(ref(demand), ref(demand))))
-        assertTrue(duplicate.gateFailures.any { "수요 근거 1건" in it })
+        assertTrue(duplicate.gateFailures.any { "요청·불편 근거 1건" in it })
         val sameSourceDemand = demand2.copy(item = demand2.item.copy(source = "hn"))
         val singleSource = result(opportunity.copy(materials = emptyList(), techRefs = emptyList(),
             demandRefs = listOf(ref(demand), ref(sameSourceDemand))), input(listOf(demand, sameSourceDemand)))
-        assertTrue(singleSource.gateFailures.any { "인용 출처 1종" in it })
+        assertTrue(singleSource.gateFailures.any { "근거 링크 출처 1종" in it })
         val githubIssue = demand2.copy(item = demand2.item.copy(source = "github-issues",
             url = "https://github.com/owner/repo/issues/2"))
         val mixed = result(opportunity.copy(materials = emptyList(), techRefs = emptyList(),
             demandRefs = listOf(ref(demand), ref(githubIssue))), input(listOf(demand, githubIssue)))
-        assertTrue(mixed.gateFailures.none { "인용 출처" in it })
+        assertTrue(mixed.gateFailures.none { "근거 링크 출처" in it })
         val label = "GitHub 이슈 · owner/repo"
         assertEquals(label, mixed.validated.demandRefs.last().sourceLabel)
         val reports = out.resolve("analysis")

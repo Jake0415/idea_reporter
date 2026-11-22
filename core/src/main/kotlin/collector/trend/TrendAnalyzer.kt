@@ -173,8 +173,8 @@ object TrendAnalyzer {
         val summary = listOfNotNull(
             rising.firstOrNull()?.let { "가장 뜬 테마 · ${it.name} ${growthLabel(it)}" },
             repositories.firstOrNull()?.let { "가장 빠른 저장소 · ${it.name} 하루 ${it.starsPerDay.roundToLong()}★" },
-            spam.firstOrNull()?.let { "과열 경고 · ${it.name} 저장소 ${it.count}개" }
-                ?: themes.firstOrNull { it.overheated }?.let { "과열 경고 · ${it.name} 시장 신호 ${it.marketCount}건" }
+            spam.firstOrNull()?.let { "저장소 몰림 · ${it.name} 저장소 ${it.count}개" }
+                ?: themes.firstOrNull { it.overheated }?.let { "제품 몰림 · ${it.name} 이미 나온 제품 ${it.marketCount}건" }
         )
         return TrendReport(date.toString(), start.toString(), insufficient, runs.size, themes, risingRows, falling,
             repositories.take(config.repositoryLimit), distribution(repositories.mapNotNull { it.language }),

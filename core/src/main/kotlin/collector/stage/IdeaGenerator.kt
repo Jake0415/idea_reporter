@@ -29,7 +29,7 @@ class IdeaGenerator(
         }
         val evidence = (signals + mergedEvidence.values.flatten()).distinctBy { it.item.key }
         if (evidence.size < 2 || evidence.none { it.classification.profile == "tech-signal" }) {
-            return GeneratedCards(emptyList(), "기술 신호를 포함한 후보를 두 건 이상 확보하지 못했습니다.")
+            return GeneratedCards(emptyList(), "쓸 수 있는 기술 항목을 포함한 카드 후보를 두 건 이상 확보하지 못했습니다.")
         }
         val ideas = prompts.resolve("ideas")
         val criteria = prompts.resolve("criteria")
@@ -126,8 +126,8 @@ class CitationValidator(signals: List<Signal>, merged: Map<String, List<Signal>>
             val signal = original(ref)
             val reason = when {
                 signal == null -> "URL 불일치"
-                ref.note.isBlank() -> "note 빈칸"
-                signal.classification.profile !in profiles -> "블록-프로필 불일치"
+                ref.note.isBlank() -> "근거 링크 설명 비어 있음"
+                signal.classification.profile !in profiles -> "근거 칸과 분류가 맞지 않음"
                 !used.add(signal.item.key) -> "항목 중복 사용"
                 else -> return@mapNotNull ref.copy(
                     license = if (signal.classification.profile == "tech-signal") signal.item.extra["license"] else null
@@ -150,17 +150,17 @@ class CitationValidator(signals: List<Signal>, merged: Map<String, List<Signal>>
         fun counts(vararg blocks: String) = blocks.flatMap { invalidByBlock.getValue(it).entries }
             .groupingBy { it.key }.fold(0) { count, entry -> count + entry.value }
         fun summary(invalid: Map<String, Int>) = invalid.entries.joinToString { (reason, count) -> "$reason $count" }
-        fun missing(block: String, invalid: Map<String, Int>) = if (invalid.isEmpty()) "$block 근거 없음(인용 없음)"
-            else "$block 근거 없음(인용 ${invalid.values.sum()}건 무효: ${summary(invalid)})"
+        fun missing(block: String, invalid: Map<String, Int>) = if (invalid.isEmpty()) "$block 근거 링크 없음"
+            else "$block 근거 링크 없음(${invalid.values.sum()}건 무효: ${summary(invalid)})"
         val missingBlocks = listOfNotNull(
-            if (tech.isEmpty()) missing("기술 신호", counts("techSignals")) else null,
-            if (demand.isEmpty() && competitors.isEmpty()) missing("수요·경쟁", counts("demandSignals", "competitors")) else null
+            if (tech.isEmpty()) missing("쓸 수 있는 기술", counts("techSignals")) else null,
+            if (demand.isEmpty() && competitors.isEmpty()) missing("요청·불편 또는 이미 나온 제품", counts("demandSignals", "competitors")) else null
         )
         if (missingBlocks.isNotEmpty()) return CitationCheck(null, missingBlocks.joinToString(" · "), invalidByBlock)
         val invalid = counts("techSignals", "demandSignals", "competitors")
         return CitationCheck(
             card.copy(techSignals = tech, demandSignals = demand, competitors = competitors),
-            if (invalid.isEmpty()) null else "인용 ${invalid.values.sum()}건 제거: ${summary(invalid)}",
+            if (invalid.isEmpty()) null else "근거 링크 ${invalid.values.sum()}건 제거: ${summary(invalid)}",
             invalidByBlock
         )
     }
@@ -224,7 +224,7 @@ class CardValidator(private val config: PipelineConfig, private val categories: 
             val count = counts.getOrDefault(card.category, 0)
             if (count >= config.maxCardsPerCategory) {
                 return@mapNotNull reject(CardRejectionReason.CATEGORY_CAP,
-                    "분류 상한 초과: ${card.category} (최대 ${config.maxCardsPerCategory})")
+                    "같은 분야 카드 수 초과: ${card.category} (최대 ${config.maxCardsPerCategory})")
             }
             if (acceptedEvidence.size >= config.ideaCount) {
                 return@mapNotNull reject(CardRejectionReason.IDEA_COUNT_CAP, "카드 수 상한 초과 (최대 ${config.ideaCount})")

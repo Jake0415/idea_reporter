@@ -278,7 +278,7 @@ class PipelineStagesTest {
         assertEquals(1, result.report.stages.single { it.stage == "validate" }.output)
         assertEquals(listOfNotNull(
             if (truncated) null else "1차 시도: 카드 제외 (First card) · 필수 항목 비어 있음: problem",
-            "인용 일부 제거 (${expected.title}) · 인용 1건 제거: note 빈칸 1",
+            "근거 링크 일부 제거 (${expected.title}) · 근거 링크 1건 제거: 근거 링크 설명 비어 있음 1",
             "카드 제외 (Duplicate card) · 중복 카드: ${expected.title}"
         ), result.report.issues)
         assertEquals(mapOf("DUPLICATE" to 1), result.metrics.cardRejections)
@@ -379,7 +379,7 @@ class PipelineStagesTest {
         )
         assertEquals(mapOf(
             "techSignals" to emptyMap(),
-            "demandSignals" to mapOf("note 빈칸" to 1),
+            "demandSignals" to mapOf("근거 링크 설명 비어 있음" to 1),
             "competitors" to mapOf("항목 중복 사용" to 1)
         ), citations.check(noMarketEvidence).invalidByBlock)
         val rejected = mutableListOf<CardRejection>()
@@ -403,11 +403,11 @@ class PipelineStagesTest {
             CardRejection(CardRejectionReason.INVALID_TAGS, "태그 없음"),
             CardRejection(CardRejectionReason.INVALID_TAGS, "빈 태그 포함"),
             CardRejection(CardRejectionReason.MISSING_FIELD, "필수 항목 비어 있음: problem, effort"),
-            CardRejection(CardRejectionReason.CITATION, "기술 신호 근거 없음(인용 3건 무효: URL 불일치 2, 블록-프로필 불일치 1)"),
-            CardRejection(CardRejectionReason.CITATION, "수요·경쟁 근거 없음(인용 2건 무효: note 빈칸 1, 항목 중복 사용 1)"),
+            CardRejection(CardRejectionReason.CITATION, "쓸 수 있는 기술 근거 링크 없음(3건 무효: URL 불일치 2, 근거 칸과 분류가 맞지 않음 1)"),
+            CardRejection(CardRejectionReason.CITATION, "요청·불편 또는 이미 나온 제품 근거 링크 없음(2건 무효: 근거 링크 설명 비어 있음 1, 항목 중복 사용 1)"),
             CardRejection(CardRejectionReason.IDEA_COUNT_CAP, "카드 수 상한 초과 (최대 1)")
         ), rejected)
-        assertEquals(listOf("인용 1건 제거: note 빈칸 1"), trimmed)
+        assertEquals(listOf("근거 링크 1건 제거: 근거 링크 설명 비어 있음 1"), trimmed)
     }
 
     @Test fun `인용은 근거 유형과 항목 URL 쌍을 검사하고 같은 원본의 재사용을 제외한다`() {
@@ -525,12 +525,28 @@ class PipelineStagesTest {
             listOf(StageResult("select", 3, 2, 1)), emptyMap(), 2)
         val result = PipelineResult(emptyList(), emptyList(), report, cards = listOf(card(item(1), item(2))))
         val rendered = HtmlRenderer(listOf(Category("dev-tools", "개발 도구"))).render(result)
-        for (section in listOf("깔때기", "실패 출처", "목차", "오늘 고른 이유", "가장 큰 위험", "추적 업데이트",
+        for (section in listOf("단계별 건수", "실패 출처", "목차", "오늘 고른 이유", "가장 큰 위험", "추적 업데이트",
             "오늘 비용", "실행 시간", "ideacollector://card/card", "https://example.com/1", "https://example.com/2")) {
             assertContains(rendered.html, section)
             assertContains(rendered.text, section)
         }
         assertContains(rendered.html, "회의록 &lt;도구&gt;")
+    }
+
+    @Test fun `일일 메일에 이전 용어가 나오지 않는다`() {
+        val issue = "근거 링크 일부 제거 (회의록 도구) · URL 불일치 1"
+        val report = RunReport(today.toString(), now.toString(), emptyList(),
+            listOf(StageResult("select", 3, 2, 1)), emptyMap(), 2, issues = listOf(issue))
+        val daily = HtmlRenderer(emptyList()).render(
+            PipelineResult(emptyList(), emptyList(), report, cards = listOf(card(item(1), item(2)))))
+
+        for ((format, output) in mapOf("일일 메일 텍스트" to daily.text, "일일 메일 HTML" to daily.html)) {
+            assertContains(output, issue)
+            assertContains(output, "https://example.com/1")
+            for (term in listOf("신호", "깔때기", "미매핑", "희소", "과열")) {
+                assertFalse(term in output, "$format: $term")
+            }
+        }
     }
 
     @Test fun `이미 본 기록은 같은 날 다시 허용하고 이전 날짜와 구형 기록은 제외한다`() = runTest {

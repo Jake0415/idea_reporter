@@ -132,7 +132,7 @@ internal class MailDelivery(
         if (!saveOutcome(history, attempt.copy(result = result.name.lowercase(Locale.ROOT), issue = failure), kind)) {
             return MailSendResult.RECORD_FAILED
         }
-        if (result == MailSendResult.SENT) print("메일 발송 완료 · ${kind.label} · $key · 수신 ${recipientCount}명")
+        if (result == MailSendResult.SENT) print("메일 발송 완료 · ${kind.label} · $key · 받는 사람 ${recipientCount}명")
         return result
     }
 

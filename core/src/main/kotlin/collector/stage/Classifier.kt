@@ -34,8 +34,8 @@ class Classifier(
 
             fun profileIssue(row: ClassifiedItem, key: String): String? = when {
                 row.profile == "none" -> null
-                row.profile !in config.profiles -> "알 수 없는 프로필(${row.profile})"
-                outsideCandidates(row, key) -> "후보에 없는 프로필(${row.profile})"
+                row.profile !in config.profiles -> "알 수 없는 분류(${row.profile})"
+                outsideCandidates(row, key) -> "허용된 분류가 아님(${row.profile})"
                 else -> null
             }
 

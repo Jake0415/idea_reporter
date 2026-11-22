@@ -80,5 +80,5 @@ export const TOPICS = [
 
 export const INBOX = {
   pass: [['hn', 'AI agents ask better questions than KPMG accountants…', '356', '수요 8.1'], ['github', 'DIYgod/pinky', '★2464', '기술 7.4'], ['hn', 'Energy-Based Reasoners: 385x more efficient…', '300', '기술 7.9']],
-  drop: [['github', '…/Gemini-Config-Checker- 외 20개', '★473', '스팸 묶음'], ['hn', 'GTA 6 Review: It Is a Masterpiece', '65', '무관'], ['hn', 'Attackers Used Optimizely to A/B Test…', '54', '임계값 미달 4.2'], ['github', '…/ai--manus2.0 외 8개', '★310', '스팸 묶음']],
+  drop: [['github', '…/Gemini-Config-Checker- 외 20개', '★473', '스팸 묶음'], ['hn', 'GTA 6 Review: It Is a Masterpiece', '65', '무관'], ['hn', 'Attackers Used Optimizely to A/B Test…', '54', '기준 점수 미달 4.2'], ['github', '…/ai--manus2.0 외 8개', '★310', '스팸 묶음']],
 };

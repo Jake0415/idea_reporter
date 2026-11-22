@@ -279,7 +279,7 @@ private suspend fun runDaily(
         print("${rendered?.subject ?: "카드 0개"} · 추적 ${result.trackingUpdates.size}건 · " +
             String.format(Locale.ROOT, "추정 USD %.6f", result.report.costUsd))
         result.metrics.profiles.forEach { (profile, counts) ->
-            print("$profile · 분류 ${counts.classified}건 · 임계값 통과 ${counts.thresholdPassed}건 · 최종 후보 ${counts.selected}건")
+            print("${profiles[profile]?.config?.name ?: profile} · 분류 ${counts.classified}건 · 기준 점수 통과 ${counts.thresholdPassed}건 · 최종 카드 후보 ${counts.selected}건")
         }
         result.report.failedSources.forEach { print("출처 실패 · ${it.source} · ${it.error}") }
         result.report.issues.forEach { print("· $it") }

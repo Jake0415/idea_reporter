@@ -210,7 +210,7 @@ class FullPipeline(
                 val reason = rejection.reason.name
                 cardRejections[reason] = cardRejections.getOrDefault(reason, 0) + 1
             }, onCitationsTrimmed = { card, detail ->
-                validationIssues += "인용 일부 제거 (${card.title}) · $detail"
+                validationIssues += "근거 링크 일부 제거 (${card.title}) · $detail"
             }).map {
                 it.copy(badges = badgeCalculator.badges(citations.citedSignals(it), priorTopics + topics, snapshots, now, today))
             }
@@ -223,7 +223,7 @@ class FullPipeline(
             generated = generate(retryAfterTruncation = generated.failure == TRUNCATED_RESPONSE)
             cards = validate(generated.cards)
         }
-        if (cards.isEmpty()) issues += generated.failure ?: "인용·필수 항목·분류 검증을 통과한 카드가 없습니다."
+        if (cards.isEmpty()) issues += generated.failure ?: "근거 링크·필수 항목·분류 검증을 통과한 카드가 없습니다."
         issues += classified.dropped.filter { it.reason == DropReason.CLASSIFY_FAILED || it.reason == DropReason.BUDGET_EXCEEDED }
             .map { it.detail }.filter(String::isNotBlank).distinct()
 

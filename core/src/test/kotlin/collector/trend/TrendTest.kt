@@ -79,8 +79,10 @@ class TrendTest {
         val singleDay = TrendAnalyzer.analyze(TrendInput(mapOf(date to runs.getValue(date.minusDays(2)))), date)
         assertEquals(listOf("mcp"), singleDay.themes.map { it.id })
         val rendered = TrendReportRenderer().render(singleDay)
-        assertContains(rendered.text, "희소 태그 2개 제외")
-        assertContains(rendered.html, "희소 태그 2개 제외")
+        assertContains(rendered.text, "너무 드문 태그 2개 제외")
+        assertContains(rendered.html, "너무 드문 태그 2개 제외")
+        assertFalse("◆ = 사업성 분석을 요청할 만한 테마" in rendered.text)
+        assertFalse("◆ = 사업성 분석을 요청할 만한 테마" in rendered.html)
     }
 
     @Test fun defaultSynonymsIncludeNoiseReductionAliases() {
@@ -576,6 +578,18 @@ class TrendTest {
         assertEquals(mapOf("Kotlin" to 2), report.languages)
         assertEquals(39, report.spam.single().count)
         assertTrue(report.themes.single().overheated)
+        assertTrue(report.summary.any { it.startsWith("저장소 몰림 · ") })
+        val rendered = TrendReportRenderer().render(report)
+        assertContains(rendered.text, "\n몰림(제품·저장소)\n")
+        assertContains(rendered.html, "<h2>몰림(제품·저장소)</h2>")
+        for (output in listOf(rendered.text, rendered.html)) {
+            assertContains(output, "저장소 몰림 · ${report.spam.single().name} 저장소 39개 · ")
+            assertContains(output, "제품 몰림 · ${report.themes.single().name} · 이미 나온 제품")
+            assertContains(output, "(제품 몰림)")
+            for (term in listOf("신호", "깔때기", "미매핑", "희소", "과열")) {
+                assertFalse(term in output, term)
+            }
+        }
     }
 
     @Test fun ossFallbackUsesFractionalAgeWithOneDayMinimum() {
@@ -724,8 +738,11 @@ class TrendTest {
         assertTrue(report.rising.zipWithNext().all { (left, right) -> left.id < right.id })
         val rendered = TrendReportRenderer().render(report)
         assertContains(rendered.subject, "뜨는 테마 10 · 분석 후보 ◆10 외 1")
-        assertEquals(10, rendered.text.lineSequence().count { it.startsWith("◆ ") })
+        val legend = "◆ = 사업성 분석을 요청할 만한 테마"
+        assertEquals(10, rendered.text.lineSequence().count { it.startsWith("◆ ") && it != legend })
         assertEquals(10, Regex(">◆ candidate-").findAll(rendered.html).count())
+        assertContains(rendered.text, legend)
+        assertContains(rendered.html, legend)
     }
 
     @Test fun summaryRanksByGrowthWhileTablePrioritizesCandidates() {
@@ -821,7 +838,7 @@ class TrendTest {
         assertEquals(listOf("suspect"), report.repositories.filter { it.suspected }.map { it.name })
         val rendered = TrendReportRenderer().render(report.copy(date = "2026-11-01"))
         assertContains(rendered.subject, "10월 5주")
-        assertContains(rendered.text, "suspect (의심) | ${"a".repeat(79)}… | 50")
+        assertContains(rendered.text, "suspect (스타 조작 의심) | ${"a".repeat(79)}… | 50")
         assertContains(rendered.text, "low | ${"a".repeat(79)}… | 50")
         assertContains(rendered.text, "지는 테마\n해당 없음")
         assertContains(rendered.html, "<h2>지는 테마</h2>\n<p>해당 없음</p>")

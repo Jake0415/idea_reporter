@@ -174,7 +174,7 @@ class ClassificationTest {
 
         assertTrue(result.signals.isEmpty())
         assertEquals(List(4) { DropReason.CLASSIFY_FAILED }, result.dropped.map { it.reason })
-        assertEquals(listOf("후보에 없는 프로필(market-signal)", "알 수 없는 프로필(unknown)",
+        assertEquals(listOf("허용된 분류가 아님(market-signal)", "알 수 없는 분류(unknown)",
             "점수 없음(null)", "주제 키 형식(${"/".repeat(40)})"), result.dropped.map { it.detail })
     }
 
@@ -225,7 +225,7 @@ class ClassificationTest {
             "timeout" to "모델 호출 실패 (timeout)",
             "refused" to "응답 거절",
             "invalid_json" to "JSON 응답 오류",
-            null to "후보에 없는 프로필(market-signal)"
+            null to "허용된 분류가 아님(market-signal)"
         )) {
             var calls = 0
             val result = classifier { _, keys ->

@@ -82,8 +82,8 @@ internal class OpportunityJudge(
                 val item = evidence[ref.itemId to ref.url]
                 val reason = when {
                     item == null -> "항목 ID–URL 불일치"
-                    ref.note.isBlank() -> "인용 이유 비어 있음"
-                    profile != null && item.profile != profile -> "블록-프로필 불일치"
+                    ref.note.isBlank() -> "근거 링크 설명 비어 있음"
+                    profile != null && item.profile != profile -> "근거 칸과 분류가 맞지 않음"
                     else -> return@filter true
                 }
                 counts[reason] = counts.getOrDefault(reason, 0) + 1
@@ -121,9 +121,9 @@ internal class OpportunityJudge(
         }
 
         val demand = valid.demandRefs.distinctBy { it.itemId }.size
-        gate(demand >= config.minDemandRefs, "수요 근거 ${demand}건 (기준 ${config.minDemandRefs}건)")
+        gate(demand >= config.minDemandRefs, "요청·불편 근거 ${demand}건 (기준 ${config.minDemandRefs}건)")
         val sources = valid.refs().map { evidence.getValue(it.itemId to it.url).source }.distinct().size
-        gate(sources >= config.minSources, "인용 출처 ${sources}종 (기준 ${config.minSources}종)")
+        gate(sources >= config.minSources, "근거 링크 출처 ${sources}종 (기준 ${config.minSources}종)")
         val provisional = input.dataDays < config.minDataDays
         gates += "${if (provisional) "잠정" else "통과"} · 데이터 ${input.dataDays}일 (기준 ${config.minDataDays}일)"
         val repositories = valid.materials.map { evidence.getValue(it.itemId to it.url) }.filter { it.source == "github" }

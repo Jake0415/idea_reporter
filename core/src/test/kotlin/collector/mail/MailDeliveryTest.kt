@@ -24,9 +24,11 @@ class MailDeliveryTest {
 
     @Test fun `daily report uses stored subject and is sent once unless forced`() {
         val sent = mutableListOf<MailMessage>()
-        val mail = MailDelivery(out, Mailer { sent += it }, 2)
+        val messages = mutableListOf<String>()
+        val mail = MailDelivery(out, Mailer { sent += it }, 2, print = messages::add)
         report("2026-11-20")
         assertEquals(MailSendResult.SENT, mail.send(MailKind.DAILY, "2026-11-20"))
+        assertTrue(messages.single().endsWith("받는 사람 2명"))
         assertEquals(MailSendResult.SKIPPED_DUPLICATE, mail.send(MailKind.DAILY, "2026-11-20"))
         assertEquals(MailSendResult.SENT, mail.send(MailKind.DAILY, "2026-11-20", resend = true))
         assertEquals(List(2) { MailMessage("렌더러 제목", "<h1>HTML</h1>", "렌더러 제목\n본문\n") }, sent)

@@ -18,14 +18,14 @@ class HtmlRenderer(categories: List<Category>) {
         val report = result.report
         val date = LocalDate.parse(report.runDate)
         val candidates = report.stages.firstOrNull { it.stage == "select" }?.output ?: 0
-        val subject = "[AI 아이디어] ${date.monthValue}월 ${date.dayOfMonth}일 — 카드 ${result.cards.size}개 (수집 ${report.fetchedTotal} → 후보 $candidates)"
+        val subject = "[AI 아이디어] ${date.monthValue}월 ${date.dayOfMonth}일 — 카드 ${result.cards.size}개 (수집 ${report.fetchedTotal} → 카드 후보 $candidates)"
         val funnel = report.stages.joinToString(" → ") { "${stageName(it.stage)} ${it.output}" }
         val failures = report.failedSources.joinToString(", ") { "${it.source} (${it.error})" }
         val costs = "오늘 비용 ${usd(todayCost)} · 이번 달 합계 ${usd(monthCost)} · 실행 시간 ${report.totalMillis}ms"
         val titles = result.tracked.associate { it.id to it.title }
         val text = buildString {
             appendLine(subject)
-            appendLine("깔때기 · $funnel")
+            appendLine("단계별 건수 · $funnel")
             if (failures.isNotEmpty()) appendLine("실패 출처 · $failures")
             report.issues.forEach { appendLine(it) }
             appendLine("\n목차")
@@ -50,7 +50,7 @@ class HtmlRenderer(categories: List<Category>) {
         }
         val html = buildString {
             appendLine("<!doctype html><html lang=\"ko\"><head><meta charset=\"utf-8\"><title>${escape(subject)}</title></head><body>")
-            appendLine("<h1>${escape(subject)}</h1><p>깔때기 · ${escape(funnel)}</p>")
+            appendLine("<h1>${escape(subject)}</h1><p>단계별 건수 · ${escape(funnel)}</p>")
             if (failures.isNotEmpty()) appendLine("<p>실패 출처 · ${escape(failures)}</p>")
             report.issues.forEach { appendLine("<p>${escape(it)}</p>") }
             appendLine("<h2>목차</h2><ol>")
@@ -105,10 +105,10 @@ class HtmlRenderer(categories: List<Category>) {
             "collect" -> "수집"
             "filter" -> "필터"
             "dedupe" -> "중복 제거"
-            "score" -> "점수 통일"
+            "score" -> "점수 맞추기"
             "classify" -> "분류"
-            "select" -> "후보"
-            "enrich" -> "보강"
+            "select" -> "카드 후보"
+            "enrich" -> "댓글·과거 기록 붙이기"
             "generate" -> "작성"
             "validate" -> "검증"
             "track" -> "추적"

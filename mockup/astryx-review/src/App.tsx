@@ -52,7 +52,7 @@ const SCREENS: ScreenDef[] = [
   {id: 'SC-16', name: '프롬프트 편집', group: '설정', tab: 'settings'},
   {id: 'SC-07', name: '출처 관리', group: '설정', tab: 'settings'},
   {id: 'SC-07a', name: '출처 상세', group: '설정', tab: 'settings'},
-  {id: 'SC-08', name: '신호 프로필', group: '설정', tab: 'settings', l: true},
+  {id: 'SC-08', name: '분류 기준', group: '설정', tab: 'settings', l: true},
   {id: 'SC-05', name: '오늘 수집 항목', group: '설정', tab: 'settings', l: true},
   {id: 'SC-09', name: '내 기준·카드 구성', group: '설정', tab: 'settings'},
   {id: 'SC-10', name: '실행 기록', group: '설정', tab: 'settings'},
@@ -348,8 +348,8 @@ function Detail({ctx}: {ctx: Ctx}) {
       {ctx.stars[idea.id] && <ClickableCard label="추적 보기" variant="transparent" padding={0} onClick={() => ctx.go('SC-14', {track: TRACKED.find(t => t.from === idea.id)?.id ?? 't1'})}><Banner status="info" title="추적 중" description="매일 새 소식을 조사합니다 · 눌러서 추적 상세" /></ClickableCard>}
       <Block title="오늘 고른 이유"><Text>{idea.why}</Text></Block>
       <Block title="문제"><Text>{idea.problem}</Text></Block>
-      <Block title="기술 신호"><Signal text={idea.tech} /></Block>
-      {idea.demand && <Block title="수요 신호"><Signal text={idea.demand} quotes={idea.quotes} /></Block>}
+      <Block title="쓸 수 있는 기술"><Signal text={idea.tech} /></Block>
+      {idea.demand && <Block title="사람들의 요청·불편"><Signal text={idea.demand} quotes={idea.quotes} /></Block>}
       {idea.comp && <Block title="경쟁 제품"><Signal text={idea.comp} /></Block>}
       {idea.hist && <Block title="과거 언급"><Text type="supporting">{idea.hist}</Text></Block>}
       <Block title="실행 판단"><Card variant="muted"><VStack gap={1.5}><Row k="기간" v={idea.effort} /><Row k="차별점" v={idea.diff} /><Row k="가장 큰 위험" v={idea.risk} /><Row k="2주 검증" v={idea.valid} /></VStack></Card></Block>
@@ -372,7 +372,7 @@ function Detail({ctx}: {ctx: Ctx}) {
 function TrackList({ctx}: {ctx: Ctx}) {
   return (
     <Page>
-      <HStack justify="between"><Text type="supporting">추적 3/10 · 오늘 업데이트 2건</Text><Text type="supporting">신호 강도 = 최근 7일</Text></HStack>
+      <HStack justify="between"><Text type="supporting">추적 3/10 · 오늘 업데이트 2건</Text><Text type="supporting">관련 글 수 = 최근 7일</Text></HStack>
       {TRACKED.map(t => (
         <ClickableCard key={t.id} label={t.title} onClick={() => ctx.go('SC-14', {track: t.id})}>
           <VStack gap={2}>
@@ -382,7 +382,7 @@ function TrackList({ctx}: {ctx: Ctx}) {
               <Text type="supporting">마지막 {t.last}</Text>
             </HStack>
             {t.updates[0] && <Text type="supporting" maxLines={2}>{t.updates[0].summary}</Text>}
-            <Text type="supporting">{t.started}부터 추적 · 신호 강도 {t.strength}</Text>
+            <Text type="supporting">{t.started}부터 추적 · 관련 글 수 {t.strength}</Text>
           </VStack>
         </ClickableCard>
       ))}
@@ -400,7 +400,7 @@ function TrackDetail({ctx}: {ctx: Ctx}) {
         <HStack gap={1}><Token label={t.cat} size="sm" color="blue" /><Badge label={t.quiet ? '조용함' : '추적 중'} variant="neutral" /><Badge label={TREND_LABEL[t.trend]} variant={TREND_VARIANT[t.trend]} /></HStack>
       </VStack>
       <Card variant="muted"><VStack gap={2}>
-        <HStack justify="between"><Text type="label">신호 강도 {t.strength}</Text><Text type="supporting">{t.started}부터 추적</Text></HStack>
+        <HStack justify="between"><Text type="label">관련 글 수 {t.strength}</Text><Text type="supporting">{t.started}부터 추적</Text></HStack>
         <HStack gap={1}>{t.bars.map((v, i) => <ProgressBar key={i} label={`${7 - i}일 전`} isLabelHidden value={v ? Math.min(100, 30 + v * 23) : 4} />)}</HStack>
         <HStack justify="between"><Text type="supporting">7일 전</Text><Text type="supporting">오늘</Text></HStack>
       </VStack></Card>
@@ -477,7 +477,7 @@ function SettingsHome({ctx}: {ctx: Ctx}) {
       <SectionLabel>수집</SectionLabel>
       <Group>{[
         <NavRow key="a" title="출처 관리" sub="5개 중 2개 켜짐 · 오늘 125건" onClick={() => ctx.go('SC-07')} />,
-        <NavRow key="b" title="신호 프로필" sub="기술 6.0 · 수요 6.0 · 경쟁 5.0" onClick={() => ctx.go('SC-08')} end={<Badge label="L" variant="neutral" />} />,
+        <NavRow key="b" title="분류 기준" sub="기술 6.0 · 수요 6.0 · 경쟁 5.0" onClick={() => ctx.go('SC-08')} end={<Badge label="L" variant="neutral" />} />,
         <NavRow key="c" title="오늘 수집 항목" sub="통과 25 · 탈락 100" onClick={() => ctx.go('SC-05')} end={<Badge label="L" variant="neutral" />} />,
       ]}</Group>
       <SectionLabel>아이디어</SectionLabel>
@@ -620,8 +620,8 @@ function PromptEdit({ctx}: {ctx: Ctx}) {
         <Card><VStack gap={2}>
           <Text type="label">시험 실행 · 최근 실행 자료 5건 · 저장 전 내용으로</Text>
           {testing ? <ProgressBar label="실행 중" value={60} /> : <>
-            <Text type="supporting">결과(요약) — 5건 중 통과 3 · 무관 1 · 임계값 미달 1</Text>
-            <Card variant="muted"><Text>"AI agents ask better questions…" → 수요 신호 8.1 · 이유: 감사 실무자의 구체적 불편과 동조 댓글</Text></Card>
+            <Text type="supporting">결과(요약) — 5건 중 통과 3 · 무관 1 · 기준 점수 미달 1</Text>
+            <Card variant="muted"><Text>"AI agents ask better questions…" → 사람들의 요청·불편 8.1 · 이유: 감사 실무자의 구체적 불편과 동조 댓글</Text></Card>
             <Text type="supporting">토큰 6.2k/1.1k · 비용 $0.004 (일일 예산에 포함) · 실행 기록에 "시험"으로 남음</Text>
           </>}
         </VStack></Card>
@@ -668,14 +668,14 @@ function SourceDetail({ctx}: {ctx: Ctx}) {
 }
 
 function Profiles({ctx}: {ctx: Ctx}) {
-  const items = [['tech-signal', '기술 신호', '1인 개발자가 지금 재료로 쓸 수 있나?', '6.0', '8'], ['demand-signal', '수요 신호', 'AI로 풀 수 있는 반복되는 불편이 있나?', '6.0', '8'], ['market-signal', '경쟁 제품', '수요를 증명하면서 빈틈이 있나?', '5.0', '4']];
+  const items = [['tech-signal', '쓸 수 있는 기술', '1인 개발자가 지금 재료로 쓸 수 있나?', '6.0', '8'], ['demand-signal', '사람들의 요청·불편', 'AI로 풀 수 있는 반복되는 불편이 있나?', '6.0', '8'], ['market-signal', '경쟁 제품', '수요를 증명하면서 빈틈이 있나?', '5.0', '4']];
   return (
     <Page>
       {items.map(([id, n, q, t, m]) => (
         <Card key={id}><VStack gap={2}>
           <HStack justify="between"><Text type="label">{n}</Text>{ctx.overrides[`profile.${id}.analysis`] && <Badge label="평가표 수정됨" variant="info" />}</HStack>
           <Text type="supporting">{q}</Text>
-          <HStack gap={2}><TextInput label="임계값" value={t} onChange={() => {}} /><TextInput label="후보 상한" value={m} onChange={() => {}} /></HStack>
+          <HStack gap={2}><TextInput label="기준 점수" value={t} onChange={() => {}} /><TextInput label="후보 상한" value={m} onChange={() => {}} /></HStack>
           <HStack gap={1}>
             <Button label="포함 기준 편집" variant="secondary" size="sm" onClick={() => ctx.go('SC-16', {prompt: `profile.${id}.match`})} />
             <Button label="평가표 편집" variant="secondary" size="sm" onClick={() => ctx.go('SC-16', {prompt: `profile.${id}.analysis`})} />
@@ -739,7 +739,7 @@ function RunDetail() {
       <Banner status="warning" title="Reddit 시간 초과(45초)" description="나머지 출처로 계속" />
       <Block title="단계 (입력 → 출력 · 시간)"><Card padding={2}><VStack gap={1}>{stages.map(([s, i, o, t]) => <Row key={s} k={s} v={`${i} → ${o} · ${t}`} />)}</VStack></Card></Block>
       <Block title="출처"><Card padding={2}><VStack gap={1}><Row k="HN" v="10 · 성공" /><Row k="GitHub" v="115 · 성공 (스팸 99)" /><Row k="Reddit" v="0 · 시간 초과" /></VStack></Card></Block>
-      <Block title="탈락 이유"><HStack gap={1}>{[['스팸 묶음', 99], ['무관', 22], ['임계값 미달', 30], ['주제 합침', 4], ['상한 초과', 8]].map(([k, v]) => <Badge key={k} label={`${k} ${v}`} variant="neutral" />)}</HStack></Block>
+      <Block title="탈락 이유"><HStack gap={1}>{[['스팸 묶음', 99], ['무관', 22], ['기준 점수 미달', 30], ['주제 합침', 4], ['상한 초과', 8]].map(([k, v]) => <Badge key={k} label={`${k} ${v}`} variant="neutral" />)}</HStack></Block>
       <Block title="AI 호출 (공급자·모델·프롬프트 버전)"><Card padding={2}><VStack gap={1}>
         <Row k="분류 ×4" v="Claude haiku · classify 기본값 · $0.007" />
         <Row k="작성" v="Claude opus · ideas 기본값 · $0.156" />

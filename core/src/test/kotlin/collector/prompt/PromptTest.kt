@@ -11,6 +11,20 @@ import kotlin.test.*
 class PromptTest {
     @TempDir lateinit var directory: Path
 
+    @Test fun commonPromptInfoIsAvailableWhenProfileNamesCannotBeRead() {
+        val entries = PromptCatalog.buildEntries { path ->
+            when (path) {
+                "profiles/tech-signal/profile.json" -> throw java.io.IOException("읽기 실패")
+                "profiles/demand-signal/profile.json" -> "{"
+                else -> null
+            }
+        }
+        assertEquals("prompts/ideas.md", entries.getValue("ideas").resourcePath)
+        for (profile in listOf("tech-signal", "demand-signal", "market-signal")) {
+            assertEquals("$profile 포함 기준", entries.getValue("profile.$profile.match").name)
+        }
+    }
+
     @Test fun resolvesOverridesAndTracksRevisions() {
         val store = FilePromptStore(directory)
         val resolver = PromptResolver(store)

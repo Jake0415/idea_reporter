@@ -70,7 +70,7 @@ internal class AnalysisReports(private val directory: File) {
         val notes = run.budgetWarnings + run.issues
         val text = listOf(title, "", run.judgment) + listOfNotNull(fit) +
             listOf("", "검토 분야") + opportunities.flatMapIndexed { index, entry ->
-                listOf(entry) + citations[index].map { "  근거 · $it" }
+                listOf(entry) + citations[index].map { "  근거 링크 · $it" }
             } + listOf("", usage) + notes
         val html = buildString {
             appendLine("<!doctype html><html lang=\"ko\"><meta charset=\"utf-8\"><title>${escape(title)}</title>")
@@ -81,7 +81,7 @@ internal class AnalysisReports(private val directory: File) {
                 appendLine("<li>" + escape(entry))
                 if (citations[index].isNotEmpty()) {
                     appendLine("<ul>")
-                    citations[index].forEach { appendLine("<li>" + escape(it) + "</li>") }
+                    citations[index].forEach { appendLine("<li>근거 링크 · " + escape(it) + "</li>") }
                     appendLine("</ul>")
                 }
                 appendLine("</li>")
@@ -132,7 +132,7 @@ internal class AnalysisReports(private val directory: File) {
             entry.gates.forEach { appendLine(it) }
             appendLine(entry.reason)
             opportunity.refs().distinctBy { it.url }.take(3).forEach { ref ->
-                appendLine(listOfNotNull("근거", ref.sourceLabel, ref.url).joinToString(" · "))
+                appendLine(listOfNotNull("근거 링크", ref.sourceLabel, ref.url).joinToString(" · "))
             }
             append("무엇이 바뀌면 의뢰 가능한가 · ${opportunity.whatWouldChange}")
         }

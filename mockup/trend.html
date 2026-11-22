@@ -188,9 +188,9 @@ const themes = [
         market:[['Show HN: 클라우드형 문서 교정 도구 출시','HN · 132점']]}},
   {id:'t2', name:'에이전트 실행 기록·관측', w:[3,4,6,11], g:115, src:['HN','GitHub','HF'], demand:2, market:2, oss:'+54/일', lic:'MIT 3', mine:'—', mark:true, why:'증가율 ×2.2 · 수요 2 · 출처 3', repos:['tracelane/tracelane']},
   {id:'t3', name:'전화 응대 음성 에이전트', w:[1,1,2,5], g:250, src:['HN','HF'], demand:1, market:1, oss:'+31/일', lic:'Apache-2.0 1', mine:'—', mark:true, why:'증가율 ×3.8 · 수요 1 · 출처 2', repos:['voxdesk/voxdesk']},
-  {id:'t4', name:'MCP 서버 도구', w:[12,15,16,20], g:40, src:['HN','GitHub'], demand:0, market:4, oss:'+40/일', lic:'MIT 5', mine:'관심 없음 1', why:'수요 신호 없음'},
+  {id:'t4', name:'MCP 서버 도구', w:[12,15,16,20], g:40, src:['HN','GitHub'], demand:0, market:4, oss:'+40/일', lic:'MIT 5', mine:'관심 없음 1', why:'요청·불편 없음'},
   {id:'t5', name:'Gemini 설정 검사기', w:[0,0,1,9], g:null, src:['GitHub'], demand:0, market:0, oss:'복제 96', lic:'—', mine:'—', hot:true, why:'같은 이름 저장소 96개 — 복제·스팸 급증'},
-  {id:'t6', name:'브라우저 자동화 에이전트', w:[6,7,7,9], g:32, src:['HN','GitHub','RSS'], demand:1, market:3, oss:'+22/일', lic:'MIT 2', mine:'—', why:'시장 3 — 붐빔'},
+  {id:'t6', name:'브라우저 자동화 에이전트', w:[6,7,7,9], g:32, src:['HN','GitHub','RSS'], demand:1, market:3, oss:'+22/일', lic:'MIT 2', mine:'—', why:'이미 나온 제품 3 — 붐빔'},
 ];
 const falling = [
   {name:'RAG 프레임워크', w:[14,11,9,6], g:-45},
@@ -291,7 +291,7 @@ S['UX-0'] = () => `<div class="doc">
 트렌드(신규)
  ├ 기술 ········· SC-17 주간 리포트(뜨는·지는 테마, ◆ 분석 후보)
  │   └ SC-19 테마 상세(추이·지표·근거) ─ [사업성 분석 요청]
- ├ 오픈소스 ····· SC-18 빠르게 크는 저장소·언어·라이선스·과열
+ ├ 오픈소스 ····· SC-18 빠르게 크는 저장소·언어·라이선스·몰림
  └ 분석 기록 ···· SC-27 지난 분석·진행 중 의뢰
        SC-20 분석 요청 확인(하단 시트, 추정 비용) → SC-21 진행 중
        → SC-22 분석 결과(점수 순 목록) ─ SC-23 간단 보기(시트, 0원)
@@ -355,14 +355,14 @@ S['UX-1'] = () => `<div class="doc">
     <tr><td>수락</td><td>추적 탭에 자동 추가, 다음 주 리포트에 "진행 중 의뢰의 시장 변화"(코드 지표)</td></tr>
     <tr><td>거절 + 이유</td><td>다음 분석 요청의 피드백 입력</td></tr>
     <tr><td>보류</td><td>4주 뒤 리포트에 다시 표시</td></tr>
-    <tr><td>간단 보기·지켜보기</td><td>관심 신호 → ◆ 정렬에 반영</td></tr>
+    <tr><td>간단 보기·지켜보기</td><td>관심 표시 → ◆ 정렬에 반영</td></tr>
   </table>
 </div>`;
 
 S['SC-01'] = () => phone(`${bar('오늘',{right:`<button class="ib">${I.hist}</button>`})}
 <div class="scr">
   <div class="box info row" data-go="SC-17" style="cursor:pointer">
-    <div class="grow"><b>이번 주 트렌드 리포트</b><div class="small">뜨는 테마 3 · 분석 후보 ◆2 · 과열 1</div></div><span>›</span>
+    <div class="grow"><b>이번 주 트렌드 리포트</b><div class="small">뜨는 테마 3 · 분석 후보 ◆2 · 몰림 1</div></div><span>›</span>
   </div>
   <div class="tiny" style="margin:2px 2px 10px">수집 224 → 후보 5 → 카드 2 · 07:45 · $0.10</div>
   <div class="box"><b>사내 문서를 로컬 소형 모델로 검토하는 설치형 리뷰어</b><div class="small muted" style="margin:3px 0 6px">외부 전송 없이 팀 문서를 검토만 해 주는 도구</div><span class="tok">개발 도구</span><span class="tok">여러 곳에서 화제</span></div>
@@ -376,8 +376,8 @@ const sc17 = (overlay, state) => {
   const picking = state!=='기본';
   const row = (t) => `<div class="theme" data-go="SC-19" data-theme="${t.id}">
       ${picking?`<div class="ck ${sel.has(t.id)?'on':''}" data-pick="${t.id}">${sel.has(t.id)?'✓':''}</div>`:''}
-      <div class="grow"><div class="nm">${t.name}${t.mark?'<span class="mark">◆ 분석 후보</span>':''}${t.hot?'<span class="hot">과열</span>':''}</div>
-      <div class="mt">${t.w[3]}건 · 출처 ${t.src.length} · 수요 ${t.demand} · 시장 ${t.market}</div></div>
+      <div class="grow"><div class="nm">${t.name}${t.mark?'<span class="mark">◆ 분석 후보</span>':''}${t.hot?'<span class="hot">제품 몰림</span>':''}</div>
+      <div class="mt">${t.w[3]}건 · 출처 ${t.src.length} · 요청·불편 ${t.demand} · 이미 나온 제품 ${t.market}</div></div>
       ${spark(t.w, t.hot?'var(--warn)':'var(--accent)')}
       <div class="gr ${t.g==null?'':'up'}">${t.g==null?'신규':'+'+t.g+'%'}</div></div>`;
   return phone(`${bar('트렌드',{right:`<button class="ib" data-go="SC-28">${I.more}</button>`})}
@@ -389,13 +389,13 @@ const sc17 = (overlay, state) => {
     <div class="box soft small">
       <div>• <b>가장 뜬 테마</b> 전화 응대 음성 에이전트 ×3.8 (5건)</div>
       <div>• <b>가장 빠른 저장소</b> docsieve/docsieve 하루 +312★</div>
-      <div>• <b>과열 경고</b> Gemini 설정 검사기 — 같은 이름 저장소 96개</div>
+      <div>• <b>저장소 몰림</b> Gemini 설정 검사기 — 같은 이름 저장소 96개</div>
     </div>
     <div class="sec">뜨는 테마 <span>${picking?'분석할 테마를 고르세요 (최대 3)':'4주 추이 · 이번 주 증가율'}</span></div>
     ${themes.map(row).join('')}
     <div class="sec">지는 테마</div>
     ${falling.map(t=>`<div class="theme"><div class="grow"><div class="nm">${t.name}</div><div class="mt">${t.w[3]}건</div></div>${spark(t.w,'var(--bad)')}<div class="gr down">${t.g}%</div></div>`).join('')}
-    <div class="tiny" style="margin-top:12px">◆ = 증가율 ×1.5 이상 · 수요 신호 1+ · 출처 2종+ (코드 규칙, 판단 아님)</div>`}
+    <div class="tiny" style="margin-top:12px">◆ = 증가율 ×1.5 이상 · 요청·불편 1+ · 출처 2종+ (코드 규칙, 판단 아님)</div>`}
   </div>
   ${picking&&!empty?`<button class="btn pri fab" data-go="SC-20">선택한 ${sel.size}개 사업성 분석 요청 · <span style="opacity:.85">≈$${(0.18+0.12*sel.size).toFixed(2)}</span></button>`:''}`, 'trend', overlay);
 };
@@ -414,8 +414,8 @@ S['SC-18'] = () => phone(`${bar('트렌드')}
   ${[['Python',46],['TypeScript',28],['Go',10],['Rust',8],['기타',8]].map(([n,v])=>`<div class="row small" style="margin:5px 0"><span style="width:76px">${n}</span><div class="bar"><i style="width:${v}%"></i></div><span style="width:34px;text-align:right">${v}%</span></div>`).join('')}
   <div class="sec">라이선스 <span>재료로 쓸 수 있는가</span></div>
   ${[['MIT',52],['Apache-2.0',30],['없음',12],['GPL 계열',6]].map(([n,v],i)=>`<div class="row small" style="margin:5px 0"><span style="width:76px">${n}</span><div class="bar ${i>1?'low':''}"><i style="width:${v}%"></i></div><span style="width:34px;text-align:right">${v}%</span></div>`).join('')}
-  <div class="sec">과열 — 복제·스팸 급증</div>
-  <div class="box warn small"><b>Gemini-Config-Checker</b> 같은 이름·설명 저장소 96개 (11.20)<br>수집에서 스팸으로 걸렀습니다. 유행 과열 신호로만 표시합니다.</div>
+  <div class="sec">저장소 몰림 — 복제·스팸 급증</div>
+  <div class="box warn small"><b>Gemini-Config-Checker</b> 같은 이름·설명 저장소 96개 (11.20)<br>수집에서 스팸으로 걸렀습니다. 저장소 몰림으로만 표시합니다.</div>
 </div>`);
 
 S['SC-19'] = () => { const t = themes[0]; return phone(`${bar('테마 상세',{back:'SC-17',right:`<button class="ib">${I.share}</button>`})}
@@ -427,15 +427,15 @@ S['SC-19'] = () => { const t = themes[0]; return phone(`${bar('테마 상세',{b
     <tr><th>지표</th><th class="r">값</th><th>뜻</th></tr>
     <tr><td>증가율</td><td class="r up"><b>+180%</b></td><td class="tiny">이번 주 ÷ 지난 3주 평균</td></tr>
     <tr><td>출처</td><td class="r">${t.src.join('·')}</td><td class="tiny">3종 — 한 동네 유행 아님</td></tr>
-    <tr><td>수요 신호</td><td class="r">${t.demand}건</td><td class="tiny">사람의 불편·요청</td></tr>
-    <tr><td>시장 신호</td><td class="r">${t.market}건</td><td class="tiny">출시 제품</td></tr>
+    <tr><td>사람들의 요청·불편</td><td class="r">${t.demand}건</td><td class="tiny">사람의 불편·요청</td></tr>
+    <tr><td>이미 나온 제품</td><td class="r">${t.market}건</td><td class="tiny">출시 제품</td></tr>
     <tr><td>OSS 속도</td><td class="r">${t.oss}</td><td class="tiny">관련 저장소 하루 스타 중앙값</td></tr>
     <tr><td>라이선스</td><td class="r">${t.lic}</td><td class="tiny">재료로 사용 가능</td></tr>
     <tr><td>내 반응</td><td class="r">${t.mine}</td><td class="tiny">관련 카드</td></tr>
   </table>
-  <div class="blk"><div class="bt">수요 근거 ${t.ev.demand.length}</div>${t.ev.demand.map(([a,b])=>`<div class="sig">${a}<div class="src">${b} ↗</div></div>`).join('')}</div>
+  <div class="blk"><div class="bt">요청·불편 근거 ${t.ev.demand.length}</div>${t.ev.demand.map(([a,b])=>`<div class="sig">${a}<div class="src">${b} ↗</div></div>`).join('')}</div>
   <div class="blk"><div class="bt">기술 근거 ${t.ev.tech.length}</div>${t.ev.tech.map(([a,b])=>`<div class="sig">${a}<div class="src">${b} ↗</div></div>`).join('')}</div>
-  <div class="blk"><div class="bt">시장(경쟁) ${t.ev.market.length}</div>${t.ev.market.map(([a,b])=>`<div class="sig">${a}<div class="src">${b} ↗</div></div>`).join('')}</div>
+  <div class="blk"><div class="bt">이미 나온 제품 ${t.ev.market.length}</div>${t.ev.market.map(([a,b])=>`<div class="sig">${a}<div class="src">${b} ↗</div></div>`).join('')}</div>
   <div class="blk"><div class="bt">관련 카드</div><div class="small">11.20 · 사내 문서를 로컬 소형 모델로 검토하는 설치형 리뷰어 ★</div></div>
 </div>`, 'trend', `<button class="btn pri fab" data-go="SC-20">이 테마 사업성 분석 요청 · <span style="opacity:.85">≈$0.30</span></button>`); };
 
@@ -547,9 +547,9 @@ S['SC-25'] = () => {
   if (s==='거절') sheet = `<div style="font-size:17px;font-weight:700;margin-bottom:4px">거절 이유</div><div class="small muted" style="margin-bottom:12px">다음 분석 요청 때 참고합니다.</div>
     ${['시장 작음','이미 있음','너무 큼','내 분야 아님','근거 약함','기타'].map((c,i)=>`<span class="chip ${i===2?'on':''}">${c}</span>`).join('')}
     <div class="inputbar" style="border:none;padding:4px 0 12px"><div class="in">메모 (선택)</div></div><button class="btn pri full">거절하기</button>`;
-  else if (s==='보류') sheet = `<div style="font-size:17px;font-weight:700;margin-bottom:8px">보류</div><div class="small muted" style="margin-bottom:12px">4주 뒤(12월 20일) 리포트에 다시 보여 드립니다. 그 사이 관련 신호는 계속 쌓입니다.</div><button class="btn pri full">보류하기</button>`;
+  else if (s==='보류') sheet = `<div style="font-size:17px;font-weight:700;margin-bottom:8px">보류</div><div class="small muted" style="margin-bottom:12px">4주 뒤(12월 20일) 리포트에 다시 보여 드립니다. 그 사이 관련 글는 계속 쌓입니다.</div><button class="btn pri full">보류하기</button>`;
   else sheet = `<div style="font-size:17px;font-weight:700;margin-bottom:8px">의뢰를 수락합니다</div>
-    <div class="small" style="margin-bottom:6px">• 이 분야를 <b>추적 탭</b>에 올려 매일 신호를 모읍니다</div>
+    <div class="small" style="margin-bottom:6px">• 이 분야를 <b>추적 탭</b>에 올려 매일 관련 글을 모읍니다</div>
     <div class="small" style="margin-bottom:6px">• 매주 리포트에 <b>진행 중 의뢰의 시장 변화</b> 칸이 생깁니다(0원)</div>
     <div class="small" style="margin-bottom:14px">• 의뢰서는 분석 기록에 <b>진행 중</b>으로 보관됩니다</div>
     <button class="btn pri full">수락하기</button>`;
@@ -571,7 +571,7 @@ S['SC-26'] = () => phone(`${bar('추가 질문',{back:'SC-24'})}
 S['SC-27'] = () => phone(`${bar('트렌드')}
 <div class="scr">
   ${segs('분석 기록')}
-  <div class="box row" style="cursor:pointer" data-go="SC-24"><div class="grow"><div class="tiny">진행 중 의뢰</div><b>사내 문서 로컬 검토 설치형 도구</b><div class="small muted">수락 11.23 · 이번 주 관련 신호 +4</div></div><span class="chev">›</span></div>
+  <div class="box row" style="cursor:pointer" data-go="SC-24"><div class="grow"><div class="tiny">진행 중 의뢰</div><b>사내 문서 로컬 검토 설치형 도구</b><div class="small muted">수락 11.23 · 이번 주 관련 글 +4</div></div><span class="chev">›</span></div>
   <div class="sec">지난 분석 <span>이번 달 $1.48 / $5.00</span></div>
   <div class="list">${history.map((h,i)=>`<div class="li" data-go="SC-22" data-st="${i===1?'사업성 미달':'의뢰 1건'}">
     <div style="width:38px" class="tiny">${h.d}</div>
@@ -602,7 +602,7 @@ S['SC-28'] = () => phone(`${bar('분석 설정',{back:'SC-17'})}
 
 S['N-02'] = () => `<div class="noti">
   <div class="tiny" style="margin:0 4px 8px">잠금 화면 알림 (누르면 해당 화면)</div>
-  <div class="n" data-go="SC-17"><div class="row sb tiny"><span>AI 아이디어 수집기</span><span>일 07:02</span></div><b class="small">이번 주 트렌드 리포트</b><div class="small muted">뜨는 테마 3 · 분석 후보 ◆2 · 과열 1</div></div>
+  <div class="n" data-go="SC-17"><div class="row sb tiny"><span>AI 아이디어 수집기</span><span>일 07:02</span></div><b class="small">이번 주 트렌드 리포트</b><div class="small muted">뜨는 테마 3 · 분석 후보 ◆2 · 몰림 1</div></div>
   <div class="n" data-go="SC-22"><div class="row sb tiny"><span>AI 아이디어 수집기</span><span>방금</span></div><b class="small">사업성 분석 완료 — 개발 의뢰 1건</b><div class="small muted">사내 문서 로컬 검토 설치형 도구 (3.8) · $0.41</div></div>
   <div class="n" data-go="SC-22" data-st="사업성 미달"><div class="row sb tiny"><span>AI 아이디어 수집기</span><span>11.15</span></div><b class="small">사업성 분석 완료 — 의뢰 없음</b><div class="small muted">최고 3.2(기준 3.5) · 검토 분야 3개 보기</div></div>
   <div class="n" data-go="SC-20" data-st="예산 초과"><div class="row sb tiny"><span>AI 아이디어 수집기</span><span>11.28</span></div><b class="small">분석 월 상한 80% 사용</b><div class="small muted">$4.00 / $5.00</div></div>
@@ -611,15 +611,15 @@ S['N-02'] = () => `<div class="noti">
 S['M-02'] = () => `<div class="mail">
   <div class="mh">받는 사람: 나 · 일요일 07:02<b>[기술 트렌드] 11월 4주 — 뜨는 테마 3 · 분석 후보 ◆2</b></div>
   <div class="mb">
-    <div class="box soft small">• 가장 뜬 테마: 전화 응대 음성 에이전트 ×3.8<br>• 가장 빠른 저장소: docsieve/docsieve 하루 +312★<br>• 과열 경고: Gemini 설정 검사기 — 같은 이름 저장소 96개</div>
+    <div class="box soft small">• 가장 뜬 테마: 전화 응대 음성 에이전트 ×3.8<br>• 가장 빠른 저장소: docsieve/docsieve 하루 +312★<br>• 저장소 몰림: Gemini 설정 검사기 — 같은 이름 저장소 96개</div>
     <h4>뜨는 테마</h4>
-    <table class="tbl"><tr><th>테마</th><th class="r">이번 주</th><th class="r">증가</th><th class="r">출처</th><th class="r">수요</th><th class="r">시장</th></tr>
-      ${themes.map(t=>`<tr><td>${t.mark?'◆ ':''}${t.name}${t.hot?' (과열)':''}</td><td class="r">${t.w[3]}</td><td class="r">${t.g==null?'신규':'+'+t.g+'%'}</td><td class="r">${t.src.length}</td><td class="r">${t.demand}</td><td class="r">${t.market}</td></tr>`).join('')}</table>
+    <table class="tbl"><tr><th>테마</th><th class="r">이번 주</th><th class="r">증가</th><th class="r">출처</th><th class="r">요청·불편</th><th class="r">이미 나온 제품</th></tr>
+      ${themes.map(t=>`<tr><td>${t.mark?'◆ ':''}${t.name}${t.hot?' (제품 몰림)':''}</td><td class="r">${t.w[3]}</td><td class="r">${t.g==null?'신규':'+'+t.g+'%'}</td><td class="r">${t.src.length}</td><td class="r">${t.demand}</td><td class="r">${t.market}</td></tr>`).join('')}</table>
     <h4>지는 테마</h4>
     <div class="small">${falling.map(t=>`${t.name} ${t.g}%`).join(' · ')}</div>
     <h4>빠르게 크는 저장소</h4>
     <table class="tbl"><tr><th>저장소</th><th class="r">하루</th><th>언어</th><th>라이선스</th></tr>${repos.slice(0,5).map(r=>`<tr><td>${r.n}</td><td class="r">+${r.day}</td><td>${r.lang}</td><td>${r.lic}</td></tr>`).join('')}</table>
-    <h4>진행 중 의뢰</h4><div class="small">사내 문서 로컬 검토 설치형 도구 — 이번 주 관련 신호 +4 (수요 1 · 기술 3)</div>
+    <h4>진행 중 의뢰</h4><div class="small">사내 문서 로컬 검토 설치형 도구 — 이번 주 관련 글 +4 (수요 1 · 기술 3)</div>
     <p style="margin-top:18px"><a class="cta" data-go="SC-17">앱에서 테마 고르고 분석 요청하기</a></p>
     <div class="tiny">이 메일은 코드로 만든 리포트입니다(LLM 비용 0원). 데이터 28일 · 수집 실패 없음.</div>
   </div></div>`;
@@ -640,9 +640,9 @@ S['M-03'] = () => `<div class="mail">
 const info = {
   'UX-0':{p:'전체 구조와 규칙을 한 장에.',d:['하단 탭에 트렌드 추가(5개)','비용 표시·점진 공개·판단/안내 구분 규칙','새 화면 목록과 비용'],q:['하단 탭 5개가 많으면 트렌드를 오늘 탭 안 세그먼트로 넣는 안도 가능']},
   'UX-1':{p:'알림 → 메일 → 앱의 3겹 전달.',d:['바깥일수록 짧게, 행동은 앱에서만','주간 흐름(0원)과 요청 흐름(비용) 분리','응답이 어디로 돌아가는지']},
-  'SC-01':{p:'리포트가 왔다는 것을 매일 보는 화면에서 알린다.',d:['맨 위 파란 띠: 뜨는 테마 수·◆ 후보 수·과열 수','누르면 SC-17'],next:['SC-17'],cost:'0원'},
-  'SC-17':{p:'이번 주 기술 트렌드를 훑고, 분석할 테마를 고른다.',d:['요약 3줄(코드 템플릿)','테마 줄: 이름·◆/과열·건수·출처·수요·시장·4주 추이·증가율','지는 테마','선택 상태: 체크 → 하단 요청 버튼에 추정 비용'],next:['SC-19 테마 상세','SC-20 분석 요청'],cost:'0원 (요청 버튼만 비용)',states:['기본','테마 선택','데이터 부족']},
-  'SC-18':{p:'오픈소스 쪽 흐름: 누가 무엇을 만들고 있나.',d:['하루 스타 증가 순 저장소(언어·라이선스·포크 비율)','언어·라이선스 분포 막대','과열(복제 급증) 경고'],cost:'0원'},
+  'SC-01':{p:'리포트가 왔다는 것을 매일 보는 화면에서 알린다.',d:['맨 위 파란 띠: 뜨는 테마 수·◆ 후보 수·몰림 수','누르면 SC-17'],next:['SC-17'],cost:'0원'},
+  'SC-17':{p:'이번 주 기술 트렌드를 훑고, 분석할 테마를 고른다.',d:['요약 3줄(코드 템플릿)','테마 줄: 이름·◆/몰림·건수·출처·요청·불편·이미 나온 제품·4주 추이·증가율','지는 테마','선택 상태: 체크 → 하단 요청 버튼에 추정 비용'],next:['SC-19 테마 상세','SC-20 분석 요청'],cost:'0원 (요청 버튼만 비용)',states:['기본','테마 선택','데이터 부족']},
+  'SC-18':{p:'오픈소스 쪽 흐름: 누가 무엇을 만들고 있나.',d:['하루 스타 증가 순 저장소(언어·라이선스·포크 비율)','언어·라이선스 분포 막대','저장소 몰림(복제 급증) 경고'],cost:'0원'},
   'SC-19':{p:'요청 전에 숫자와 근거를 직접 확인한다.',d:['4주 막대 그래프','지표 표(값 + 뜻)','수요·기술·시장 근거 원문','관련 카드'],next:['SC-20'],cost:'0원 (요청 버튼만 비용)'},
   'SC-20':{p:'돈이 드는 순간 — 무엇을, 얼마에, 어떤 모델로 돌리는지 확인.',d:['범위: 선택 테마 / 이번 주 전체','반대 검토 켜기·끄기(추가 비용 표시)','모델·호출 수·추정 비용·이번 달 사용량','중복 분석 안내, 상한 초과 시 버튼 막힘'],next:['SC-21'],cost:'≈$0.41 (샘플)',states:['선택 테마','이번 주 전체','이미 분석함','예산 초과']},
   'SC-21':{p:'추론 high는 오래 걸리므로 진행 단계를 보여 준다.',d:['5단계 진행(코드 단계/LLM 단계 구분)','지금까지 비용','나가도 계속, 완료 알림'],next:['SC-22'],cost:'진행 중'},
@@ -651,7 +651,7 @@ const info = {
   'SC-24':{p:'의뢰인이 나에게 보내는 문서.',d:['사업성 점수 요약','배경·고객·반대 검토·MVP·기술·수익화·검증·일정·완료 기준·위험','근거 원문','하단 응답 4버튼'],next:['SC-25','SC-26'],cost:'0원'},
   'SC-25':{p:'응답은 다음 분석과 추적으로 이어진다.',d:['수락: 추적 등록·리포트 칸 생성 안내','거절: 이유 칩(다음 분석 피드백)','보류: 4주 뒤 다시'],cost:'0원',states:['수락','거절','보류']},
   'SC-26':{p:'의뢰서·심사 기록을 맥락으로 묻는다.',d:['맥락 표시','답마다 비용·근거·AI 판단 꼬리표','근거 없으면 "판단 보류"'],cost:'질문당 ≈$0.02~0.05'},
-  'SC-27':{p:'지난 분석과 진행 중 의뢰를 모아 본다.',d:['진행 중 의뢰 카드(관련 신호 수)','지난 분석: 날짜·대상·결과·응답·비용','이번 달 사용량'],cost:'0원'},
+  'SC-27':{p:'지난 분석과 진행 중 의뢰를 모아 본다.',d:['진행 중 의뢰 카드(관련 글 수)','지난 분석: 날짜·대상·결과·응답·비용','이번 달 사용량'],cost:'0원'},
   'SC-28':{p:'리포트와 분석 비용을 스스로 조절.',d:['리포트 일정·메일·◆ 기준·AI 주제 묶기','모델·추론 강도·반대 검토·기준점·상한','평가표 가중치'],cost:'0원'},
   'N-02':{p:'짧게 알리고 해당 화면으로 보낸다.',d:['주간 리포트 도착','분석 완료(의뢰 / 미달)','예산 80% 경고']},
   'M-02':{p:'앱을 안 열어도 이번 주 흐름을 읽을 수 있게.',d:['요약 3줄, 뜨는·지는 테마 표, 저장소 표, 진행 중 의뢰','분석 요청은 앱으로 연결'],cost:'0원'},

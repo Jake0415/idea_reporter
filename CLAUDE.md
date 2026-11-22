@@ -18,6 +18,7 @@
 - **키 취급:** API 키는 코드·문서·설정 파일·로그·커밋에 절대 쓰지 않는다. PC는 환경 변수(`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`), 앱은 Keystore.
 - [Horizon](https://github.com/Thysrael/Horizon)(MIT) **설계만 차용**해 Kotlin으로 새로 구현: 신호 프로필 3종(기술·수요·경쟁), 프로필별 임계값, 주제 합치기, 분류별 상한, 댓글 수집, 과거 기록 검색, 인용 검증, 출처 통계, RSS 입력 어댑터. 근거는 [docs/verification/horizon-rea-check.md](docs/verification/horizon-rea-check.md). 코드·프롬프트를 옮기면 `THIRD_PARTY_NOTICES.md`에 고지.
 - 디자인 톤: A 피드(인스타그램풍, docs/design-tokens.md). MVP 하단 탭은 오늘·추적·보관함·설정(아이콘만).
+- **화면 용어(2026-11-23):** 메일·앱·리포트에는 쉬운 말만 쓴다 — 기술 신호→"쓸 수 있는 기술", 수요 신호→"사람들의 요청·불편", 시장 신호·경쟁 제품→"이미 나온 제품", 신호 프로필→"분류 기준", 깔때기→"단계별 건수". 코드 식별자는 그대로. 전체 표는 design.md 용어집.
 - **프롬프트는 사용자가 수정 가능**: 기본값(AI 작성, 리소스) + 사용자 수정본 우선, 버전·비교·되돌리기·시험 실행. 출력 형식·인용 검증은 코드가 강제(design.md §7-3). 프롬프트: classify·ideas·track·criteria·프로필 6개.
 - **★ = 관심 추적 시작**: 추적 아이디어를 매일 계속 조사(수집분 매칭 + 전용 검색), 업데이트 요약·신호 강도 추이(design.md §7-2). 수집함(SC-05)은 나중이지만 탈락 이유 기록은 1단계부터.
 
