@@ -71,6 +71,20 @@ private data class ResultRow(
     val charge: LlmCall? = null
 )
 
+internal val publicBatchCheckpointName = Regex("""\d{4}-\d{2}-\d{2}-(classify|generate|backfill)\.json""")
+internal val publicBatchRetryName = Regex(publicBatchCheckpointName.pattern + """\.retry\.json""")
+internal val publicBatchUnsettledName = Regex("""quarantine/[A-Za-z0-9_-]+\.unsettled\.json""")
+
+internal fun publicBatchCheckpoint(text: String): String {
+    val checkpoint = Json.decodeFromString<BatchCheckpoint>(text)
+    return Json.encodeToString(checkpoint.copy(
+        requests = checkpoint.requests.mapValues { (_, saved) -> saved.copy(request = null) },
+        call = checkpoint.call.copy(error = null),
+        supplementKeys = emptySet(),
+        supplementRefs = checkpoint.supplementRefs.map { it.copy(note = "") }
+    ))
+}
+
 private fun LlmRequest.fingerprint(): String = MessageDigest.getInstance("SHA-256")
     .digest(toString().toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
 
@@ -176,7 +190,8 @@ internal suspend fun runMessageBatch(
     pollRemainingMillis: () -> Long = { (remainingMillis() - 300_000L).coerceAtLeast(0) },
     recoveryRemainingMillis: () -> Long = { Long.MAX_VALUE },
     recovering: Boolean = false,
-    retrySettlement: Boolean = true
+    retrySettlement: Boolean = true,
+    stateHook: () -> Boolean = { collector.dev.publishBatchCheckpoint() }
 ): BatchOutcome {
     val started = System.nanoTime()
     val completed = path.completed()
@@ -340,6 +355,10 @@ internal suspend fun runMessageBatch(
                 return fallback("Batch reservation failed")
             }
 
+            if (!stateHook()) {
+                reject(intent)
+                return fallback("Batch intent checkpoint publication failed · synchronous fallback")
+            }
             try {
                 state = bounded { provider.submitBatch(params) }
             } catch (e: Exception) {
@@ -353,7 +372,7 @@ internal suspend fun runMessageBatch(
                 }
                 return pending("Batch 제출 확인 필요", intent)
             }
-            try {
+            val submitted = try {
                 intent.copy(batchId = checkNotNull(state).id()).also {
                     path.writeAtomically(Json.encodeToString(it))
                 }
@@ -361,6 +380,8 @@ internal suspend fun runMessageBatch(
                 if (e is CancellationException) throw e
                 return pending("Batch 제출 확인 필요", intent)
             }
+            if (!stateHook()) issues += "Batch ID checkpoint publication failed: " + path.name
+            submitted
         }
     }
 
@@ -665,6 +686,24 @@ private data class SettlementRetry(val firstSettleFailureAt: String)
 @Serializable
 private data class UnsettledOwner(val owner: String)
 
+internal fun publicBatchUnsettled(path: String, text: String, redact: (String) -> String): String = when {
+    publicBatchRetryName.matches(path) -> {
+        val retry = Json.decodeFromString<SettlementRetry>(text)
+        Instant.parse(retry.firstSettleFailureAt)
+        Json.encodeToString(retry)
+    }
+    text.trimStart().startsWith("{") -> {
+        val owner = Json.decodeFromString<UnsettledOwner>(text)
+        require(publicBatchCheckpointName.matches(owner.owner))
+        Json.encodeToString(owner)
+    }
+    else -> {
+        val reservations = Json.decodeFromString<List<CostGuard.Reservation>>(text)
+        require(reservations.all { redact(it.id) == it.id && LocalDate.parse(it.date).toString() == it.date })
+        Json.encodeToString(reservations)
+    }
+}
+
 private fun File.writeUnsettled(label: String, failed: List<CostGuard.Reservation>?, owner: String? = null) {
     val directory = resolveSibling("quarantine").apply { mkdirs() }
     directory.resolve("$label.unsettled.json").writeAtomically(
@@ -672,6 +711,19 @@ private fun File.writeUnsettled(label: String, failed: List<CostGuard.Reservatio
 }
 
 internal suspend fun recoverQuarantined(directory: File, guard: CostGuard, issues: MutableList<String>) {
+    // A fresh runner does not receive the corrupt checkpoint that originally caused this retry.
+    directory.listFiles().orEmpty().filter { publicBatchRetryName.matches(it.name) &&
+        !it.resolveSibling(it.name.removeSuffix(".retry.json")).exists() }.forEach { file ->
+        try {
+            val owner = file.name.removeSuffix(".retry.json")
+            if (settleQuarantined(guard, guard.batchReservations(owner), issues).isEmpty()) {
+                Files.deleteIfExists(file.toPath())
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            issues += "Batch settlement retry failed: " + file.name
+        }
+    }
     directory.resolve("quarantine").listFiles().orEmpty().filter { it.name.endsWith(".unsettled.json") }.forEach { file ->
         try {
             val text = file.readText()

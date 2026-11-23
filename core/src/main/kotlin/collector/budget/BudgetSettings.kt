@@ -72,6 +72,14 @@ data class BudgetSettings(
 
         private val keys = setOf("dailyCardUsd", "analysisRequestUsd", "analysisMonthlyUsd", "backfillRunUsd",
             "monthlyTotalUsd", "warnAtPercent", "overBudget")
+
+        internal fun update(out: File, values: JsonObject) {
+            require(values.isNotEmpty() && values.keys.all { it in keys })
+            val settings = values.entries.fold(load(out) {}) { current, (key, value) ->
+                current.withValue(key, value)
+            }
+            file(out).writeAtomically(outputJson.encodeToJsonElement(settings).toString())
+        }
     }
 
     private fun withValue(key: String, value: JsonElement): BudgetSettings {

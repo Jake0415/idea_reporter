@@ -494,6 +494,34 @@ class AnalysisTest {
         assertFalse(out.resolve("analysis").exists())
     }
 
+    @Test fun startPublicationIncludesReservationAndFailurePreventsProviderCall() = runTest {
+        seed()
+        val lines = mutableListOf<String>()
+        var publicationAttempted = false
+        val reservationDay = LocalDate.now(clock)
+        val command = AnalysisCommand(out, config, PromptResolver(FilePromptStore(out.resolve("prompts").toPath())),
+            provider = { Fake(ProviderId.OPENAI) { fail("Provider must wait for publication") } },
+            clock = clock, print = lines::add,
+            beforePaidRun = {
+                assertTrue(lines.any { "비용 추정" in it })
+                val id = "00000000-0000-0000-0000-000000000001"
+                collector.dev.publishAnalysisStart(out, id, "123", clock.instant()) {
+                    val branch = out.resolve("published").apply { mkdirs() }
+                    collector.data.DataSync(out, out.resolve("prompts"), clock).push(branch)
+                    assertTrue(FileCostLedger(branch.resolve("out/cost-ledger-analysis")).total(reservationDay) > 0.0)
+                    assertContains(branch.resolve("out/inbox-results/$id.json").readText(), "\"running\"")
+                    publicationAttempted = true
+                    false
+                }
+            })
+        kotlin.test.assertFailsWith<IllegalStateException> {
+            command.run(arrayOf("--analyze", "local-doc", "--yes"))
+        }
+        assertTrue(publicationAttempted)
+        assertFalse(out.resolve("analysis").exists())
+        assertEquals(0.0, FileCostLedger(out.resolve("cost-ledger-analysis")).total(reservationDay))
+    }
+
     @Test fun inputReadsRunDetailsAndEnforcesLimits() {
         val profiles = listOf("demand-signal", "tech-signal", "market-signal")
         val signals = profiles.flatMapIndexed { group, profile ->

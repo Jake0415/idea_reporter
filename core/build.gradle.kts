@@ -21,6 +21,7 @@ dependencies {
     testImplementation(libs.junit.jupiter)
     testImplementation(libs.coroutines.test)
     testImplementation(libs.okhttp.mockwebserver)
+    testImplementation("org.yaml:snakeyaml:2.3")
 }
 
 application {

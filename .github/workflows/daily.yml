@@ -1,0 +1,89 @@
+name: Daily collector
+on:
+  schedule:
+    - cron: '0 22 * * *' # 07:00 KST. GitHub may delay scheduled jobs.
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: collector-data
+  queue: max
+jobs:
+  collector:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    permissions:
+      contents: write
+      issues: write
+    env:
+      TZ: Asia/Seoul
+    steps:
+      - name: Record job start
+        run: date -u +COLLECTOR_JOB_STARTED_AT=%Y-%m-%dT%H:%M:%SZ >> "$GITHUB_ENV"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        id: checkout-source
+        with:
+          ref: main
+      - name: Check out data
+        id: checkout-data
+        continue-on-error: true
+        run: bash scripts/actions-data.sh checkout
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+      - name: Pull data
+        id: pull
+        if: steps.checkout-data.outcome == 'success'
+        continue-on-error: true
+        run: bash gradlew :core:run --args="--data-pull ../data"
+      - name: Record synchronization failure
+        if: always() && (steps.checkout-source.outcome == 'failure' || steps.checkout-data.outcome == 'failure' || steps.pull.outcome == 'failure')
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          title="Daily data synchronization failed"
+          body="Workflow run $GITHUB_RUN_ID skipped collection and mail after synchronization failed."
+          number=$(gh issue list --state open --search "\"$title\" in:title" --limit 100 --json number,title \
+            --jq 'map(select(.title == "Daily data synchronization failed")) | .[0].number // empty')
+          if [[ -n $number ]]; then
+            gh issue comment "$number" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi
+      - name: Apply inbox
+        if: steps.pull.outcome == 'success'
+        continue-on-error: true
+        run: bash gradlew :core:run --args="--data-inbox ../data"
+      - name: Process unpaired analysis requests
+        if: steps.pull.outcome == 'success'
+        continue-on-error: true
+        run: bash gradlew :core:run --args=--data-analysis-queue
+      - name: Run scheduled collector
+        id: collect
+        if: steps.pull.outcome == 'success'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/actions-data.sh daily
+      - name: Publish reports and state
+        id: reports
+        if: always() && steps.collect.outcome != 'skipped' && steps.pull.outcome == 'success'
+        run: bash scripts/actions-data.sh publish daily
+      - name: Send scheduled mail
+        id: mail
+        if: always() && steps.reports.outcome == 'success'
+        env:
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+        run: bash scripts/actions-data.sh mail
+      - name: Preserve unpublished mail journal
+        if: always() && hashFiles('out/mail/public-journal.json') != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mail-journal
+          path: out/mail/public-journal.json

@@ -14,6 +14,7 @@ import collector.port.SecretProvider
 import collector.trend.publishTrend
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -23,10 +24,11 @@ import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalDate
 
-internal fun runMailCommand(args: Array<String>, out: File, secrets: SecretProvider) {
+internal fun runMailCommand(args: Array<String>, out: File, secrets: SecretProvider,
+                            delivery: MailDelivery = mailDelivery(out, secrets)) {
     if (args.first() == "--mail-test") {
         require(args.size == 1)
-        mailDelivery(out, secrets).test()
+        delivery.test()
         return
     }
     val kind = requireNotNull(MailKind.entries.find { it.label == args.getOrNull(1) })
@@ -53,14 +55,13 @@ internal fun runMailCommand(args: Array<String>, out: File, secrets: SecretProvi
         println(CLASSIFICATION_BATCH_PENDING)
         return
     }
-    val delivery = mailDelivery(out, secrets)
     if (delivery.send(kind, reportKey, resend) == MailSendResult.RECORD_FAILED) throw MailRecordFailure()
 }
 
-internal fun mailDelivery(out: File, secrets: SecretProvider): MailDelivery {
+internal fun mailDelivery(out: File, secrets: SecretProvider, publish: ((MailDelivery.Attempt?) -> Boolean)? = null): MailDelivery {
     val smtp = SmtpMailer.from(secrets)
     return MailDelivery(out, smtp, smtp?.recipientCount ?: 0,
-        onIssue = { kind, key, reason -> recordMailIssue(out, kind, key, reason, ::println) })
+        onIssue = { kind, key, reason -> recordMailIssue(out, kind, key, reason, ::println) }, publish = publish)
 }
 
 private fun recordMailIssue(out: File, kind: MailKind?, key: String?, reason: String, print: (String) -> Unit) {
@@ -87,6 +88,35 @@ internal class ScheduledDailyFailure : Exception()
 private class MailStageFailure : Exception()
 internal class MailRecordFailure : Exception("메일 기록 처리 실패")
 
+@Serializable
+private data class ScheduledPublication(val startedAt: String, val day: String, val kinds: List<String>)
+
+internal fun mailTimeLow(clock: Clock, startedAt: Instant) =
+    clock.instant() >= startedAt.plusSeconds((150 - 10) * 60L)
+
+internal fun sendScheduledPublication(out: File, secrets: SecretProvider, clock: Clock, startedAt: Instant,
+                                      publish: ((MailDelivery.Attempt?) -> Boolean)? = null) {
+    val publication = readJson<ScheduledPublication>(out.resolve("mail/scheduled.json")) ?: return
+    require(publication.startedAt == startedAt.toString())
+    val smtp = SmtpMailer.from(secrets) ?: return
+    val delivery = MailDelivery(out, smtp, smtp.recipientCount, clock, publish = publish)
+    val kinds = publication.kinds.map { label -> MailKind.entries.single { it.label == label } }
+    if (mailTimeLow(clock, startedAt)) {
+        for (kind in kinds) delivery.defer(kind, publication.day)
+        return
+    }
+    var recordFailed = false
+    val retried = delivery.retry(eligible = { kind, id ->
+        !mailTimeLow(clock, startedAt) && (kind != MailKind.DAILY || !isPendingBatch(batchPath(out, id, "classify")))
+    }) { _, _, result -> if (result == MailSendResult.RECORD_FAILED) recordFailed = true }
+    for (kind in kinds) {
+        if ((kind to publication.day) in retried) continue
+        if (mailTimeLow(clock, startedAt)) delivery.defer(kind, publication.day)
+        else if (delivery.send(kind, publication.day) == MailSendResult.RECORD_FAILED) recordFailed = true
+    }
+    if (recordFailed) throw MailRecordFailure()
+}
+
 internal suspend fun runScheduled(
     out: File,
     secrets: SecretProvider,
@@ -96,7 +126,8 @@ internal suspend fun runScheduled(
     mailer: Mailer? = SmtpMailer.from(secrets),
     startedAt: Instant = clock.instant(),
     deadlineMinutes: Int = collector.config.PipelineConfig.defaults.deadlineMinutes,
-    deadlineClock: Clock = clock
+    deadlineClock: Clock = clock,
+    noMail: Boolean = false
 ): Int {
     val day = LocalDate.ofInstant(startedAt, clock.zone)
     val key = day.toString()
@@ -156,17 +187,27 @@ internal suspend fun runScheduled(
             val trendPublished = sunday && stage("트렌드") { trend(day) }
             if (sunday) checkDeadline("Trend publication")
             val classificationPending = isPendingBatch(classifyPath)
+            if (noMail) {
+                val published = buildList {
+                    if (dailyPublished && !classificationPending) add(MailKind.DAILY.label)
+                    if (trendPublished) add(MailKind.TREND.label)
+                }
+                out.resolve("mail/scheduled.json").writeAtomically(outputJson.encodeToString(
+                    ScheduledPublication(startedAt.toString(), key, published)))
+                val journal = MailDelivery(out, null, clock = clock, print = ::log)
+                published.forEach { label -> journal.defer(MailKind.entries.single { it.label == label }, key, "메일 발송 대기") }
+            }
             val mail = MailDelivery(out, mailer, (mailer as? SmtpMailer)?.recipientCount ?: 0, clock, print = { message ->
                 log(message)
                 if (message == UNKNOWN_DELIVERY_NOTICE || message == "발송은 됐으나 기록 실패") println(message)
-            }) { kind, id, reason ->
+            }, onIssue = { kind, id, reason ->
                 issues += reason
                 recordMailIssue(out, kind, id, reason, ::log)
-            }
+            })
             var recordFailed = false
             var retried = emptySet<Pair<MailKind, String>>()
             var missingRetryReport = false
-            stage("메일 재시도", completion = { if (missingRetryReport) "보고서 없음" else "완료" }) {
+            if (!noMail) stage("메일 재시도", completion = { if (missingRetryReport) "보고서 없음" else "완료" }) {
                 var retryFailed = false
                 retried = mail.retry(eligible = { kind, id ->
                     kind != MailKind.DAILY || (if (id == key) !classificationPending else !isPendingBatch(batchPath(out, id, "classify")))
@@ -183,9 +224,10 @@ internal suspend fun runScheduled(
                 }
                 if (retryFailed) throw MailStageFailure()
             }
-            checkDeadline("Mail retry")
+            if (!noMail) checkDeadline("Mail retry")
             if (classificationPending) log(CLASSIFICATION_BATCH_PENDING)
-            if (mailer == null) log("메일 설정 없음")
+            if (noMail) Unit
+            else if (mailer == null) log("메일 설정 없음")
             else {
                 for (kind in listOf(MailKind.DAILY, MailKind.TREND)) {
                     val published = if (kind == MailKind.DAILY) dailyPublished && !classificationPending else trendPublished

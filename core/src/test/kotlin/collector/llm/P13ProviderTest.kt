@@ -2,11 +2,14 @@ package collector.llm
 
 import collector.config.PipelineConfig
 import collector.dev.FileCostLedger
+import collector.dev.runPublicationCommand
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.*
 import okhttp3.mockwebserver.MockResponse
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.time.Duration
+import kotlin.system.measureTimeMillis
 import kotlin.test.*
 
 class P13ProviderTest {
@@ -21,6 +24,50 @@ class P13ProviderTest {
     private fun row(index: Int, result: String) = """{"custom_id":"classify-2026-11-23-$index","result":$result}"""
     private val success get() = """{"type":"succeeded","message":${message()}}"""
     private val errored = """{"type":"errored","error":{"type":"error","error":{"type":"invalid_request_error","message":"mock"}}}"""
+
+    @Test fun batchCheckpointHookRunsBeforeAndAfterSubmission() = runBlocking {
+        BatchMockServer().use { server ->
+            AnthropicProvider("mock", server.url("/").toString()).use { provider ->
+                val path = batchPath(out, "2026-11-23", "classify")
+                val ledger = FileCostLedger(out.resolve("cost"))
+                val guard = CostGuard(1.0, ledger = ledger)
+                val call = LlmCall("classify", ProviderId.ANTHROPIC, model, "classify", "default", batch = true)
+                val checks = mutableListOf<Pair<Int, Boolean>>()
+                val hook = out.resolve("HangingHook.java").apply {
+                    writeText("class HangingHook { public static void main(String[] args) throws Exception { Thread.sleep(30000); } }")
+                }
+                val java = File(System.getProperty("java.home"), "bin/java").path
+                val result = runMessageBatch(provider, guard, call, path, PipelineConfig.Batch(),
+                    listOf(request), listOf(0.01), null, emptyList(), { Long.MAX_VALUE }, stateHook = {
+                        assertTrue(ledger.batchReservations(path.name).isNotEmpty())
+                        checks += server.requestCount to path.readText().contains("batch_1")
+                        var published = true
+                        val elapsed = measureTimeMillis {
+                            published = runPublicationCommand(Duration.ofSeconds(2), java, hook.path)
+                        }
+                        assertTrue(elapsed < 10_000, "Hook returned after ${elapsed}ms")
+                        published
+                    })
+                assertTrue(result.synchronousFallback)
+                assertEquals(listOf(0 to false), checks)
+                assertEquals(0, server.requestCount)
+                assertEquals(0.0, guard.calls.sumOf { it.costUsd })
+
+                checks.clear()
+                server.enqueue(batch("ended"))
+                server.enqueue(response(row(1, success)))
+                val submitted = runMessageBatch(provider, guard, call, path, PipelineConfig.Batch(),
+                    listOf(request), listOf(0.01), null, emptyList(), { Long.MAX_VALUE }, stateHook = {
+                        assertTrue(ledger.batchReservations(path.name).isNotEmpty())
+                        checks += server.requestCount to path.readText().contains("batch_1")
+                        checks.size == 1
+                    })
+                assertEquals(listOf(0 to false, 1 to true), checks)
+                assertTrue(submitted.issues.any { "checkpoint publication failed" in it })
+                assertEquals("{}", submitted.responses.getValue(0).getOrThrow().json)
+            }
+        }
+    }
 
     @Test fun batchMatchesUnorderedResultsAndDiscountsAllTokens() = runBlocking {
         BatchMockServer().use { server ->
@@ -72,7 +119,10 @@ class P13ProviderTest {
                 val config = PipelineConfig.Batch(pollSeconds = 1)
                 val first = router.batch("classify", "2026-11-23", out, config, listOf(request), versions)
                 assertTrue(first.issues.single().contains("다음 실행"))
-                assertTrue(out.resolve("batch/2026-11-23-classify.json").isFile)
+                val checkpoint = batchPath(out, "2026-11-23", "classify")
+                val public = publicBatchCheckpoint(checkpoint.readText())
+                assertFalse(public.contains("\"request\":"))
+                checkpoint.writeText(public)
                 val costs = CostGuard(1.0, ledger = ledger)
                 server.enqueue(batch("in_progress"))
                 server.enqueue(batch("ended"))

@@ -249,11 +249,13 @@ class LlmRouter(
                 analysisInputTokens(request.system, request.user, request.jsonSchema.toString()), request.maxOutputTokens)
         } else if (preflightBudget) projectedTokens(request, StageModel(call.provider, call.model)) else 0.0
         val reservation = costGuard.reserve(projected)
+        var providerStarted = false
         var settlement = call.copy(costUsd = reservation.amount, error = "provider_error",
             priceUnverified = catalog.find(call.provider, call.model)?.priceVerified == false)
         try {
+            onAttempt()
             val result = withTimeoutOrNull(timeout) {
-                onAttempt()
+                providerStarted = true
                 providers.getValue(call.provider).complete(request.copy(model = call.model))
             } ?: throw LlmServiceException(reason = "timeout")
             settlement = call.copy(
@@ -277,7 +279,7 @@ class LlmRouter(
             }
             val failure = e as? LlmServiceException
             val usage = failure?.usage
-            val rejected = e is LlmAuthException || e is LlmConfigException || failure?.reason == "http_4xx"
+            val rejected = !providerStarted || e is LlmAuthException || e is LlmConfigException || failure?.reason == "http_4xx"
             settlement = settlement.copy(
                     model = failure?.model ?: call.model,
                     inputTokens = usage?.inputTokens ?: 0,

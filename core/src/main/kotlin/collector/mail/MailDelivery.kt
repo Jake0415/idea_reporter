@@ -44,12 +44,13 @@ internal class MailDelivery(
     private val recipientCount: Int = 0,
     private val clock: Clock = Clock.systemDefaultZone(),
     private val print: (String) -> Unit = ::println,
-    private val onIssue: (MailKind?, String?, String) -> Unit = { _, _, _ -> }
+    private val onIssue: (MailKind?, String?, String) -> Unit = { _, _, _ -> },
+    private val publish: ((Attempt?) -> Boolean)? = null
 ) {
     @Serializable
-    private data class Attempt(
+    internal data class Attempt(
         val at: String, val kind: String, val key: String, val result: String, val recipientCount: Int,
-        val issue: String? = null
+        val issue: String? = null, val firstFailureAt: String? = null
     )
 
     private val journal = out.resolve("mail/sent.json")
@@ -67,6 +68,13 @@ internal class MailDelivery(
         save(updated)
         pending.forEach { issue(MailKind.entries.first { kind -> kind.label == it.kind }, it.key, reason) }
         return updated
+    }
+
+    fun defer(kind: MailKind, key: String, reason: String = "메일 단계 시작 시간 부족") {
+        kind.validateKey(key)
+        val history = attempts()
+        if (history.any { it.kind == kind.label && it.key == key && it.result in setOf("sent", "unknown", "failed") }) return
+        save(history + Attempt(clock.instant().toString(), kind.label, key, "failed", recipientCount, reason))
     }
 
     fun send(kind: MailKind, key: String, resend: Boolean = false): MailSendResult {
@@ -90,14 +98,16 @@ internal class MailDelivery(
             print("이미 발송한 메일 · ${kind.label} · $key")
             return MailSendResult.SKIPPED_DUPLICATE
         }
-        val attempt = Attempt(clock.instant().toString(), kind.label, key, "sending", recipientCount)
+        var at = clock.instant()
+        while (previous.any { it.at == at.toString() }) at = at.plusNanos(1)
+        val attempt = Attempt(at.toString(), kind.label, key, "sending", recipientCount)
         val textFile = kind.file(out, key, "txt")
         val htmlFile = kind.file(out, key, "html")
         if (!textFile.isFile || !htmlFile.isFile) {
             val reason = "메일 보고서 없음"
             return if (saveOutcome(history, attempt.copy(result = "missing", issue = reason), kind)) {
                 issue(kind, key, reason)
-                MailSendResult.MISSING_REPORT
+                if (publishOutcome(kind, key)) MailSendResult.MISSING_REPORT else MailSendResult.RECORD_FAILED
             } else MailSendResult.RECORD_FAILED
         }
         val message = try {
@@ -108,13 +118,19 @@ internal class MailDelivery(
             val reason = "메일 보고서 읽기 실패"
             issue(kind, key, reason)
             return if (saveOutcome(history, attempt.copy(result = "failed", issue = reason), kind)) {
-                MailSendResult.FAILED
+                if (publishOutcome(kind, key)) MailSendResult.FAILED else MailSendResult.RECORD_FAILED
             } else MailSendResult.RECORD_FAILED
         }
         try {
             save(history + attempt)
         } catch (_: Exception) {
             issue(kind, key, "메일 발송 시도 기록 저장 실패")
+            return MailSendResult.RECORD_FAILED
+        }
+        if (!publishJournal(attempt)) {
+            val reason = "메일 발송 시도 게시 실패"
+            if (saveOutcome(history, attempt.copy(result = "failed", issue = reason), kind)) publishOutcome(kind, key)
+            issue(kind, key, reason)
             return MailSendResult.RECORD_FAILED
         }
         val result = try {
@@ -132,8 +148,21 @@ internal class MailDelivery(
         if (!saveOutcome(history, attempt.copy(result = result.name.lowercase(Locale.ROOT), issue = failure), kind)) {
             return MailSendResult.RECORD_FAILED
         }
+        if (!publishOutcome(kind, key)) return MailSendResult.RECORD_FAILED
         if (result == MailSendResult.SENT) print("메일 발송 완료 · ${kind.label} · $key · 받는 사람 ${recipientCount}명")
         return result
+    }
+
+    private fun publishJournal(attempt: Attempt?): Boolean = try {
+        publish?.invoke(attempt) != false
+    } catch (_: Exception) {
+        false
+    }
+
+    private fun publishOutcome(kind: MailKind, key: String): Boolean {
+        if (publishJournal(null)) return true
+        issue(kind, key, "메일 발송 결과 게시 실패")
+        return false
     }
 
     private fun saveOutcome(history: List<Attempt>, attempt: Attempt, kind: MailKind): Boolean = try {
@@ -154,7 +183,7 @@ internal class MailDelivery(
             history.groupBy { it.kind to it.key }.values.mapNotNull { entries ->
                 if (entries.last().result != "failed" || entries.any { it.result == "sent" || it.result == "unknown" }) return@mapNotNull null
                 val firstFailure = entries.first { it.result == "failed" }
-                val date = LocalDate.ofInstant(Instant.parse(firstFailure.at), clock.zone)
+                val date = LocalDate.ofInstant(Instant.parse(firstFailure.firstFailureAt ?: firstFailure.at), clock.zone)
                 if (date !in today.minusDays(3)..today) return@mapNotNull null
                 val kind = MailKind.entries.first { it.label == firstFailure.kind }
                 kind.validateKey(firstFailure.key)

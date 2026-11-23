@@ -144,3 +144,10 @@
 - 보충 검색: 카드 작성 전 분류 모델로 별도 검색 1회(최대 3회 사용, 기본 켜짐), 결과 블록 원문 URL만 `supplementRefs`(최대 3개, 제목 120·설명 300자)로 인정, 필수 근거 조건은 못 채움, 메일에 "보충 자료(웹 검색)" 칸 분리. 단가 $10/1,000회.
 - 리뷰 5회: 이중 과금·재제출·예약 누수·영구 대기 경로를 회차마다 좁힘(r1 항목 단위 재개·의도 기록, r2 격리·기한, r3 5xx 불확실·같은 날 재호출 금지, r4 누락 재조회·정산 기한). Claude는 4회차부터 통과. 5회차 OpenAI 중간 3 → **Claude 직접 수정**: 누락 재조회는 404·48시간이면 확정 누락 처리(영구 대기 방지), 정산 기한 만료 시 결과 파일은 격리하지 않고 재사용 유지(미정산 예약만 quarantine), Backfill 색인 손상 대비 결과별 사이드카(`<id>.index-entry.json`)로 재생성. 테스트 334개.
 - 이관(낮음): 누락 재조회 404·48시간 경로는 전용 테스트 없음(로직 검토만). 생성 429·5xx 후 실제로 Batch가 안 만들어졌으면 그날 분류·메일이 다음 확인까지 멈춤(보수적 설계).
+## P14 6단계(2): runner + GitHub Actions, data 브랜치
+- 사용자 결정(2026-11-23): 매일 실행은 Actions만(PC 작업 스케줄러 미사용), 기록은 같은 공개 저장소의 orphan `data` 브랜치, 앱은 보기·조작 앱. 지시 `P14-actions-runner.md`, 개발 Codex.
+- 구성: `core` `collector.data`(허용 목록·공개 정제·manifest·inbox 계약·병합), `Main --data-pull/--data-push/--mail-scheduled --publish/--data-analyze`, `.github/workflows/daily.yml`(cron 22:00 UTC = KST 07:00)·`analyze.yml`(입력 `requestId` 하나), `scripts/actions-data.sh`, `scripts/data-pull.ps1`, `scripts/actions-setup.md`.
+- 원칙: 돈이 드는 일과 메일은 원격 기록 뒤에 — 메일은 `sending` push 후 SMTP, 분석은 `running`+예약 push 후 실행, Batch는 상태 훅(`COLLECTOR_STATE_HOOK`)으로 의도·원장 push 후 제출(훅 실패 시 제출 안 함). 동기화 실패 시 수집·메일 생략. 공개 사본은 댓글 본문·작성자·원문 제거, 이메일(국제화·인코딩·따옴표)·토큰 마스킹. Batch는 공개 메타데이터(`out/batch/public`)만 올리고 결과는 API에서 다시 받음. concurrency `queue: max`. 최종 게시는 덧씌우기(삭제는 보관 규칙·처리 inbox·의도적 삭제만).
+- 리뷰 5회: Claude 3회차부터 통과. 5회차 OpenAI 중간 2 → **Claude 직접 수정**: 재게시 때 이번 실행이 바꾸지 않은 파일은 원격 최신본 유지(pull 스냅샷에 해시 기록), 따옴표 로컬부 이메일 마스킹, 회귀 테스트 2개. 게시용 gradle 제한 2→5분(Claude 낮음). 테스트 364개.
+- 남은 것(사용자): GitHub Secrets 등록·Actions 활성화·첫 수동 실행(`scripts/actions-setup.md`). 실제 workflow는 아직 한 번도 돌지 않음.
+- 이관(낮음): 일일 메일 결과 게시 시간 초과 사유가 issue 기록에 연결 안 됨, rebase 도중 강제 종료 경로 전용 테스트 없음, 게시 중 원격 inbox 추가 git 회귀 테스트는 훅 경로만.

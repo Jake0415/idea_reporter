@@ -1,4 +1,8 @@
-# Windows 자동 실행
+자동 실행은 GitHub Actions에서만 합니다. 메일 중복 방지를 위해 PC 작업 스케줄러를 사용하지 않습니다.
+
+[Actions 설정](actions-setup.md) · [PC에서 data 가져오기](data-pull.ps1)
+
+# Windows 수동 실행
 
 프로젝트 루트의 `.env`에 아래 항목을 설정합니다.
 
@@ -20,7 +24,6 @@ MAIL_TO=first@example.invalid,second@example.invalid
 ```
 
 1. 프로젝트 폴더에서 `.\gradlew.bat :core:installDist -q`를 실행한 뒤 `.\core\build\install\core\bin\core.bat --mail-test`로 테스트 메일을 확인합니다.
-2. `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\register-task.ps1`로 매일 오전 7시 작업을 등록합니다. 기존 작업은 갱신됩니다. 놓친 실행은 PC가 켜지고 현재 사용자가 로그인한 상태에서 네트워크를 사용할 수 있을 때 시작합니다.
-3. `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\register-task.ps1 -Unregister`로 등록을 해제합니다.
+2. 기존 작업이 있으면 `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\register-task.ps1 -Unregister`로 등록을 해제합니다.
 
 일요일에는 트렌드 리포트도 발송합니다. 실행 로그는 `out/logs/<날짜>.log`에 기록합니다. 분석 결과 자동 발송을 끄려면 `config/analysis.local.json`에 `"mail": {"analysis": false}` 항목을 추가합니다.

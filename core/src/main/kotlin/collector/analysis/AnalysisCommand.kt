@@ -36,12 +36,13 @@ internal class AnalysisCommand(
     private val clock: Clock = Clock.systemDefaultZone(),
     private val print: (String) -> Unit = ::println,
     private val settingsOverride: BudgetSettings? = null,
-    private val sendMail: (String) -> Unit = {}
+    private val sendMail: (String) -> Unit = {},
+    private val beforePaidRun: () -> Unit = {}
 ) {
     private val reports = AnalysisReports(out.resolve("analysis"))
     private fun settings() = settingsOverride ?: BudgetSettings.load(out, print)
 
-    suspend fun run(args: Array<String>) {
+    suspend fun run(args: Array<String>, acquireLock: Boolean = true): Boolean {
         when (args.firstOrNull()) {
             "--analysis-list" -> {
                 require(args.size == 1)
@@ -87,10 +88,12 @@ internal class AnalysisCommand(
                     "서로 다른 테마 ID를 1~3개 지정하세요."
                 }
                 out.mkdirs()
-                withRunLock(out) { analyze(themes.sorted(), date, yes, force, budget, fit) }
+                val execute: suspend () -> Boolean = { analyze(themes.sorted(), date, yes, force, budget, fit) }
+                return if (acquireLock) withRunLock(out, execute) else execute()
             }
             else -> throw IllegalArgumentException("지원하지 않는 분석 명령입니다.")
         }
+        return true
     }
 
     private data class Plan(
@@ -101,7 +104,7 @@ internal class AnalysisCommand(
 
     private suspend fun analyze(
         themes: List<String>, requestedDate: LocalDate?, yes: Boolean, force: Boolean, budgetOverride: Double?, fitNumber: Int?
-    ) {
+    ): Boolean {
         val settings = settings()
         val requestBudget = budgetOverride ?: settings.analysisRequestUsd
         val monthly = MonthlyBudget(out, settings)
@@ -167,7 +170,7 @@ internal class AnalysisCommand(
         val today = LocalDate.now(runClock)
         val spent = monthly.analysisSpend(today)
         val analysisRemaining = monthly.analysisRemaining(today, spent)
-        if (fitNumber == null && baseline != null && reuse(baseline)) return
+        if (fitNumber == null && baseline != null && reuse(baseline)) return true
         val totalRemaining = monthly.remaining(today) ?: Double.POSITIVE_INFINITY
         val available = minOf(requestBudget, analysisRemaining, totalRemaining)
         val reservable = available * RESERVABLE_BUDGET_FRACTION
@@ -196,12 +199,12 @@ internal class AnalysisCommand(
             val requested = fitNumber?.let { number ->
                 requireNotNull(options.find { it.fit.step == number }) { "존재하지 않는 맞춤안입니다." }
             }
-            if (requested != null && reuse(requested)) return
+            if (requested != null && reuse(requested)) return true
             if (available <= 0 || (settings.overBudget == OverBudget.STOP &&
                     (baseline == null || baseline.reserve > reservable))) {
                 monthly.analysisBlockReason(today)?.let(print)
                 reject()
-                return
+                return !yes
             }
             options.forEach {
                 print("맞춤안 ${it.fit.step} · ${it.fit.description()} · 예약 ${usd(it.reserve)}" +
@@ -213,14 +216,14 @@ internal class AnalysisCommand(
                 settings.overBudget == OverBudget.AUTO_FIT -> options.firstOrNull { it.reserve <= reservable }
                 else -> null
             }
-            if (choice != null && requested == null && reuse(choice)) return
+            if (choice != null && requested == null && reuse(choice)) return true
             if (options.none { it.reserve <= reservable } || (choice != null && choice.reserve > reservable)) {
                 reject(choice?.reserve ?: options.lastOrNull()?.reserve ?: baseline?.reserve)
-                return
+                return !yes
             }
             if (choice == null) {
                 print("맞춤안을 선택하려면 --fit <번호> --yes")
-                return
+                return !yes
             }
             print("${choice.fit.display()} · 예약 ${usd(choice.reserve)}")
             choice
@@ -229,18 +232,27 @@ internal class AnalysisCommand(
         if (input.reportUrlMismatches > 0) {
             print("근거 URL 불일치 ${input.reportUrlMismatches}건 · 리포트 URL 사용")
         }
-        if (!yes) return
+        if (!yes) return true
 
         val guard = CostGuard(reservable, clock = runClock, ledger = monthly.analysisLedger, budgetPerRun = true)
         val openAi = provider()
+        var publicationFailure: Exception? = null
         val response = try {
             val router = LlmRouter(listOf(openAi), guard, mapOf("analysis" to config.model),
                 stageTimeoutMillis = mapOf("analysis" to config.timeoutMillis), preflightBudget = true)
             structuredCall<OpportunityOutput>(router, "analysis", listOf(system, criteria), system.text,
-                input.json, schema, fit.maxOutputTokens, effort = fit.effort)
+                input.json, schema, fit.maxOutputTokens, effort = fit.effort, onAttempt = {
+                    try {
+                        beforePaidRun()
+                    } catch (e: Exception) {
+                        publicationFailure = e
+                        throw e
+                    }
+                })
         } finally {
             (openAi as? AutoCloseable)?.close()
         }
+        publicationFailure?.let { throw it }
         val judge = OpportunityJudge(config, trendConfig)
         val opportunities = (response as? Response.Ok)?.value?.let { judge.judge(it.opportunities, input) }.orEmpty()
         val failure = (response as? Response.Failed)?.reason?.let {
@@ -267,6 +279,7 @@ internal class AnalysisCommand(
         if (config.mail.analysis && issues.isEmpty() && opportunities.any { it.decision != OpportunityDecision.INVALID }) {
             sendMail(run.id)
         }
+        return failure == null
     }
 
     private fun fitOptions(original: AnalysisFit, input: AnalysisInput?, trend: TrendReport): List<AnalysisFit> = buildList {

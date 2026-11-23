@@ -1,0 +1,65 @@
+name: Analyze themes
+on:
+  workflow_dispatch:
+    inputs:
+      requestId:
+        description: Inbox request UUID
+        required: true
+        type: string
+permissions: {}
+concurrency:
+  group: collector-data
+  queue: max
+jobs:
+  collector:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    permissions:
+      contents: write
+    env:
+      TZ: Asia/Seoul
+    steps:
+      - name: Record job start
+        run: date -u +COLLECTOR_JOB_STARTED_AT=%Y-%m-%dT%H:%M:%SZ >> "$GITHUB_ENV"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+      - name: Check out data
+        run: bash scripts/actions-data.sh checkout
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+      - name: Pull data
+        id: pull
+        run: bash gradlew :core:run --args="--data-pull ../data"
+      - name: Apply inbox
+        continue-on-error: true
+        run: bash gradlew :core:run --args="--data-inbox ../data"
+      - name: Estimate or run analysis
+        id: analysis
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REQUEST_ID: ${{ inputs.requestId }}
+        run: bash scripts/actions-data.sh analyze
+      - name: Publish analysis results
+        id: results
+        if: always() && steps.pull.outcome == 'success'
+        run: bash scripts/actions-data.sh publish analyze
+      - name: Send analysis mail
+        if: steps.analysis.outcome == 'success' && steps.results.outcome == 'success'
+        env:
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+          REQUEST_ID: ${{ inputs.requestId }}
+        run: bash scripts/actions-data.sh analysis-mail
+      - name: Preserve unpublished mail journal
+        if: always() && hashFiles('out/mail/public-journal.json') != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mail-journal
+          path: out/mail/public-journal.json

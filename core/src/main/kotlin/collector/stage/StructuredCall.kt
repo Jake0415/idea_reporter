@@ -31,9 +31,9 @@ internal sealed interface Response<out T> {
 internal suspend inline fun <reified T> structuredCall(
     router: LlmRouter, stage: String, prompts: List<ResolvedPrompt>, system: String,
     user: JsonObject, schema: JsonObject, tokens: Int, retryInvalid: Boolean = false, allowFallback: Boolean = true,
-    effort: Effort = Effort.LOW
+    effort: Effort = Effort.LOW, noinline onAttempt: () -> Unit = {}
 ): Response<T> = structuredCall(router, stage, prompts, LlmRequest("", system, user.toString(), schema, stage, tokens, effort),
-    retryInvalid, allowFallback)
+    retryInvalid, allowFallback, onAttempt = onAttempt)
 
 internal suspend inline fun <reified T> structuredCall(
     router: LlmRouter, stage: String, prompts: List<ResolvedPrompt>, request: LlmRequest,

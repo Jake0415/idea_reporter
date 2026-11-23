@@ -93,6 +93,58 @@ class MailDeliveryTest {
         assertEquals(0, sent)
     }
 
+    @Test fun `sending must be published before SMTP and an unpublished outcome does not resend`() {
+        val key = "2026-11-20"
+        report(key)
+        val events = mutableListOf<String>()
+        val journal = out.resolve("mail/sent.json")
+        val transport = Mailer { events += "smtp" }
+        val failedStart = MailDelivery(out, transport, clock = clock(20), publish = { attempt ->
+            if (attempt != null) {
+                assertEquals("sending", attempt.result)
+                assertTrue(journal.readText().contains("\"sending\""))
+            }
+            false
+        })
+        assertEquals(MailSendResult.RECORD_FAILED, failedStart.send(MailKind.DAILY, key))
+        assertTrue(events.isEmpty())
+
+        lateinit var remote: String
+        val failedOutcome = MailDelivery(out, transport, clock = clock(20), publish = { attempt ->
+            if (attempt == null) {
+                assertTrue(journal.readText().contains("\"sent\""))
+                events += "outcome"
+                false
+            } else {
+                remote = journal.readText()
+                events += "sending"
+                true
+            }
+        })
+        assertEquals(MailSendResult.RECORD_FAILED, failedOutcome.send(MailKind.DAILY, key))
+        assertEquals(listOf("sending", "smtp", "outcome"), events)
+        journal.writeText(remote)
+        val next = MailDelivery(out, transport, clock = clock(20))
+        assertEquals(MailSendResult.SKIPPED_DUPLICATE, next.send(MailKind.DAILY, key))
+        assertEquals(1, events.count { it == "smtp" })
+    }
+
+    @Test fun `retry continues after one mail cannot publish its sending record`() {
+        val first = "2026-11-19"
+        val second = "2026-11-20"
+        report(first)
+        report(second)
+        val outcomes = mutableMapOf<String, MailSendResult>()
+        var sent = 0
+        val delivery = MailDelivery(out, Mailer { sent++ }, clock = clock(20),
+            publish = { it?.key != first })
+        delivery.defer(MailKind.DAILY, first)
+        delivery.defer(MailKind.DAILY, second)
+        delivery.retry { _, key, result -> outcomes[checkNotNull(key)] = result }
+        assertEquals(mapOf(first to MailSendResult.RECORD_FAILED, second to MailSendResult.SENT), outcomes)
+        assertEquals(1, sent)
+    }
+
     private fun report(day: String) {
         out.resolve("$day.txt").writeText("렌더러 제목\n본문\n")
         out.resolve("$day.html").writeText("<h1>HTML</h1>")

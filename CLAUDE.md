@@ -37,5 +37,5 @@
 3. 나머지 어댑터 4개, 설정 파일 연동 — 완료(P3 HF·Reddit·PH·RSS, P4 튜닝: 수요 최소 보장·분류 검증·카드 중복 제거). 개발 기록 [docs/dev/log.md](docs/dev/log.md). Reddit·PH API는 기본 꺼짐 — 설정에서 켜고 자격 증명(키)을 넣어야 함. RSS 기본 피드는 HF Blog·Simon Willison(ai)·Latent Space(출시 피드 PH·BetaList는 약관 허용 범위 미확인으로 제외 — 시장 신호가 더 필요하면 사용자가 약관을 확인한 뒤 피드를 직접 추가하거나 PH API를 쓴다, design.md §9)
 4. `app`: WorkManager, Room, Keystore, SMTP 메일
 5. 앱 화면: 오늘 카드·보관함·출처/평가 기준 수정·실행 기록
-6. 보충 검색, Batch API, runner + GitHub Actions — 사용자 결정(2026-11-23) 모두 진행. P13 Batch·보충 검색 완료. 다음 P14 Actions(매일 실행은 Actions만, 기록은 공개 저장소 `data` 브랜치), 앱은 보기·조작 앱(P15·P16)
+6. 보충 검색, Batch API, runner + GitHub Actions — 사용자 결정(2026-11-23) 모두 진행. P13 Batch·보충 검색 완료. P14 Actions·data 브랜치 완료(사용자 Secrets 등록 후 첫 실행 필요, scripts/actions-setup.md). 다음 P15 앱 기반. 참고: P14(매일 실행은 Actions만, 기록은 공개 저장소 `data` 브랜치), 앱은 보기·조작 앱(P15·P16)
 7. 기술 트렌드 리포트 + 요청형 사업성 분석([docs/business-scout-plan.md](docs/business-scout-plan.md), 시안 `mockup/trend.html`) — S1 트렌드 리포트 완료(`Main --trend`, 코드만·LLM 0원, 테마 = 정규화한 분류 태그). S2 과거 채우기 완료(`Main --backfill 4w`, 수집 0원·분류는 `--yes`일 때만, 10.23~11.18 채움 $0.081, 리뷰 이관 중간 3건도 처리). S3 테마 지정 분석 완료(`Main --analyze`, 실행 전 추정·`--yes` 승인, 금액 상한은 사용자가 `out/settings/budget.json`·`--set-budget`으로 정하고 상한에 따라 실행·맞춤·중지 — plan §7-1). 다음 S4 요청형 사업성 분석(OpenAI `gpt-6.2-sol` 추론 high, 요청할 때만·실행 전 추정 비용 확인)
