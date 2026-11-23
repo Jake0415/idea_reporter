@@ -8,8 +8,12 @@ import collector.source.GitHubIssuesAdapter
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.time.LocalDate
 import java.util.Locale
+import collector.report.MailTheme as T
 
-class HtmlRenderer(categories: List<Category>) {
+/**
+ * 일일 아이디어 메일. [appLinks] = "앱에서 보기"(ideacollector://) 링크 — 앱이 나오기 전에는 끈다(2026-11-23 결정, 4단계에서 켬).
+ */
+class HtmlRenderer(categories: List<Category>, private val appLinks: Boolean = false) {
     private val names = categories.associate { it.id to it.name }
 
     data class Rendered(val subject: String, val html: String, val text: String)
@@ -26,7 +30,7 @@ class HtmlRenderer(categories: List<Category>) {
         val text = buildString {
             appendLine(subject)
             appendLine("단계별 건수 · $funnel")
-            if (failures.isNotEmpty()) appendLine("실패 출처 · $failures")
+            if (failures.isNotEmpty()) appendLine("실패 출처 · $failures · 나머지 출처로 만들었습니다")
             report.issues.forEach { appendLine(it) }
             appendLine("\n목차")
             result.cards.forEachIndexed { index, card ->
@@ -38,47 +42,54 @@ class HtmlRenderer(categories: List<Category>) {
                 appendLine("오늘 고른 이유 · ${card.whyToday}")
                 evidence(card.techSignals, card.demandSignals + card.competitors).forEach { appendLine("- ${evidenceNote(it)} · ${it.url}") }
                 appendLine("가장 큰 위험 · ${card.biggestRisk}")
-                appendLine("앱에서 보기 · ideacollector://card/${card.id}")
+                if (appLinks) appendLine("앱에서 보기 · ideacollector://card/${card.id}")
             }
             appendLine("\n추적 업데이트")
-            if (result.trackingUpdates.isEmpty()) appendLine("새 업데이트 없음")
+            if (result.trackingUpdates.isEmpty()) appendLine("추적 중인 아이디어에 오늘 새 소식이 없습니다")
             result.trackingUpdates.forEach {
                 appendLine("${titles[it.trackedId] ?: it.trackedId} ${arrow(it.trend)} ${strength(it.strength)} · ${it.summary}")
-                appendLine("앱에서 보기 · ideacollector://track/${it.trackedId}")
+                if (appLinks) appendLine("앱에서 보기 · ideacollector://track/${it.trackedId}")
             }
             appendLine("\n$costs")
         }
-        val html = buildString {
-            appendLine("<!doctype html><html lang=\"ko\"><head><meta charset=\"utf-8\"><title>${escape(subject)}</title></head><body>")
-            appendLine("<h1>${escape(subject)}</h1><p>단계별 건수 · ${escape(funnel)}</p>")
-            if (failures.isNotEmpty()) appendLine("<p>실패 출처 · ${escape(failures)}</p>")
-            report.issues.forEach { appendLine("<p>${escape(it)}</p>") }
-            appendLine("<h2>목차</h2><ol>")
+        val body = buildString {
+            appendLine("<h1 style=\"${T.h1}\">AI 아이디어 · ${date.monthValue}월 ${date.dayOfMonth}일</h1>")
+            appendLine("<p style=\"${T.meta}\">카드 ${result.cards.size}개 · 단계별 건수 · ${escape(funnel)}</p>")
+            if (failures.isNotEmpty()) appendLine(T.banner("실패 출처 · ${escape(failures)} · 나머지 출처로 만들었습니다", T.Tone.WARNING))
+            report.issues.forEach { appendLine(T.banner(escape(it), T.Tone.INFO)) }
+            appendLine("<h2 style=\"${T.h2}\">목차</h2><ol style=\"margin:0 0 8px;padding-left:20px\">")
             result.cards.forEach { card ->
-                appendLine("<li><a href=\"#${escape(card.id)}\">${escape(card.title)}</a> ${pill(names[card.category].orEmpty())} " +
-                    card.badges.joinToString(" ", transform = ::pill) + "</li>")
+                appendLine("<li style=\"margin:0 0 6px\"><a href=\"#${escape(card.id)}\" style=\"${T.link}\">${escape(card.title)}</a> " +
+                    pills(card.category, card.badges) + "</li>")
             }
             appendLine("</ol>")
-            for (card in result.cards) {
-                appendLine("<section id=\"${escape(card.id)}\"><h2>${escape(card.title)}</h2><p>${escape(card.oneLiner)}</p>")
-                appendLine("<p><strong>오늘 고른 이유</strong> · ${escape(card.whyToday)}</p><ul>")
-                evidence(card.techSignals, card.demandSignals + card.competitors).forEach {
-                    val url = it.url.toHttpUrlOrNull()
-                    appendLine(if (url == null) "<li>${escape(evidenceNote(it))}</li>" else
-                        "<li><a href=\"${escape(url.toString())}\">${escape(evidenceNote(it))}</a></li>")
+            for ((index, card) in result.cards.withIndex()) {
+                val inner = buildString {
+                    append("<h3 style=\"${T.h3}\">${index + 1}. ${escape(card.title)}</h3>")
+                    append("<p style=\"${T.meta}\">${escape(card.oneLiner)}</p>")
+                    append("<p style=\"margin:0 0 12px\">${pills(card.category, card.badges)}</p>")
+                    append("<p style=\"${T.p}\"><strong style=\"${T.strong}\">오늘 고른 이유</strong> · ${escape(card.whyToday)}</p>")
+                    append("<ul style=\"margin:0 0 8px;padding-left:20px\">")
+                    evidence(card.techSignals, card.demandSignals + card.competitors).forEach {
+                        val url = it.url.toHttpUrlOrNull()
+                        append(if (url == null) "<li>${escape(evidenceNote(it))}</li>" else
+                            "<li><a href=\"${escape(url.toString())}\" style=\"${T.link}\">${escape(evidenceNote(it))}</a></li>")
+                    }
+                    append("</ul><p style=\"margin:0\"><strong style=\"${T.strong}\">가장 큰 위험</strong> · ${escape(card.biggestRisk)}</p>")
+                    if (appLinks) append("<p style=\"margin:8px 0 0;font-size:12px\"><a href=\"ideacollector://card/${escape(card.id)}\" style=\"${T.link}\">앱에서 보기</a></p>")
                 }
-                appendLine("</ul><p><strong>가장 큰 위험</strong> · ${escape(card.biggestRisk)}</p>")
-                appendLine("<p><a href=\"ideacollector://card/${escape(card.id)}\">앱에서 보기</a></p></section>")
+                appendLine(T.card(inner, id = escape(card.id)))
             }
-            appendLine("<h2>추적 업데이트</h2>")
-            if (result.trackingUpdates.isEmpty()) appendLine("<p>새 업데이트 없음</p>")
+            appendLine("<h2 style=\"${T.h2}\">추적 업데이트</h2>")
+            if (result.trackingUpdates.isEmpty()) appendLine("<p style=\"${T.meta}\">추적 중인 아이디어에 오늘 새 소식이 없습니다</p>")
             result.trackingUpdates.forEach {
-                appendLine("<p><strong>${escape(titles[it.trackedId] ?: it.trackedId)}</strong> ${arrow(it.trend)} ${strength(it.strength)} · " +
-                    "${escape(it.summary)} · <a href=\"ideacollector://track/${escape(it.trackedId)}\">앱에서 보기</a></p>")
+                appendLine("<p style=\"${T.p}\"><strong style=\"${T.strong}\">${escape(titles[it.trackedId] ?: it.trackedId)}</strong> ${arrow(it.trend)} ${strength(it.strength)} · " +
+                    escape(it.summary) +
+                    (if (appLinks) " · <a href=\"ideacollector://track/${escape(it.trackedId)}\" style=\"${T.link}\">앱에서 보기</a>" else "") + "</p>")
             }
-            appendLine("<footer>${escape(costs)}</footer></body></html>")
+            appendLine("<p style=\"${T.footer}\">${escape(costs)}</p>")
         }
-        return Rendered(subject, html, text)
+        return Rendered(subject, T.document(escape(subject), body), text)
     }
 
     private fun evidenceNote(ref: SignalRef): String {
@@ -88,8 +99,10 @@ class HtmlRenderer(categories: List<Category>) {
     }
 
     private fun <T> evidence(tech: List<T>, other: List<T>) = tech.take(1) + other.take(1)
-    private fun pill(text: String) =
-        "<span style=\"background:#eaeef8;color:#1c315c;padding:2px 6px;border-radius:4px\">${escape(text)}</span>"
+    /** 분류는 중립(회색), 좋은 신호 배지는 정보색 — 경고 노랑은 실패 안내에만 쓴다. */
+    private fun pills(category: String, badges: List<String>) =
+        (listOfNotNull(names[category]?.takeIf { it.isNotEmpty() }?.let { T.pill(escape(it)) }) +
+            badges.map { T.pill(escape(it), T.Tone.HIGHLIGHT) }).joinToString(" ")
     private fun escape(text: String) = text.replace("&", "&amp;").replace("<", "&lt;")
         .replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&#39;")
     private fun usd(cost: Double) = String.format(Locale.ROOT, "$%.5f", cost)

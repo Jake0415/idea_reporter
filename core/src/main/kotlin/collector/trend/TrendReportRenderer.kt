@@ -4,6 +4,7 @@ import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.temporal.TemporalAdjusters
 import kotlin.math.roundToLong
+import collector.report.MailTheme as T
 
 class TrendReportRenderer {
     data class Rendered(val subject: String, val html: String, val text: String)
@@ -72,36 +73,35 @@ class TrendReportRenderer {
             appendLine("\n데이터 상태")
             status.forEach { appendLine(it) }
         }
-        val html = buildString {
-            appendLine("<!doctype html><html lang=\"ko\"><head><meta charset=\"utf-8\"><title>${escape(subject)}</title></head>")
-            appendLine("<body style=\"font-family:sans-serif;color:#172238;line-height:1.5\"><h1>${escape(subject)}</h1>")
-            if (totalCandidates > 0) appendLine("<p>$candidateLegend</p>")
-            if (report.insufficientData) appendLine("<p style=\"background:#fff2cc;padding:12px\">${escape(notice)}</p>")
+        val h2 = { title: String -> "<h2 style=\"${T.h2}\">${escape(title)}</h2>" }
+        val p = { line: String -> "<p style=\"${T.p}\">${escape(line)}</p>" }
+        val body = buildString {
+            appendLine("<h1 style=\"${T.h1}\">기술 트렌드 · ${thursday.monthValue}월 ${week}주</h1>")
+            appendLine("<p style=\"${T.meta}\">${escape(heading)} · ${escape(report.startDate)} ~ ${escape(report.date)}</p>")
+            if (totalCandidates > 0) appendLine("<p style=\"${T.meta}\">$candidateLegend</p>")
+            if (report.insufficientData) appendLine(T.banner(escape(notice), T.Tone.WARNING))
             if (report.summary.isNotEmpty()) {
-                appendLine("<ul style=\"background:#eef2f8;padding:12px 28px\">")
-                report.summary.forEach { appendLine("<li>${escape(it)}</li>") }
+                appendLine("<ul style=\"${T.muted};padding-left:32px\">")
+                report.summary.forEach { appendLine("<li style=\"margin:2px 0\">${escape(it)}</li>") }
                 appendLine("</ul>")
             }
             for ((title, headers, rows) in tables) {
-                appendLine("<h2>${escape(title)}</h2>")
+                appendLine(h2(title))
                 if (title == "지는 테마" && rows.isEmpty()) {
-                    appendLine("<p>해당 없음</p>")
+                    appendLine("<p style=\"${T.meta}\">해당 없음</p>")
                     continue
                 }
-                appendLine("<table style=\"border-collapse:collapse;width:100%\">")
-                appendLine("<thead>${tableRow(headers, "th")}</thead><tbody>")
-                rows.forEach { appendLine(tableRow(it, "td")) }
-                appendLine("</tbody></table>")
+                rows.forEach { appendLine(rowBlock(headers, it)) }
             }
-            appendLine("<h2>언어·라이선스 분포</h2>")
-            distributions.forEach { appendLine("<p>${escape(it)}</p>") }
-            appendLine("<h2>몰림(제품·저장소)</h2>")
-            overheated.ifEmpty { listOf("없음") }.forEach { appendLine("<p>${escape(it)}</p>") }
-            appendLine("<footer><h2>데이터 상태</h2>")
-            status.forEach { appendLine("<p>${escape(it)}</p>") }
-            appendLine("</footer></body></html>")
+            appendLine(h2("언어·라이선스 분포"))
+            distributions.forEach { appendLine(p(it)) }
+            appendLine(h2("몰림(제품·저장소)"))
+            overheated.ifEmpty { listOf("없음") }.forEach { appendLine(p(it)) }
+            appendLine("<div style=\"${T.footer}\"><p style=\"margin:0 0 4px;font-weight:600;color:${T.tokens.getValue("text-2")}\">데이터 상태</p>")
+            status.forEach { appendLine("<p style=\"margin:0\">${escape(it)}</p>") }
+            appendLine("</div>")
         }
-        return Rendered(subject, html, text)
+        return Rendered(subject, T.document(escape(subject), body), text)
     }
 
     private fun themeRow(row: ThemeRow): List<String> {
@@ -113,10 +113,23 @@ class TrendReportRenderer {
             row.sources.size.toString(), row.demandCount.toString(), row.marketCount.toString())
     }
 
-    private fun tableRow(cells: List<String>, tag: String) =
-        cells.joinToString("", "<tr>", "</tr>") {
-            "<$tag style=\"padding:6px 8px;border-bottom:1px solid #dce3ed;text-align:left\">${escape(it)}</$tag>"
-        }
+    /**
+     * 표 한 행 = 한 덩어리: 첫 칸(이름) 굵게 → 짧은 칸은 "머리 값 · …" 한 줄 → 긴 칸(설명·예시)은 아래 줄.
+     * 6~7열 표는 폰 메일 폭(360~400px)에서 넘치므로 표(table) 대신 이렇게 쌓는다(2026-11-23).
+     */
+    private fun rowBlock(headers: List<String>, cells: List<String>): String {
+        val long = setOf("설명", "예시")
+        val pairs = headers.indices.drop(1).filter { headers[it] !in long }
+            .joinToString(" · ") { "${escape(headers[it])} <span style=\"color:${T.tokens.getValue("text")}\">${escape(cells[it])}</span>" }
+        val extra = headers.indices.filter { headers[it] in long && cells[it] != "—" }
+            .joinToString("") {
+                "<div style=\"margin-top:2px;color:${T.tokens.getValue("text-2")}\">" +
+                    "<span style=\"font-size:12px;color:${T.tokens.getValue("text-3")}\">${escape(headers[it])}</span> ${escape(cells[it])}</div>"
+            }
+        return "<div style=\"padding:8px 0;border-bottom:1px solid ${T.BORDER};overflow-wrap:anywhere\">" +
+            "<div style=\"${T.strong}\">${escape(cells[0])}</div>" +
+            "<div style=\"font-size:12px;line-height:1.5;color:${T.tokens.getValue("text-3")};word-break:keep-all\">$pairs</div>$extra</div>"
+    }
 
     private fun distribution(counts: Map<String, Int>) =
         counts.entries.joinToString(", ") { "${it.key} ${it.value}개" }.ifEmpty { "—" }

@@ -4,19 +4,22 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>트렌드·사업성 분석 시안</title>
+<link rel="stylesheet" href="tokens.css">
 <style>
+/* 색·모서리는 tokens.css(원본)를 쓴다. 아래는 이 파일 안에서 쓰는 짧은 이름 → 토큰 연결뿐. */
 :root{
-  --accent:#0095F6; --accent-muted:#B2D9FF; --accent-ink:#00497D;
-  --bg:#FFFFFF; --surface:#FFFFFF; --muted:#F1F1F1; --ink:#000000; --ink2:#474747; --ink3:#8E8E8E;
-  --line:rgba(0,0,0,.08); --line2:rgba(0,0,0,.14);
-  --warn:#B45309; --warn-bg:#FEF3C7; --bad:#B91C1C; --bad-bg:#FEE2E2; --ok:#047857; --ok-bg:#D1FAE5;
+  color-scheme: light;
+  --accent:var(--ic-accent); --accent-strong:var(--ic-accent-strong); --on-accent:var(--ic-on-accent-strong);
+  --accent-muted:var(--ic-highlight-bg); --accent-ink:var(--ic-highlight-text); --link:var(--ic-link);
+  --bg:var(--ic-bg); --surface:var(--ic-surface); --muted:var(--ic-surface-muted);
+  --ink:var(--ic-text); --ink2:var(--ic-text-2); --ink3:var(--ic-text-3);
+  --line:var(--ic-border); --line2:var(--ic-border-strong);
+  --warn:var(--ic-warning-text); --warn-bg:var(--ic-warning-bg); --bad:var(--ic-error-text); --bad-bg:var(--ic-error-bg);
+  --ok:var(--ic-success-text); --ok-bg:var(--ic-success-bg);
+  /* 검토용 바깥 화면(폰 밖)만 쓰는 값 */
   --page:#F4F5F7; --phone-frame:#1F2937; --shadow:0 10px 30px rgba(0,0,0,.10);
 }
 :root[data-theme="dark"]{
-  --accent-muted:#00497D; --accent-ink:#B2D9FF;
-  --bg:#000000; --surface:#000000; --muted:#1B1B1B; --ink:#FFFFFF; --ink2:#9D9D9D; --ink3:#6E6E6E;
-  --line:rgba(255,255,255,.10); --line2:rgba(255,255,255,.18);
-  --warn:#FBBF24; --warn-bg:#3A2A08; --bad:#F87171; --bad-bg:#3B1111; --ok:#34D399; --ok-bg:#0B3326;
   --page:#0E0F11; --phone-frame:#2A2D33; --shadow:0 10px 30px rgba(0,0,0,.5);
 }
 *{box-sizing:border-box}
@@ -43,7 +46,7 @@ aside#info h4{font-size:12px;color:var(--ink3);margin:14px 0 4px}
 aside#info ul{margin:0;padding-left:18px} aside#info li{margin:2px 0}
 .states{display:flex;flex-wrap:wrap;gap:4px}
 .states button{border:1px solid var(--line2);background:var(--muted);border-radius:999px;padding:2px 10px;font-size:12px}
-.states button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.states button.on{background:var(--accent-strong);border-color:var(--accent-strong);color:var(--on-accent)}
 .cost0{color:var(--ok);font-weight:600} .costy{color:var(--warn);font-weight:600}
 
 /* phone */
@@ -56,12 +59,12 @@ aside#info ul{margin:0;padding-left:18px} aside#info li{margin:2px 0}
 .ib:hover{background:var(--muted)}
 .ib svg{width:24px;height:24px}
 .scr{flex:1;overflow:auto;padding:4px 14px 20px}
-.tabs{display:flex;border-top:1px solid var(--line);flex:none;background:var(--bg);padding:6px 0 10px}
-.tabs button{flex:1;border:none;background:none;display:flex;justify-content:center;padding:6px 0;color:var(--ink)}
-.tabs svg{width:26px;height:26px}
+.tabs{display:flex;border-top:1px solid var(--line);flex:none;background:var(--bg);padding:2px 0 6px}
+.tabs button{flex:1;border:none;background:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;min-height:var(--ic-touch);padding:4px 0;color:var(--ink2);font-size:var(--ic-size-tab);font-weight:500;line-height:1.2}
+.tabs svg{width:24px;height:24px}
 .seg{display:flex;gap:6px;margin:2px 0 12px}
 .seg button{border:1px solid var(--line2);background:var(--bg);border-radius:8px;padding:5px 12px;font-size:13px;font-weight:600}
-.seg button.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.seg button.on{background:var(--accent-muted);color:var(--accent-ink);border-color:transparent}
 .weekbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;font-size:13px}
 .weekbar b{font-size:14px}
 .box{border:1px solid var(--line);border-radius:10px;background:var(--surface);padding:11px 12px;margin-bottom:10px}
@@ -82,20 +85,19 @@ aside#info ul{margin:0;padding-left:18px} aside#info li{margin:2px 0}
 .up{color:var(--ok)} .down{color:var(--bad)}
 .ck{width:22px;height:22px;border-radius:50%;border:1.5px solid var(--line2);flex:none;display:flex;align-items:center;justify-content:center;font-size:12px;color:#fff}
 .ck.on{background:var(--accent);border-color:var(--accent)}
-.mark{display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:700;color:var(--accent);background:var(--accent-muted);border-radius:5px;padding:0 6px;margin-left:4px;vertical-align:1px}
-:root[data-theme="dark"] .mark{color:var(--accent-ink)}
+.mark{display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:700;color:var(--accent-ink);background:var(--accent-muted);border-radius:5px;padding:0 6px;margin-left:4px;vertical-align:1px}
 .hot{font-size:11px;font-weight:700;color:var(--warn);background:var(--warn-bg);border-radius:5px;padding:0 6px;margin-left:4px;vertical-align:1px}
 .tok{display:inline-block;font-size:11px;border-radius:5px;padding:1px 7px;background:var(--muted);color:var(--ink2);margin:0 4px 4px 0;white-space:nowrap}
 .btn{border:1px solid var(--line2);background:var(--bg);border-radius:8px;padding:8px 12px;font-size:13px;font-weight:600}
-.btn.pri{background:var(--accent);color:#fff;border-color:var(--accent)}
+.btn.pri{background:var(--accent-strong);color:var(--on-accent);border-color:var(--accent-strong)}
 .btn.full{width:100%}
 .btn.dis{opacity:.45;cursor:not-allowed}
-.fab{position:absolute;left:14px;right:14px;bottom:74px;z-index:3;box-shadow:0 6px 18px rgba(0,149,246,.35)}
+.fab{position:absolute;left:14px;right:14px;bottom:74px;z-index:3}
 .list .li{display:flex;align-items:center;gap:10px;padding:11px 2px;border-bottom:1px solid var(--line);cursor:pointer}
 .list .li:last-child{border-bottom:none}
 .chev{color:var(--ink3)}
 .score{font-weight:800;font-size:18px;min-width:40px;font-variant-numeric:tabular-nums}
-.score.hi{color:var(--accent)}
+.score.hi{color:var(--link)}
 .bar{height:6px;border-radius:3px;background:var(--muted);overflow:hidden;flex:1}
 .bar i{display:block;height:100%;background:var(--accent);border-radius:3px}
 .bar.low i{background:var(--warn)}
@@ -120,12 +122,12 @@ aside#info ul{margin:0;padding-left:18px} aside#info li{margin:2px 0}
 .radio.on .dot{border:5px solid var(--accent)}
 .step{display:flex;gap:10px;align-items:flex-start;padding:8px 0}
 .step .c{width:22px;height:22px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;border:1.5px solid var(--line2);color:var(--ink3)}
-.step.done .c{background:var(--accent);border-color:var(--accent);color:#fff}
+.step.done .c{background:var(--accent-strong);border-color:var(--accent-strong);color:var(--on-accent)}
 .step.now .c{border-color:var(--accent);color:var(--accent)}
 .spin{width:44px;height:44px;border-radius:50%;border:4px solid var(--muted);border-top-color:var(--accent);animation:sp 1s linear infinite;margin:18px auto 10px}
 @keyframes sp{to{transform:rotate(360deg)}}
 .bubble{border-radius:14px;padding:9px 12px;margin:8px 0;max-width:86%;font-size:13px}
-.bubble.me{background:var(--accent);color:#fff;margin-left:auto;border-bottom-right-radius:4px}
+.bubble.me{background:var(--accent-strong);color:var(--on-accent);margin-left:auto;border-bottom-right-radius:4px}
 .bubble.ai{background:var(--muted);border-bottom-left-radius:4px}
 .inputbar{display:flex;gap:8px;padding:8px 12px 12px;border-top:1px solid var(--line);flex:none}
 .inputbar .in{flex:1;border:1px solid var(--line2);border-radius:20px;padding:8px 14px;color:var(--ink3);font-size:13px}
@@ -158,7 +160,7 @@ aside#info ul{margin:0;padding-left:18px} aside#info li{margin:2px 0}
 .mail .mh b{color:var(--ink);font-size:15px;display:block;margin-top:2px}
 .mail .mb{padding:18px 22px}
 .mail .mb h4{margin:18px 0 6px;font-size:14px}
-.mail .cta{display:inline-block;background:var(--accent);color:#fff;border-radius:8px;padding:8px 14px;font-weight:600;font-size:13px;text-decoration:none}
+.mail .cta{display:inline-block;background:var(--accent-strong);color:var(--on-accent);border-radius:8px;padding:8px 14px;font-weight:600;font-size:13px;text-decoration:none}
 .noti{width:390px}
 .noti .n{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:11px 13px;margin-bottom:10px;box-shadow:0 2px 10px rgba(0,0,0,.06);cursor:pointer}
 @media (max-width:1180px){.layout{grid-template-columns:200px 1fr}aside#info{display:none}}
@@ -279,14 +281,16 @@ const screens = [
 ];
 
 const phone = (inner, tab='trend', extra='') => `<div class="phone"><div class="status"><span>9:41</span><span>●●● 5G 82%</span></div>${inner}${tab?tabs(tab):''}${extra}</div>`;
-const tabs = (on) => `<div class="tabs">${[['home','SC-01'],['trend','SC-17'],['track',null],['archive',null],['settings','SC-28']].map(([k,go])=>`<button ${go?`data-go="${go}"`:''} aria-label="${k}">${I[k](k===on)}</button>`).join('')}</div>`;
+// 하단 탭: 아이콘 + 작은 라벨(2026-11-23). MVP는 4개(오늘·추적·보관함·설정), 트렌드 탭은 7단계에서 5번째로 추가 — 이 시안은 그때 모습.
+const TAB_LABEL = {home:'오늘', trend:'트렌드', track:'추적', archive:'보관함', settings:'설정'};
+const tabs = (on) => `<div class="tabs">${[['home','SC-01'],['trend','SC-17'],['track',null],['archive',null],['settings','SC-28']].map(([k,go])=>`<button ${go?`data-go="${go}"`:''} class="${k===on?'on':''}" ${k===on?'aria-current="page"':''}>${I[k](k===on)}<span>${TAB_LABEL[k]}</span></button>`).join('')}</div>`;
 const bar = (t, opts={}) => `<div class="appbar">${opts.back?`<button class="ib" data-go="${opts.back}" aria-label="뒤로">${I.back}</button>`:''}<div class="t ${opts.back?'sm':''}">${t}</div>${opts.right||''}</div>`;
 const segs = (on) => `<div class="seg">${[['기술','SC-17'],['오픈소스','SC-18'],['분석 기록','SC-27']].map(([n,go])=>`<button class="${n===on?'on':''}" data-go="${go}">${n}</button>`).join('')}</div>`;
 
 S['UX-0'] = () => `<div class="doc">
   <h2>UX 구성안 — 트렌드 리포트 + 요청형 사업성 분석</h2>
   <p>원칙: <b>기술 분석은 알아서 오고(0원), 돈이 드는 사업성 분석은 내가 고른 것만 요청한다.</b> 비용이 드는 버튼에는 항상 추정 비용을 붙이고, 저장된 내용을 다시 보는 것은 모두 0원이다.</p>
-  <h3>1. 메뉴 구조 — 하단 탭에 "트렌드" 추가 (5개)</h3>
+  <h3>1. 메뉴 구조 — 하단 탭에 "트렌드" 추가 (5개, 7단계에서. MVP는 4개)</h3>
   <div class="ia">오늘(SC-01) ─ 일요일엔 맨 위에 "이번 주 트렌드 리포트" 띠
 트렌드(신규)
  ├ 기술 ········· SC-17 주간 리포트(뜨는·지는 테마, ◆ 분석 후보)

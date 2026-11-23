@@ -190,8 +190,19 @@ function ScreenView({screen, ctx}: {screen: string; ctx: Ctx}) {
 /* ───────── 공통 조각 ───────── */
 type SvgIcon = React.ComponentType<React.SVGProps<SVGSVGElement>>;
 function TabIcon({label, on, outline, solid, onClick}: {label: string; on: boolean; outline: SvgIcon; solid: SvgIcon; onClick: () => void}) {
-  return <IconButton label={label} tooltip={label} icon={<Icon icon={on ? solid : outline} size="lg" color="primary" />} variant="ghost" onClick={onClick} />;
+  // 하단 탭: 아이콘 + 작은 글자 라벨(2026-11-23 결정), 누르는 영역 48 이상, 선택 탭은 채운 아이콘 + 굵은 글자
+  const Svg = on ? solid : outline;
+  return (
+    <button type="button" className={`tabbtn${on ? ' on' : ''}`} aria-current={on ? 'page' : undefined} onClick={onClick}>
+      <Svg aria-hidden="true" width={24} height={24} />
+      <span>{label}</span>
+    </button>
+  );
 }
+/** 좋은 신호 배지(여러 곳에서 화제·급상승·오늘 새 소식) = 정보색. 경고 노랑은 실패·주의에만 쓴다. */
+const Highlight = ({label}: {label: string}) => <span className="badge-hl">{label}</span>;
+/** "추적 중" = 포인트색 테두리만 */
+const Tracking = () => <span className="badge-outline">추적 중</span>;
 const Page = ({children}: {children: ReactNode}) => <VStack gap={3} padding={4}>{children}</VStack>;
 const Block = ({title, children}: {title: string; children: ReactNode}) => <VStack gap={1}><Text type="label">{title}</Text>{children}</VStack>;
 const Row = ({k, v}: {k: string; v: ReactNode}) => <HStack justify="between" gap={3} vAlign="start"><Text type="supporting">{k}</Text><Text>{v}</Text></HStack>;
@@ -224,11 +235,11 @@ function IdeaCard({idea, n, ctx, from}: {idea: Idea; n: number; ctx: Ctx; from?:
           <IconButton label={starred ? '추적 중' : '관심(추적 시작)'} icon={<Icon icon={starred ? StarSolid : StarIcon} color={starred ? 'accent' : 'secondary'} />} variant="ghost" size="sm" onClick={e => { e.stopPropagation(); ctx.toggleStar(idea.id); }} />
         </HStack>
         <Text type="supporting">{idea.one}</Text>
-        <HStack gap={1}>
-          <Token label={idea.cat} size="sm" color="blue" />
-          {idea.badges.map(b => <Badge key={b} label={b} variant="warning" />)}
+        <HStack gap={1} wrap="wrap">
+          <Token label={idea.cat} size="sm" />
+          {idea.badges.map(b => <Highlight key={b} label={b} />)}
           <Badge label={`AI ${idea.score}`} variant="neutral" />
-          {starred && <Badge label="추적 중" variant="info" />}
+          {starred && <Tracking />}
           {ctx.hidden[idea.id] && <Badge label="관심 없음" variant="neutral" />}
         </HStack>
       </VStack>
@@ -315,7 +326,7 @@ function TrackRow({ctx}: {ctx: Ctx}) {
       {[...TRACKED].sort((a, b) => b.news - a.news).map(t => (
         <div className="story-item" key={t.id} onClick={() => ctx.go('SC-14', {track: t.id})} style={{cursor: 'pointer'}}>
           <div className={`story-ring ${t.news ? '' : 'seen'}`}><Avatar name={t.short} size="lg" /></div>
-          <Text type="supporting" maxLines={1}>{t.title}</Text>
+          <span className="story-label">{t.title}</span>
         </div>
       ))}
     </div>
@@ -344,7 +355,7 @@ function Detail({ctx}: {ctx: Ctx}) {
   return (
     <Page>
       <VStack gap={1}><Heading level={2}>{idea.title}</Heading><Text type="supporting">{idea.one}</Text></VStack>
-      <HStack gap={1}><Token label={idea.cat} size="sm" color="blue" />{idea.badges.map(b => <Badge key={b} label={b} variant="warning" />)}{idea.tags.map(t => <Token key={t} label={`#${t}`} size="sm" />)}</HStack>
+      <HStack gap={1} wrap="wrap"><Token label={idea.cat} size="sm" />{idea.badges.map(b => <Highlight key={b} label={b} />)}{idea.tags.map(t => <Token key={t} label={`#${t}`} size="sm" />)}</HStack>
       {ctx.stars[idea.id] && <ClickableCard label="추적 보기" variant="transparent" padding={0} onClick={() => ctx.go('SC-14', {track: TRACKED.find(t => t.from === idea.id)?.id ?? 't1'})}><Banner status="info" title="추적 중" description="매일 새 소식을 조사합니다 · 눌러서 추적 상세" /></ClickableCard>}
       <Block title="오늘 고른 이유"><Text>{idea.why}</Text></Block>
       <Block title="문제"><Text>{idea.problem}</Text></Block>
@@ -378,7 +389,7 @@ function TrackList({ctx}: {ctx: Ctx}) {
           <VStack gap={2}>
             <HStack justify="between" vAlign="center"><Heading level={4}>{t.title}</Heading><Badge label={TREND_LABEL[t.trend]} variant={TREND_VARIANT[t.trend]} /></HStack>
             <HStack justify="between" vAlign="center">
-              <HStack gap={1}><Token label={t.cat} size="sm" color="blue" />{t.news ? <Badge label={`오늘 새 소식 ${t.news}`} variant="warning" /> : <Badge label={t.quiet ? '조용함' : '추적 중'} variant="neutral" />}</HStack>
+              <HStack gap={1} wrap="wrap"><Token label={t.cat} size="sm" />{t.news ? <Highlight label={`오늘 새 소식 ${t.news}`} /> : t.quiet ? <Badge label="조용함" variant="neutral" /> : <Tracking />}</HStack>
               <Text type="supporting">마지막 {t.last}</Text>
             </HStack>
             {t.updates[0] && <Text type="supporting" maxLines={2}>{t.updates[0].summary}</Text>}
@@ -397,7 +408,7 @@ function TrackDetail({ctx}: {ctx: Ctx}) {
     <Page>
       <VStack gap={1}>
         <Heading level={2}>{t.title}</Heading>
-        <HStack gap={1}><Token label={t.cat} size="sm" color="blue" /><Badge label={t.quiet ? '조용함' : '추적 중'} variant="neutral" /><Badge label={TREND_LABEL[t.trend]} variant={TREND_VARIANT[t.trend]} /></HStack>
+        <HStack gap={1} wrap="wrap"><Token label={t.cat} size="sm" />{t.quiet ? <Badge label="조용함" variant="neutral" /> : <Tracking />}<Badge label={TREND_LABEL[t.trend]} variant={TREND_VARIANT[t.trend]} /></HStack>
       </VStack>
       <Card variant="muted"><VStack gap={2}>
         <HStack justify="between"><Text type="label">관련 글 수 {t.strength}</Text><Text type="supporting">{t.started}부터 추적</Text></HStack>
@@ -411,7 +422,7 @@ function TrackDetail({ctx}: {ctx: Ctx}) {
               <Card key={u.date}><VStack gap={1.5}>
                 <HStack justify="between"><Text type="label">{u.date}</Text><Text type="supporting">근거 {u.n}건</Text></HStack>
                 <Text>{u.summary}</Text>
-                <HStack gap={1}>{u.changes.map(c => <Badge key={c} label={c} variant="warning" />)}</HStack>
+                <HStack gap={1} wrap="wrap">{u.changes.map(c => <Highlight key={c} label={c} />)}</HStack>
               </VStack></Card>
             ))}</VStack>}
       </Block>
@@ -798,16 +809,16 @@ function MailView({ctx}: {ctx: Ctx}) {
       <Card><VStack gap={3}>
         <VStack gap={0.5}><Text type="supporting">보낸 사람 sender@gmail.com · 받는 사람 me@example.com</Text><Heading level={3}>[AI 아이디어] 11월 19일 — 카드 3개 (수집 412 → 후보 18)</Heading></VStack>
         <Banner status="warning" title="Reddit 수집 실패" description="나머지 출처로 만들었습니다" />
-        <Block title="목차">{cards.map((c, i) => <HStack key={c.id} gap={1}><Text>{i + 1}. {c.title}</Text><Token label={c.cat} size="sm" color="blue" />{c.badges.map(b => <Badge key={b} label={b} variant="warning" />)}</HStack>)}</Block>
+        <Block title="목차">{cards.map((c, i) => <HStack key={c.id} gap={1} wrap="wrap"><Text>{i + 1}. {c.title}</Text><Token label={c.cat} size="sm" />{c.badges.map(b => <Highlight key={b} label={b} />)}</HStack>)}</Block>
+        {/* 메일 카드 = 테두리 상자(그림자 없음). "앱에서 보기"는 앱이 나오기 전까지 숨긴다(2026-11-23 결정). */}
         {cards.slice(0, 2).map((c, i) => (
-          <Card key={c.id} variant="muted"><VStack gap={1.5}>
+          <Card key={c.id}><VStack gap={1.5}>
             <Text type="label">{i + 1}. {c.title}</Text><Text type="supporting">{c.one}</Text>
             <Text><b>오늘 고른 이유</b> {c.why}</Text><Text><b>가장 큰 위험</b> {c.risk}</Text>
-            <Button label="앱에서 보기" variant="ghost" size="sm" onClick={() => ctx.jump('SC-02', {idea: c.id})} />
           </VStack></Card>
         ))}
         <Block title="추적 업데이트">{TRACKED.filter(t => t.news).map(t => (
-          <HStack key={t.id} justify="between" vAlign="center"><VStack gap={0.5}><Text>{t.title} · {TREND_LABEL[t.trend]}</Text><Text type="supporting">{t.updates[0].summary}</Text></VStack><Button label="보기" variant="ghost" size="sm" onClick={() => ctx.jump('SC-14', {track: t.id})} /></HStack>
+          <ClickableCard key={t.id} label={t.title} variant="transparent" padding={0} onClick={() => ctx.jump('SC-14', {track: t.id})}><VStack gap={0.5}><Text>{t.title} · {TREND_LABEL[t.trend]}</Text><Text type="supporting">{t.updates[0].summary}</Text></VStack></ClickableCard>
         ))}</Block>
         <Divider /><Text type="supporting">오늘 비용 $0.14 · 이번 달 $2.31 (추정) · 실행 1분 05초 · HTML + 일반 텍스트</Text>
       </VStack></Card>

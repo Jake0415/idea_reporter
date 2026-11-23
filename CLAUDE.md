@@ -17,7 +17,7 @@
 - LLM: **Claude(Anthropic)·OpenAI 두 공급자 지원, 사용자가 자기 키를 등록하면 연동**(design.md §5-1). 단계별(분류·작성)로 공급자·모델 선택, 모델 목록은 공급자 API에서 받음, 두 키가 있으면 대체 공급자 1회 재시도. 기본값(Claude): 분류 `claude-haiku-5-5`, 작성 `claude-opus-5-5`. 일일 비용 상한(`dailyBudgetUsd`).
 - **키 취급:** API 키는 코드·문서·설정 파일·로그·커밋에 절대 쓰지 않는다. PC는 환경 변수(`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`), 앱은 Keystore.
 - [Horizon](https://github.com/Thysrael/Horizon)(MIT) **설계만 차용**해 Kotlin으로 새로 구현: 신호 프로필 3종(기술·수요·경쟁), 프로필별 임계값, 주제 합치기, 분류별 상한, 댓글 수집, 과거 기록 검색, 인용 검증, 출처 통계, RSS 입력 어댑터. 근거는 [docs/verification/horizon-rea-check.md](docs/verification/horizon-rea-check.md). 코드·프롬프트를 옮기면 `THIRD_PARTY_NOTICES.md`에 고지.
-- 디자인 톤: A 피드(인스타그램풍, docs/design-tokens.md). MVP 하단 탭은 오늘·추적·보관함·설정(아이콘만).
+- 디자인 톤: A 피드(인스타그램풍, docs/design-tokens.md). **토큰 원본은 `mockup/tokens.css` 하나** — Astryx 시안·trend.html·메일(`MailTheme.kt`, 테스트로 대조)이 같이 쓴다. 2026-11-23 확정: 포인트 `#0095F6`(아이콘·★·고리), 흰 글자 버튼 `#0077D9`, 차분한 상태 4색(경고 노랑은 실패·주의에만, 좋은 신호 배지는 파랑), 카드는 테두리만, MVP 하단 탭은 오늘·추적·보관함·설정(아이콘 + 작은 글자 라벨, 트렌드 탭은 7단계에 5번째), 메일은 가벼운 카드형(640px, 인라인 CSS)·앱 링크는 4단계 전까지 숨김.
 - **화면 용어(2026-11-23):** 메일·앱·리포트에는 쉬운 말만 쓴다 — 기술 신호→"쓸 수 있는 기술", 수요 신호→"사람들의 요청·불편", 시장 신호·경쟁 제품→"이미 나온 제품", 신호 프로필→"분류 기준", 깔때기→"단계별 건수". 코드 식별자는 그대로. 전체 표는 design.md 용어집.
 - **프롬프트는 사용자가 수정 가능**: 기본값(AI 작성, 리소스) + 사용자 수정본 우선, 버전·비교·되돌리기·시험 실행. 출력 형식·인용 검증은 코드가 강제(design.md §7-3). 프롬프트: classify·ideas·track·criteria·프로필 6개.
 - **★ = 관심 추적 시작**: 추적 아이디어를 매일 계속 조사(수집분 매칭 + 전용 검색), 업데이트 요약·신호 강도 추이(design.md §7-2). 수집함(SC-05)은 나중이지만 탈락 이유 기록은 1단계부터.

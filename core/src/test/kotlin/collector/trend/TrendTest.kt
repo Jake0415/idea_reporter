@@ -581,7 +581,7 @@ class TrendTest {
         assertTrue(report.summary.any { it.startsWith("저장소 몰림 · ") })
         val rendered = TrendReportRenderer().render(report)
         assertContains(rendered.text, "\n몰림(제품·저장소)\n")
-        assertContains(rendered.html, "<h2>몰림(제품·저장소)</h2>")
+        assertContains(rendered.html, Regex("<h2 style=\"[^\"]*\">몰림\\(제품·저장소\\)</h2>"))
         for (output in listOf(rendered.text, rendered.html)) {
             assertContains(output, "저장소 몰림 · ${report.spam.single().name} 저장소 39개 · ")
             assertContains(output, "제품 몰림 · ${report.themes.single().name} · 이미 나온 제품")
@@ -841,7 +841,7 @@ class TrendTest {
         assertContains(rendered.text, "suspect (스타 조작 의심) | ${"a".repeat(79)}… | 50")
         assertContains(rendered.text, "low | ${"a".repeat(79)}… | 50")
         assertContains(rendered.text, "지는 테마\n해당 없음")
-        assertContains(rendered.html, "<h2>지는 테마</h2>\n<p>해당 없음</p>")
+        assertContains(rendered.html, Regex("<h2 style=\"[^\"]*\">지는 테마</h2>\n<p style=\"[^\"]*\">해당 없음</p>"))
     }
 
     @Test fun candidateBoundaries() {

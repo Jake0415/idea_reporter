@@ -12,6 +12,7 @@ import collector.profile.ProfileLoader
 import collector.prompt.FilePromptStore
 import collector.prompt.PromptResolver
 import collector.report.HtmlRenderer
+import collector.report.MailTheme
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.*
 import okhttp3.OkHttpClient
@@ -526,11 +527,27 @@ class PipelineStagesTest {
         val result = PipelineResult(emptyList(), emptyList(), report, cards = listOf(card(item(1), item(2))))
         val rendered = HtmlRenderer(listOf(Category("dev-tools", "개발 도구"))).render(result)
         for (section in listOf("단계별 건수", "실패 출처", "목차", "오늘 고른 이유", "가장 큰 위험", "추적 업데이트",
-            "오늘 비용", "실행 시간", "ideacollector://card/card", "https://example.com/1", "https://example.com/2")) {
+            "오늘 비용", "실행 시간", "https://example.com/1", "https://example.com/2")) {
             assertContains(rendered.html, section)
             assertContains(rendered.text, section)
         }
         assertContains(rendered.html, "회의록 &lt;도구&gt;")
+        // 앱이 나오기 전에는 "앱에서 보기"(ideacollector://)를 숨기고, 켜면 HTML·텍스트 모두에 나온다
+        assertFalse("ideacollector://" in rendered.html || "ideacollector://" in rendered.text)
+        val withApp = HtmlRenderer(listOf(Category("dev-tools", "개발 도구")), appLinks = true).render(result)
+        assertContains(withApp.html, "ideacollector://card/card")
+        assertContains(withApp.text, "ideacollector://card/card")
+    }
+
+    @Test fun `메일 HTML은 디자인 토큰으로 꾸민 인라인 스타일만 쓴다`() {
+        val report = RunReport(today.toString(), now.toString(), listOf(SourceResult("github", 0, "시간 초과", 1)),
+            listOf(StageResult("select", 3, 2, 1)), emptyMap(), 2)
+        val html = HtmlRenderer(listOf(Category("dev-tools", "개발 도구")))
+            .render(PipelineResult(emptyList(), emptyList(), report, cards = listOf(card(item(1), item(2))))).html
+        assertContains(html, "max-width:640px")
+        assertContains(html, "background:${MailTheme.Tone.WARNING.bg}") // 실패 안내 = 경고
+        assertContains(html, "border:1px solid ${MailTheme.BORDER}")    // 카드 = 테두리 상자
+        for (banned in listOf("<style", "<script", "<link", "box-shadow", "rgba(", "var(--")) assertFalse(banned in html, banned)
     }
 
     @Test fun `일일 메일에 이전 용어가 나오지 않는다`() {
