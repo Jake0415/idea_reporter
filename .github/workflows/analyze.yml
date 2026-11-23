@@ -1,4 +1,5 @@
 name: Analyze themes
+run-name: Analyze ${{ inputs.requestId }}
 on:
   workflow_dispatch:
     inputs:
@@ -33,10 +34,10 @@ jobs:
       - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
       - name: Pull data
         id: pull
-        run: bash gradlew :core:run --args="--data-pull ../data"
+        run: bash gradlew -PwithoutApp :core:run --args="--data-pull ../data"
       - name: Apply inbox
         continue-on-error: true
-        run: bash gradlew :core:run --args="--data-inbox ../data"
+        run: bash gradlew -PwithoutApp :core:run --args="--data-inbox ../data"
       - name: Estimate or run analysis
         id: analysis
         env:

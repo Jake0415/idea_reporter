@@ -15,7 +15,7 @@ try {
         git -C $dataTree reset --hard HEAD
         if ($LASTEXITCODE -ne 0) { throw 'Could not populate the data worktree.' }
         $install = ':core:installDist'
-        .\gradlew.bat $install
+        .\gradlew.bat -PwithoutApp $install
         if ($LASTEXITCODE -ne 0) { throw 'Could not build the collector.' }
         & .\core\build\install\core\bin\core.bat --data-import $dataTree
         if ($LASTEXITCODE -ne 0) { throw 'Could not import the collector output.' }

@@ -14,7 +14,7 @@ $logDir = Join-Path $PWD 'out\logs'
 New-Item -ItemType Directory -Path $logDir -Force -ErrorAction Stop | Out-Null
 $logFile = Join-Path $logDir ((Get-Date -Format 'yyyy-MM-dd') + '.log')
 
-& .\gradlew.bat :core:installDist -q 2>&1 | ForEach-Object {
+& .\gradlew.bat -PwithoutApp :core:installDist -q 2>&1 | ForEach-Object {
     [IO.File]::AppendAllText($logFile, "$_`n", $utf8)
 }
 $status = $LASTEXITCODE

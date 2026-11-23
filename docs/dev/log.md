@@ -151,3 +151,9 @@
 - 리뷰 5회: Claude 3회차부터 통과. 5회차 OpenAI 중간 2 → **Claude 직접 수정**: 재게시 때 이번 실행이 바꾸지 않은 파일은 원격 최신본 유지(pull 스냅샷에 해시 기록), 따옴표 로컬부 이메일 마스킹, 회귀 테스트 2개. 게시용 gradle 제한 2→5분(Claude 낮음). 테스트 364개.
 - 남은 것(사용자): GitHub Secrets 등록·Actions 활성화·첫 수동 실행(`scripts/actions-setup.md`). 실제 workflow는 아직 한 번도 돌지 않음.
 - 이관(낮음): 일일 메일 결과 게시 시간 초과 사유가 issue 기록에 연결 안 됨, rebase 도중 강제 종료 경로 전용 테스트 없음, 게시 중 원격 inbox 추가 git 회귀 테스트는 훅 경로만.
+## P15 4단계: 앱 기반 (보기·조작 앱)
+- 사용자 결정(2026-11-23): 수집·LLM·메일은 Actions, 앱은 data 브랜치를 읽고 inbox로 조작. 지시 `P15-app-foundation.md`, 개발 Codex. 검증은 에뮬레이터 Pixel_9(API 37)·자동 테스트, 실제 폰 설치는 화면 완성 후.
+- 구성: `app` 모듈(`app.ideacollector`, minSdk 26·target 37, AGP 9.1.1, Gradle 9.3.1, Kotlin 2.3.10, Compose, Room v2+FTS4, WorkManager, DataStore). GitHub Contents REST 동기화(data 커밋 sha 하나로 고정, manifest sha256·크기 검증, 파일 5MB·1회 50MB, 초과 시 PARTIAL 이어받기, 깨진 파일 격리·이전 정상본 유지), inbox 보내기 대기열(NEEDS_AUTH·한도·FAILED 구분, 저장소별 묶기, 시작 시 재예약), 분석 dispatch(DISPATCHING 선기록, 재전송 전 `Analyze <requestId>` 실행 조회), Keystore AES-256-GCM 토큰(재등록 시 키·DataStore 재생성), 최소 하단 탭 4개. core의 LLM·메일 SDK는 앱 APK에서 제외(디버그 12MB·릴리스 R8 1.7MB).
+- PC·Actions core 빌드는 `-PwithoutApp`(또는 SDK 없음)이면 앱 미구성, junit launcher·wrapper sha256 명시.
+- 리뷰 5회: Claude 3회차부터 통과. 4회차 OpenAI 중간(dispatch 4xx 거절 후 재전송 안 됨)·5회차 높음(같은 경로 범위)·중간(상위 스키마 결과가 대기열 정지)은 **Claude 직접 수정**: dispatch POST 자체가 4xx로 거절될 때만 dispatchedAt 초기화, 상위 스키마 결과는 그 요청만 APP_UPDATE_REQUIRED로 빼고 계속, 회귀 테스트 2개. 테스트: core 364·앱 단위 22·에뮬레이터 계측 4, debug·release 빌드 통과.
+- 이관(낮음): 디버그 화면에 PARTIAL·파일별 issue 표시 없음, 깨진 파일은 커밋이 바뀔 때마다 최대 3회 재다운로드, 429 거절 dispatch의 Retry-After 경로 전용 테스트 없음.

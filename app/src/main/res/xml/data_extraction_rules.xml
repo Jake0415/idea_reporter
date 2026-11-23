@@ -1,0 +1,6 @@
+<data-extraction-rules>
+    <device-transfer>
+        <exclude domain="file" path="datastore/secrets.preferences_pb" />
+        <exclude domain="database" path="." />
+    </device-transfer>
+</data-extraction-rules>

@@ -44,7 +44,7 @@ collector_run() {
     if [[ -n ${COLLECTOR_PUBLICATION_JAVA:-} ]]; then
         timeout --kill-after=5s 2m "$COLLECTOR_PUBLICATION_JAVA" -cp "$COLLECTOR_PUBLICATION_CLASSPATH" collector.dev.MainKt "$@"
     else
-        timeout --kill-after=5s 5m bash gradlew :core:run --args="$*"
+        timeout --kill-after=5s 5m bash gradlew -PwithoutApp :core:run --args="$*"
     fi
 }
 
@@ -122,19 +122,19 @@ case "${1:-publish-state}" in
         mask_secrets
         chmod +x scripts/actions-data.sh
         export COLLECTOR_STATE_HOOK="$PWD/scripts/actions-data.sh"
-        timeout --kill-after=5s 150m bash gradlew :core:run --args="--scheduled --no-mail"
+        timeout --kill-after=5s 150m bash gradlew -PwithoutApp :core:run --args="--scheduled --no-mail"
         ;;
     mail)
         mask_secrets
-        timeout --kill-after=5s 150m bash gradlew :core:run --args="--mail-scheduled --publish"
+        timeout --kill-after=5s 150m bash gradlew -PwithoutApp :core:run --args="--mail-scheduled --publish"
         ;;
     analyze)
         mask_secrets
-        timeout --kill-after=5s 150m bash gradlew :core:run --args=--data-analyze
+        timeout --kill-after=5s 150m bash gradlew -PwithoutApp :core:run --args=--data-analyze
         ;;
     analysis-mail)
         mask_secrets
-        timeout --kill-after=5s 150m bash gradlew :core:run --args=--data-analysis-mail
+        timeout --kill-after=5s 150m bash gradlew -PwithoutApp :core:run --args=--data-analysis-mail
         ;;
     publish|publish-mail|publish-state)
         mode=${1:-publish-state}

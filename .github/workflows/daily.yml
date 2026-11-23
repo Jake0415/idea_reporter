@@ -36,7 +36,7 @@ jobs:
         id: pull
         if: steps.checkout-data.outcome == 'success'
         continue-on-error: true
-        run: bash gradlew :core:run --args="--data-pull ../data"
+        run: bash gradlew -PwithoutApp :core:run --args="--data-pull ../data"
       - name: Record synchronization failure
         if: always() && (steps.checkout-source.outcome == 'failure' || steps.checkout-data.outcome == 'failure' || steps.pull.outcome == 'failure')
         continue-on-error: true
@@ -56,11 +56,11 @@ jobs:
       - name: Apply inbox
         if: steps.pull.outcome == 'success'
         continue-on-error: true
-        run: bash gradlew :core:run --args="--data-inbox ../data"
+        run: bash gradlew -PwithoutApp :core:run --args="--data-inbox ../data"
       - name: Process unpaired analysis requests
         if: steps.pull.outcome == 'success'
         continue-on-error: true
-        run: bash gradlew :core:run --args=--data-analysis-queue
+        run: bash gradlew -PwithoutApp :core:run --args=--data-analysis-queue
       - name: Run scheduled collector
         id: collect
         if: steps.pull.outcome == 'success'

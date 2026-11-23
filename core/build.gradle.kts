@@ -19,6 +19,7 @@ dependencies {
 
     testImplementation(kotlin("test"))
     testImplementation(libs.junit.jupiter)
+    testRuntimeOnly(libs.junit.platform.launcher)
     testImplementation(libs.coroutines.test)
     testImplementation(libs.okhttp.mockwebserver)
     testImplementation("org.yaml:snakeyaml:2.3")
