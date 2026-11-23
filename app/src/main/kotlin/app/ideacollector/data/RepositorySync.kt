@@ -38,7 +38,8 @@ private val daily = Regex("out/[0-9]{4}-[0-9]{2}-[0-9]{2}\\.json")
 private val results = "${DataBranch.OUT}/${DataBranch.RESULTS}/"
 private const val MAX_ARTIFACT_ATTEMPTS = 3
 
-internal data class SyncNews(val cards: Int?, val updates: Int, val analysis: Boolean, val updateRequired: Boolean = false)
+internal data class SyncNews(val cards: Int?, val updates: Int, val analysis: Boolean, val updateRequired: Boolean = false,
+    val trackId: String? = null)
 
 @Serializable
 private data class ArtifactFailure(val sha256: String, val attempts: Int, val reason: String)
@@ -52,6 +53,59 @@ internal class RepositorySync(
     // Opening the app and periodic work can request a sync simultaneously.
     private val syncing = Mutex()
     private val sending = Mutex()
+    private val dailyDispatch = Mutex()
+
+    suspend fun verify(repo: String, token: String) = withContext(Dispatchers.IO) {
+        val head = github.dataHead(repo, token)
+        val response = github.manifest(repo, token, null, head)
+        require(decodeVersioned<DataManifest>(checkNotNull(response.bytes).decodeToString()).schemaVersion == DataBranch.VERSION)
+    }
+
+    suspend fun recordSyncFailure(repo: String, needsAuth: Boolean = false) = syncing.withLock {
+        val prior = dao.state(repo)
+        if (prior?.status != "APP_UPDATE_REQUIRED") {
+            val status = if (needsAuth) "NEEDS_AUTH" else "ERROR"
+            dao.saveState(prior?.copy(status = status) ?: SyncState(repo, "", null, "", status = status))
+        }
+    }
+
+    suspend fun undoFeedback(repo: String, id: String): Boolean = sending.withLock {
+        require(dao.settings()?.repository?.let { it == repo } != false)
+        if (dao.cancelPendingFeedback(repo, id) == 1) return@withLock true
+        val row = dao.request(repo, id) ?: return@withLock false
+        val cardId = row.cardId ?: return@withLock false
+        if (row.reaction != "NOT_INTERESTED" || row.status !in setOf("SENT", "APPLIED", "PENDING", "NEEDS_AUTH"))
+            return@withLock false
+        val cutoff = Instant.parse(row.createdAt)
+        val at = maxOf(clock.instant(), cutoff.plusMillis(1))
+        insertRequest(repo, InboxRequest.FeedbackUndo(DataBranch.VERSION, java.util.UUID.randomUUID().toString(),
+            at.toString(), cardId, row.createdAt))
+        true
+    }
+
+    suspend fun dailyActive(repo: String, token: String): Boolean = dailyDispatch.withLock {
+        withContext(Dispatchers.IO) { reconcileDaily(repo, token) }
+    }
+
+    private suspend fun reconcileDaily(repo: String, token: String): Boolean {
+        val previous = dao.dispatch(repo)
+        val at = previous?.dispatchedAt?.takeIf(String::isNotEmpty)
+        val active = github.dailyActive(repo, token, at, clock.instant())
+        if (active != (previous?.active == true)) dao.saveDispatch(DailyDispatch(repo, at.orEmpty(), active))
+        return active
+    }
+
+    suspend fun dispatchDaily(repo: String, token: String): Boolean = dailyDispatch.withLock {
+        withContext(Dispatchers.IO) {
+            if (reconcileDaily(repo, token)) return@withContext false
+            val ref = github.defaultBranch(repo, token)
+            val dispatchedAt = clock.instant().toString()
+            dao.saveDispatch(DailyDispatch(repo, dispatchedAt, active = true))
+            // Workflow concurrency serializes devices. Daily output is replaced and mail is sent once per day.
+            github.dispatchDaily(repo, token, ref)
+            true
+        }
+    }
 
     suspend fun sync(repo: String, token: String?): SyncNews = syncing.withLock {
         withContext(Dispatchers.IO) {
@@ -158,7 +212,8 @@ internal class RepositorySync(
                             fileFailures = failures.takeIf { it.isNotEmpty() }?.let { contractJson.encodeToString(it) }))
                     }
                 }
-                SyncNews(currentDaily?.cards?.size, currentDaily?.trackingUpdates?.size ?: 0, analysis)
+                SyncNews(currentDaily?.cards?.size, currentDaily?.trackingUpdates?.size ?: 0, analysis,
+                    trackId = currentDaily?.trackingUpdates?.firstOrNull()?.trackedId)
             } finally {
                 staged.forEach { (_, file) -> file.delete() }
             }
@@ -173,12 +228,22 @@ internal class RepositorySync(
         SyncNews(null, 0, false, updateRequired = first)
     }
 
-    suspend fun enqueue(repo: String, request: InboxRequest) = sending.withLock {
+    suspend fun enqueue(repo: String, request: InboxRequest) = enqueue(repo, listOf(request))
+
+    suspend fun enqueue(repo: String, requests: List<InboxRequest>) = sending.withLock {
         require(dao.settings()?.repository?.let { it == repo } != false)
+        database.withTransaction {
+            requests.forEach { insertRequest(repo, it) }
+        }
+    }
+
+    private suspend fun insertRequest(repo: String, request: InboxRequest) {
         val payload = contractJson.encodeToString<InboxRequest>(request)
         val reaction = request as? InboxRequest.Reaction
+        val undo = request as? InboxRequest.FeedbackUndo
         dao.insertRequest(RequestRow(repo, request.requestId, inboxPath(request), payload, request.createdAt,
-            cardId = reaction?.cardId, reaction = reaction?.kind?.name))
+            cardId = reaction?.cardId ?: undo?.cardId,
+            reaction = reaction?.kind?.name ?: undo?.let { "UNDO_NOT_INTERESTED" }))
     }
 
     fun reaction(repo: String, cardId: String) = combine(
@@ -189,7 +254,7 @@ internal class RepositorySync(
             ?.firstOrNull { it.cardId == cardId }
         val remoteAt = remote?.at
         if (latest != null && (latest.status != "APPLIED" || remoteAt == null || remoteAt < Instant.parse(latest.createdAt))) {
-            latest.reaction?.let(Feedback.Kind::valueOf)
+            latest.reaction?.takeUnless { it == "UNDO_NOT_INTERESTED" }?.let(Feedback.Kind::valueOf)
         } else remote?.kind
     }
 
@@ -315,7 +380,11 @@ internal class RepositorySync(
             if (result.status == "running") dao.saveRequest(request.copy(status = "SENT", dispatchedAt = null))
             return
         }
-        dao.complete(repo, result.requestId, if (result.ok) "APPLIED" else "REJECTED", result.reason)
+        dao.complete(repo, result.requestId, when {
+            result.ok -> "APPLIED"
+            result.code == "internal_error" -> "INTERNAL_ERROR"
+            else -> "REJECTED"
+        }, result.reason)
     }
 
     private fun InboxResult.analysisFinished() = status != "running" &&
@@ -330,6 +399,7 @@ internal class RepositorySync(
     private data class Entry(val artifact: Artifact, val run: PipelineResult? = null, val result: InboxResult? = null)
 
     private fun decode(artifact: Artifact): Entry {
+        if (artifact.kind == "prompt") return Entry(artifact)
         val json = artifact.json
         return when (artifact.kind) {
             "daily", "run" -> {
@@ -346,6 +416,10 @@ internal class RepositorySync(
             }
             else -> {
                 when (artifact.kind) {
+                    "settings" -> when (artifact.path) {
+                        "settings/budget.json" -> contractJson.decodeFromString<collector.budget.BudgetSettings>(json)
+                        else -> contractJson.decodeFromString<collector.data.ScheduleSettings>(json)
+                    }
                     "tracking" -> contractJson.decodeFromString<List<TrackedIdea>>(json)
                     "feedback" -> contractJson.decodeFromString<List<Feedback>>(json)
                     "trend" -> contractJson.decodeFromString<TrendReport>(json)
@@ -357,11 +431,17 @@ internal class RepositorySync(
     }
 
     private fun kind(path: String): String? = when {
+        path.removePrefix("config/prompts/").removeSuffix(".md") in collector.prompt.PromptCatalog.entries &&
+            path.startsWith("config/prompts/") && path.endsWith(".md") -> "prompt"
+        path.startsWith("config/prompts/") && path.endsWith(".versions.json") &&
+            path.removePrefix("config/prompts/").removeSuffix(".versions.json") in collector.prompt.PromptCatalog.entries -> "prompt-history"
         !path.endsWith(".json") -> null
         daily.matches(path) -> "daily"
         path == "out/tracked.json" -> "tracking"
         path == "out/feedback.json" -> "feedback"
         path.startsWith("out/runs/") -> "run"
+        path == "settings/budget.json" || path == "settings/schedule.json" -> "settings"
+        path.startsWith("out/batch/public/") -> "batch"
         path.startsWith("out/trend/") && path != "out/trend/themes.json" -> "trend"
         path.startsWith("out/analysis/") -> "analysis"
         path.startsWith("out/cost-ledger/") || path.startsWith("out/cost-ledger-analysis/") -> "cost"

@@ -28,6 +28,7 @@ import java.io.OutputStream
 import java.security.DigestOutputStream
 import java.security.MessageDigest
 import java.time.Instant
+import java.time.format.DateTimeFormatterBuilder
 import java.util.Base64
 import java.util.UUID
 
@@ -42,10 +43,12 @@ internal fun validRepository(repository: String) =
     Regex("[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+").matches(repository) &&
         repository.substringAfter('/') !in setOf(".", "..")
 
+private val inboxTimestamp = DateTimeFormatterBuilder().appendInstant(3).toFormatter()
+
 internal fun inboxPath(request: InboxRequest): String {
     require(request.schemaVersion == DataBranch.VERSION && UUID.fromString(request.requestId).toString() == request.requestId)
     // Match core's Windows-compatible inbox filenames. The JSON timestamp stays in ISO-8601.
-    val timestamp = Instant.parse(request.createdAt).toString().replace(":", "")
+    val timestamp = inboxTimestamp.format(Instant.parse(request.createdAt)).replace(":", "")
     return "${DataBranch.INBOX}/$timestamp-${request.requestId}.json"
 }
 
@@ -143,7 +146,6 @@ internal class GitHubClient(
         val since = Instant.ofEpochSecond(dispatchedAt)
         val url = repository(repo).addPathSegments("actions/workflows/analyze.yml/runs")
             .addQueryParameter("event", "workflow_dispatch")
-            .addQueryParameter("branch", "main")
             .addQueryParameter("created", ">=" + since)
             .addQueryParameter("per_page", "100")
             .build()
@@ -172,13 +174,42 @@ internal class GitHubClient(
     fun dispatchAnalysis(repo: String, id: String, token: String) {
         val url = repository(repo).addPathSegments("actions/workflows/analyze.yml/dispatches").build()
         val body = buildJsonObject {
-            put("ref", "main")
+            put("ref", defaultBranch(repo, token))
             put("inputs", buildJsonObject { put("requestId", id) })
         }
         execute(request(url, token, JSON).post(body.toString().toRequestBody(jsonMedia))) {
             if (it.code != 204) throw it.failure()
         }
     }
+
+    fun dailyActive(repo: String, token: String, dispatchedAt: String?, now: Instant = Instant.now()): Boolean {
+        val url = repository(repo).addPathSegments("actions/workflows/daily.yml/runs")
+            .addQueryParameter("per_page", "20").build()
+        return execute(request(url, token, JSON)) { response ->
+            val runs = contractJson.parseToJsonElement(read(response).decodeToString())
+                .jsonObject.getValue("workflow_runs").jsonArray.map { it.jsonObject }
+            val since = dispatchedAt?.let(Instant::parse)
+            val recentDispatch = since != null && now.isBefore(since.plusSeconds(600)) &&
+                runs.none { it["event"]?.jsonPrimitive?.content == "workflow_dispatch" &&
+                    Instant.parse(it.getValue("created_at").jsonPrimitive.content).epochSecond >= since.epochSecond }
+            recentDispatch || runs.any { it.getValue("status").jsonPrimitive.content != "completed" }
+        }
+    }
+
+    fun dispatchDaily(repo: String, token: String, ref: String = defaultBranch(repo, token)) {
+        val url = repository(repo).addPathSegments("actions/workflows/daily.yml/dispatches").build()
+        val body = buildJsonObject { put("ref", ref) }
+        execute(request(url, token, JSON).post(body.toString().toRequestBody(jsonMedia))) {
+            if (it.code != 204) throw it.failure()
+        }
+    }
+
+    fun defaultBranch(repo: String, token: String): String = runCatching {
+        execute(request(repository(repo).build(), token, JSON)) { response ->
+            contractJson.parseToJsonElement(read(response).decodeToString()).jsonObject
+                .getValue("default_branch").jsonPrimitive.content
+        }.takeIf { it.isNotBlank() && it != "null" }
+    }.getOrNull() ?: "main"
 
     private fun get(repo: String, path: String, token: String?, ref: String = DATA_REF) =
         request(contents(repo, path).newBuilder().addQueryParameter("ref", ref).build(), token, RAW)

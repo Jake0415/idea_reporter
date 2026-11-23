@@ -103,6 +103,18 @@ internal class InboxProcessor(private val out: File, prompts: File, private val 
                 val prior = readJson<List<Feedback>>(file).orEmpty()
                 file.writeAtomically(outputJson.encodeToString(listOf(feedback) + prior.filterNot { it == feedback }))
             }
+            is InboxRequest.FeedbackUndo -> {
+                require(request.cardId.isNotBlank())
+                val cutoff = Instant.parse(request.dismissedAt)
+                require(cutoff <= at)
+                val file = out.resolve("feedback.json")
+                val prior = readJson<List<Feedback>>(file).orEmpty()
+                val remaining = prior.filterNot {
+                    it.cardId == request.cardId && it.kind == Feedback.Kind.NOT_INTERESTED &&
+                        it.at?.let { recorded -> recorded <= cutoff } != false
+                }
+                if (remaining.size != prior.size) file.writeAtomically(outputJson.encodeToString(remaining))
+            }
             is InboxRequest.TrackStart -> {
                 val ideas = trackedStore.load()
                 val existing = ideas.firstOrNull { it.cardId == request.cardId }

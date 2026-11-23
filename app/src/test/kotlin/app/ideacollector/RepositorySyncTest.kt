@@ -182,12 +182,54 @@ class RepositorySyncTest {
         assertEquals(Feedback.Kind.STAR, sync.reaction(repo, first.cardId).first())
     }
 
+    @Test fun lostDailyDispatchResponseBlocksAnotherPostForTenMinutes() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"workflow_runs":[]}"""))
+        server.enqueue(MockResponse().setResponseCode(404))
+        server.enqueue(MockResponse().setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AFTER_REQUEST))
+        assertTrue(runCatching { sync.dispatchDaily(repo, "test-token") }.isFailure)
+        assertEquals(now.toString(), db.dao().dispatch(repo)?.dispatchedAt)
+        assertTrue(db.dao().dispatch(repo)?.active == true)
+        now = now.plusSeconds(599)
+        server.enqueue(MockResponse().setBody("""{"workflow_runs":[]}"""))
+        assertFalse(sync.dispatchDaily(repo, "test-token"))
+        assertEquals(listOf("GET", "GET", "POST", "GET"), List(4) { server.takeRequest().method })
+    }
+
+    @Test fun invalidSettingsAreQuarantinedWithoutDiscardingValidFiles() = runBlocking {
+        val budget = "settings/budget.json"
+        val schedule = "settings/schedule.json"
+        manifest(linkedMapOf(budget to """{"dailyCardUsd":[]}""", schedule to """{"enabled":false}"""))
+        respond("""{"dailyCardUsd":[]}""")
+        respond("""{"enabled":false}""")
+        sync.sync(repo, null)
+        assertEquals(listOf(schedule), db.dao().artifacts(repo).map { it.path })
+        assertTrue(db.dao().state(repo)?.issue.orEmpty().contains(budget))
+    }
+
+    @Test fun undoCancelsUnsentFeedbackAndQueuesUndoAfterDelivery() = runBlocking {
+        sync.enqueue(repo, second)
+        assertTrue(sync.undoFeedback(repo, second.requestId))
+        assertEquals("CANCELLED", db.dao().request(repo, second.requestId)?.status)
+        assertTrue(db.dao().pending(repo).isEmpty())
+
+        val sent = second.copy(requestId = "00000000-0000-0000-0000-000000000003")
+        sync.enqueue(repo, sent)
+        db.dao().uploaded(repo, sent.requestId)
+        db.dao().complete(repo, sent.requestId, "SENT", null)
+        assertTrue(sync.undoFeedback(repo, sent.requestId))
+        val undo = contractJson.decodeFromString<InboxRequest>(db.dao().pending(repo).single().json) as InboxRequest.FeedbackUndo
+        assertEquals(sent.createdAt, undo.dismissedAt)
+        assertEquals(sent.cardId, undo.cardId)
+        assertEquals(null, sync.reaction(repo, sent.cardId).first())
+    }
+
     @Test fun analysisRetryDispatchesWithRequestIdWithoutReuploading() = runBlocking {
         val request = InboxRequest.Analysis(DataBranch.VERSION, first.requestId, time, listOf("theme"),
             collector.data.AnalysisMode.ESTIMATE, 0.0)
         sync.enqueue(repo, request)
         server.enqueue(MockResponse().setResponseCode(404))
         server.enqueue(MockResponse().setResponseCode(201))
+        defaultBranch()
         server.enqueue(MockResponse().setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AFTER_REQUEST))
         assertFalse(sync.send(repo, "test-token"))
         assertEquals("DISPATCHING", db.dao().request(repo, request.requestId)?.status)
@@ -196,12 +238,15 @@ class RepositorySyncTest {
         now = now.plusSeconds(600)
         server.enqueue(MockResponse().setResponseCode(404))
         analysisRun("completed", "failure")
+        defaultBranch()
         server.enqueue(MockResponse().setResponseCode(204))
         assertTrue(sync.send(repo, "test-token"))
-        val requests = List(7) { server.takeRequest() }
-        assertEquals(listOf("GET", "PUT", "POST", "GET", "GET", "GET", "POST"), requests.map { it.method })
+        val requests = List(9) { server.takeRequest() }
+        assertEquals(listOf("GET", "PUT", "GET", "POST", "GET", "GET", "GET", "GET", "POST"), requests.map { it.method })
         assertTrue(requests.last().path!!.endsWith("/actions/workflows/analyze.yml/dispatches"))
-        val inputs = contractJson.parseToJsonElement(requests.last().body.readUtf8()).jsonObject.getValue("inputs").jsonObject
+        val dispatch = contractJson.parseToJsonElement(requests.last().body.readUtf8()).jsonObject
+        assertEquals("trunk", dispatch.getValue("ref").jsonPrimitive.content)
+        val inputs = dispatch.getValue("inputs").jsonObject
         assertEquals(setOf("requestId"), inputs.keys)
         assertEquals(request.requestId, inputs.getValue("requestId").jsonPrimitive.content)
     }
@@ -212,6 +257,7 @@ class RepositorySyncTest {
         sync.enqueue(repo, request)
         server.enqueue(MockResponse().setResponseCode(404))
         server.enqueue(MockResponse().setResponseCode(201))
+        defaultBranch()
         server.enqueue(MockResponse().setResponseCode(401))
         sync.send(repo, "test-token")
         val rejected = db.dao().request(repo, request.requestId)
@@ -220,10 +266,11 @@ class RepositorySyncTest {
         assertEquals(null, rejected?.dispatchedAt)
         db.dao().saveRequest(rejected!!.copy(status = "PENDING", reason = null))
         server.enqueue(MockResponse().setResponseCode(404))
+        defaultBranch()
         server.enqueue(MockResponse().setResponseCode(204))
         assertTrue(sync.send(repo, "test-token"))
-        val methods = List(5) { server.takeRequest().method }
-        assertEquals(listOf("GET", "PUT", "POST", "GET", "POST"), methods)
+        val methods = List(7) { server.takeRequest().method }
+        assertEquals(listOf("GET", "PUT", "GET", "POST", "GET", "GET", "POST"), methods)
     }
 
     @Test fun resultLookupRejectionAfterLostDispatchKeepsDispatchTime() = runBlocking {
@@ -232,6 +279,7 @@ class RepositorySyncTest {
         sync.enqueue(repo, request)
         server.enqueue(MockResponse().setResponseCode(404))
         server.enqueue(MockResponse().setResponseCode(201))
+        defaultBranch()
         server.enqueue(MockResponse().setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AFTER_REQUEST))
         sync.send(repo, "test-token")
         val dispatchedAt = db.dao().request(repo, request.requestId)?.dispatchedAt
@@ -250,26 +298,28 @@ class RepositorySyncTest {
         sync.enqueue(repo, request)
         server.enqueue(MockResponse().setResponseCode(404))
         server.enqueue(MockResponse().setResponseCode(201))
+        defaultBranch()
         server.enqueue(MockResponse().setResponseCode(204))
         assertTrue(sync.send(repo, "test-token"))
         now = now.plusSeconds(1800)
         assertTrue(sync.send(repo, "test-token"))
-        assertEquals(3, server.requestCount)
+        assertEquals(4, server.requestCount)
         server.enqueue(MockResponse().setResponseCode(404))
         analysisRun("in_progress")
         assertTrue(sync.send(repo, "test-token", checkSent = true))
-        assertEquals(5, server.requestCount)
+        assertEquals(6, server.requestCount)
         server.enqueue(MockResponse().setResponseCode(404))
         server.enqueue(MockResponse().setResponseCode(403))
         assertTrue(sync.send(repo, "test-token", checkSent = true))
         assertEquals("분석 요청 상태 확인 필요", db.dao().request(repo, request.requestId)?.reason)
-        assertEquals(7, server.requestCount)
+        assertEquals(8, server.requestCount)
         server.enqueue(MockResponse().setResponseCode(404))
         analysisRun("completed", "cancelled")
+        defaultBranch()
         server.enqueue(MockResponse().setResponseCode(204))
         assertTrue(sync.send(repo, "test-token", checkSent = true))
-        assertEquals(listOf("GET", "PUT", "POST", "GET", "GET", "GET", "GET", "GET", "GET", "POST"),
-            List(10) { server.takeRequest().method })
+        assertEquals(listOf("GET", "PUT", "GET", "POST", "GET", "GET", "GET", "GET", "GET", "GET", "GET", "POST"),
+            List(12) { server.takeRequest().method })
     }
 
     @Test fun cancelledRequestRetriesWhileAnotherRequestIsActive() = runBlocking {
@@ -278,23 +328,27 @@ class RepositorySyncTest {
                 collector.data.AnalysisMode.ESTIMATE, 0.0))
             server.enqueue(MockResponse().setResponseCode(404))
             server.enqueue(MockResponse().setResponseCode(201))
+            defaultBranch()
             server.enqueue(MockResponse().setResponseCode(204))
         }
         assertTrue(sync.send(repo, "test-token"))
-        repeat(6) { server.takeRequest() }
+        repeat(8) { server.takeRequest() }
         now = now.plusSeconds(1800)
         server.enqueue(MockResponse().setResponseCode(404))
         analysisRun("completed", "cancelled", otherActive = true)
+        defaultBranch()
         server.enqueue(MockResponse().setResponseCode(204))
         server.enqueue(MockResponse().setResponseCode(404))
         analysisRun("completed", "cancelled", otherActive = true)
         assertTrue(sync.send(repo, "test-token", checkSent = true))
-        assertEquals(11, server.requestCount)
-        val posts = List(5) { server.takeRequest() }.filter { it.method == "POST" }
+        assertEquals(14, server.requestCount)
+        val posts = List(6) { server.takeRequest() }.filter { it.method == "POST" }
         assertTrue(posts.single().body.readUtf8().contains(first.requestId))
         assertEquals(now.epochSecond, db.dao().request(repo, first.requestId)?.dispatchedAt)
         assertEquals(now.minusSeconds(1800).epochSecond, db.dao().request(repo, second.requestId)?.dispatchedAt)
     }
+
+    private fun defaultBranch() = respond("""{"default_branch":"trunk"}""")
 
     private fun analysisRun(status: String, conclusion: String? = null, otherActive: Boolean = false) {
         val run = kotlinx.serialization.json.buildJsonObject {

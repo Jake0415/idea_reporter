@@ -1,6 +1,8 @@
 package collector.data
 
 import collector.model.Feedback
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
@@ -45,6 +47,10 @@ sealed class InboxRequest {
         override val createdAt: String, val cardId: String, val kind: Feedback.Kind,
         val reason: String, val memo: String? = null) : InboxRequest()
 
+    @Serializable @SerialName("feedback.undo")
+    data class FeedbackUndo(override val schemaVersion: Int, override val requestId: String,
+        override val createdAt: String, val cardId: String, val dismissedAt: String) : InboxRequest()
+
     @Serializable @SerialName("track.start")
     data class TrackStart(override val schemaVersion: Int, override val requestId: String,
         override val createdAt: String, val cardId: String) : InboxRequest()
@@ -65,9 +71,12 @@ sealed class InboxRequest {
     data class PromptReset(override val schemaVersion: Int, override val requestId: String,
         override val createdAt: String, val promptId: String, val baseHash: String) : InboxRequest()
 
+    @OptIn(ExperimentalSerializationApi::class)
     @Serializable @SerialName("settings.set")
     data class SettingsSet(override val schemaVersion: Int, override val requestId: String,
-        override val createdAt: String, val budget: JsonObject? = null, val schedule: ScheduleSettings? = null) : InboxRequest()
+        override val createdAt: String,
+        @EncodeDefault(EncodeDefault.Mode.NEVER) val budget: JsonObject? = null,
+        @EncodeDefault(EncodeDefault.Mode.NEVER) val schedule: ScheduleSettings? = null) : InboxRequest()
 
     @Serializable @SerialName("analysis.request")
     data class Analysis(override val schemaVersion: Int, override val requestId: String,

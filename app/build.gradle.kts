@@ -14,6 +14,8 @@ android {
         applicationId = "app.ideacollector"
         minSdk = 26
         targetSdk = 37
+        versionCode = 1
+        versionName = "0.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildFeatures {
@@ -61,4 +63,7 @@ dependencies {
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.work.testing)
     androidTestImplementation(libs.okhttp.mockwebserver)
+    androidTestImplementation(platform(libs.compose.bom))
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
 }

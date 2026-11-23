@@ -39,10 +39,26 @@ data class SyncState(@PrimaryKey val repository: String, val manifestSha: String
 
 @Entity(tableName = "app_settings")
 data class AppSettings(@PrimaryKey val id: Int = 0, val repository: String = "", val syncHours: Long = 24,
-    val notifications: Boolean = true)
+    val notifications: Boolean = true,
+    @androidx.room.ColumnInfo(defaultValue = "'GITHUB_TOKEN'") val tokenName: String = app.ideacollector.secret.GITHUB_TOKEN)
+
+@Entity(tableName = "daily_dispatch")
+data class DailyDispatch(@PrimaryKey val repository: String, val dispatchedAt: String,
+    @androidx.room.ColumnInfo(defaultValue = "0") val active: Boolean = false)
 
 @Dao
 interface AppDao {
+    @Query("SELECT * FROM daily_dispatch WHERE repository = :repo") suspend fun dispatch(repo: String): DailyDispatch?
+    @Query("SELECT * FROM daily_dispatch WHERE repository = :repo") fun observeDispatch(repo: String): Flow<DailyDispatch?>
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun saveDispatch(dispatch: DailyDispatch)
+    @Query("SELECT * FROM app_settings WHERE id = 0") fun observeSettings(): Flow<AppSettings?>
+    @Query("SELECT * FROM artifacts WHERE repository = :repo") fun observeArtifacts(repo: String): Flow<List<Artifact>>
+    @Query("SELECT * FROM requests WHERE repository = :repo ORDER BY rowid DESC")
+    fun observeRequests(repo: String): Flow<List<RequestRow>>
+    @Query("DELETE FROM requests WHERE repository = '@sample'")
+    suspend fun clearSampleRequests()
+    @Query("UPDATE requests SET status = 'CANCELLED' WHERE repository = :repo AND requestId = :id AND reaction = 'NOT_INTERESTED' AND status IN ('PENDING', 'NEEDS_AUTH') AND uploaded = 0 AND attempts = 0")
+    suspend fun cancelPendingFeedback(repo: String, id: String): Int
     @Query("SELECT * FROM app_settings WHERE id = 0") suspend fun settings(): AppSettings?
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun saveSettings(settings: AppSettings)
     @Query("SELECT * FROM sync_state WHERE repository = :repo") suspend fun state(repo: String): SyncState?
@@ -122,8 +138,21 @@ internal val snapshotSyncMigration = object : androidx.room.migration.Migration(
     }
 }
 
+internal val dailyDispatchMigration = object : androidx.room.migration.Migration(4, 5) {
+    override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS daily_dispatch (repository TEXT NOT NULL PRIMARY KEY, dispatchedAt TEXT NOT NULL)")
+    }
+}
+
+internal val connectionStateMigration = object : androidx.room.migration.Migration(5, 6) {
+    override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN tokenName TEXT NOT NULL DEFAULT 'GITHUB_TOKEN'")
+        db.execSQL("ALTER TABLE daily_dispatch ADD COLUMN active INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
 @Database(entities = [Artifact::class, CardRow::class, CardSearch::class, RequestRow::class,
-    SyncState::class, AppSettings::class], version = 4, exportSchema = true)
+    SyncState::class, AppSettings::class, DailyDispatch::class], version = 6, exportSchema = true)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun dao(): AppDao
 }

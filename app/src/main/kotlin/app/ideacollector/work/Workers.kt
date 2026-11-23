@@ -15,7 +15,7 @@ import androidx.work.workDataOf
 import app.ideacollector.CollectorApp
 import app.ideacollector.github.validRepository
 import app.ideacollector.github.UnsupportedSchema
-import app.ideacollector.secret.GITHUB_TOKEN
+import app.ideacollector.github.GitHubFailure
 import java.io.IOException
 import java.time.Duration
 import java.time.LocalTime
@@ -66,19 +66,21 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         if (!validRepository(settings.repository)) return Result.success()
         app.recoverOutbox()
         return try {
-            val news = app.sync.sync(settings.repository, app.secrets.get(GITHUB_TOKEN))
+            val news = app.sync.sync(settings.repository, app.secrets.get(settings.tokenName))
             if (settings.notifications) app.notifications.publish(news)
             if (inputData.getBoolean("checkSent", true)) {
-                app.sync.send(settings.repository, checkSent = true) { app.secrets.get(GITHUB_TOKEN) }
+                app.sync.send(settings.repository, checkSent = true) { app.secrets.get(app.settings().tokenName) }
             }
             Result.success()
         } catch (_: UnsupportedSchema) {
             val news = app.sync.updateRequired(settings.repository)
             if (settings.notifications) app.notifications.publish(news)
             Result.success()
-        } catch (_: IOException) {
+        } catch (e: IOException) {
+            app.sync.recordSyncFailure(settings.repository, (e as? GitHubFailure)?.status == 401)
             Result.retry()
         } catch (_: IllegalArgumentException) {
+            app.sync.recordSyncFailure(settings.repository)
             Result.retry()
         }
     }
@@ -90,7 +92,7 @@ class OutboxWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         val repo = app.settings().repository
         if (!validRepository(repo)) return Result.success()
         return try {
-            if (app.sync.send(repo) { app.secrets.get(GITHUB_TOKEN) }) Result.success() else Result.retry()
+            if (app.sync.send(repo) { app.secrets.get(app.settings().tokenName) }) Result.success() else Result.retry()
         } catch (_: UnsupportedSchema) {
             val news = app.sync.updateRequired(repo)
             if (app.settings().notifications) app.notifications.publish(news)

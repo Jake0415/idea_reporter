@@ -157,3 +157,7 @@
 - PC·Actions core 빌드는 `-PwithoutApp`(또는 SDK 없음)이면 앱 미구성, junit launcher·wrapper sha256 명시.
 - 리뷰 5회: Claude 3회차부터 통과. 4회차 OpenAI 중간(dispatch 4xx 거절 후 재전송 안 됨)·5회차 높음(같은 경로 범위)·중간(상위 스키마 결과가 대기열 정지)은 **Claude 직접 수정**: dispatch POST 자체가 4xx로 거절될 때만 dispatchedAt 초기화, 상위 스키마 결과는 그 요청만 APP_UPDATE_REQUIRED로 빼고 계속, 회귀 테스트 2개. 테스트: core 364·앱 단위 22·에뮬레이터 계측 4, debug·release 빌드 통과.
 - 이관(낮음): 디버그 화면에 PARTIAL·파일별 issue 표시 없음, 깨진 파일은 커밋이 바뀔 때마다 최대 3회 재다운로드, 429 거절 dispatch의 Retry-After 경로 전용 테스트 없음.
+## P16 5단계: 앱 화면 (화면 틀)
+- 지시 `P16-app-screens.md`, 개발 Codex. Compose 화면 15개(SC-00 마법사·01·02·03·06·07·09·10/10a·11·12·13·14·15·16), A 피드 토큰, 접근성(48dp·200% 글꼴·대비).
+- 1회차 리뷰: 코드(OpenAI 높음 2·중간 6, Claude 높음 2·중간 5)·UX(Design 플러그인, 높음 5·중간 6) + 사용자 결정 A~D(SC-00 단계형 마법사, 연결 전 빈 화면+안내, 지금 실행은 상단 ↻, 개발 화면은 디버그만) → `P16-fix-r1.md` 21항목 반영(화면·입력 보존, 요청 순서, 설정 디코드 크래시, 지금 실행 중복 방지, 비활성 사유, 경고 띠, 근거 줄, 상태 enum, lint K2 우회 제거 등). 테스트 core 365·앱 34·에뮬레이터 15, release lint 통과. 캡처 `out/screens/P16-r1/`.
+- **2026-11-24 폰 실행 전환 결정**으로 inbox·dispatch 흐름은 R2에서 걷어내고 설정 화면은 R3에서 원래 명세로 복원하므로, P16의 2회차 이후 리뷰(코드+UX)는 R3 리뷰에 합쳐 진행한다.

@@ -31,7 +31,6 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import app.ideacollector.data.AppSettings
 import app.ideacollector.github.validRepository
-import app.ideacollector.secret.GITHUB_TOKEN
 import app.ideacollector.secret.SecretStatus
 import collector.data.DataBranch
 import collector.data.InboxRequest
@@ -43,19 +42,19 @@ import java.util.UUID
 
 @Composable
 internal fun DebugEntry(open: (String) -> Unit) {
-    Text("준비 중", Modifier.combinedClickable(onClick = {}, onLongClick = { open(DebugActivity::class.java.name) }))
+    Nav(R.string.debug) { open(DebugActivity::class.java.name) }
 }
 
 class DebugActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        setContent { CollectorTheme { DebugSettings(application as CollectorApp) } }
+        setContent { CollectorTheme { DebugSettings(application as CollectorApp) { finish() } } }
     }
 }
 
 @Composable
-private fun DebugSettings(app: CollectorApp) {
+private fun DebugSettings(app: CollectorApp, done: () -> Unit) {
     val scope = rememberCoroutineScope()
     var settings by remember { mutableStateOf(AppSettings()) }
     var repository by remember { mutableStateOf("") }
@@ -68,7 +67,7 @@ private fun DebugSettings(app: CollectorApp) {
         settings = app.settings()
         repository = settings.repository
         hours = settings.syncHours.toString()
-        secretStatus = app.secrets.status(GITHUB_TOKEN)
+        secretStatus = app.secrets.status(settings.tokenName)
     }
     val state by remember(settings.repository) { app.database.dao().observeState(settings.repository) }.collectAsState(null)
 
@@ -91,7 +90,7 @@ private fun DebugSettings(app: CollectorApp) {
 
     Column(Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("개발자 설정")
+        Primary(R.string.seed, !busy) { action { seedSample(app); done() } }
         OutlinedTextField(repository, { repository = it }, label = { Text("저장소 이름 (owner/repo)") }, singleLine = true)
         OutlinedTextField(token, { token = it }, label = { Text("GitHub 토큰") }, singleLine = true,
             visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password))
@@ -109,9 +108,9 @@ private fun DebugSettings(app: CollectorApp) {
                     val updated = settings.copy(repository = repository.trim(), syncHours = hours.toLong())
                     val cancelled = app.saveSettings(updated)
                     settings = updated
-                    val saved = token.isBlank() || app.secrets.set(GITHUB_TOKEN, token.trim())
+                    val saved = token.isBlank() || app.secrets.set(settings.tokenName, token.trim())
                     token = ""
-                    secretStatus = app.secrets.status(GITHUB_TOKEN)
+                    secretStatus = app.secrets.status(settings.tokenName)
                     message = when {
                         !saved -> "저장 실패"
                         cancelled > 0 -> "이전 저장소 요청 " + cancelled + "건 취소됨"
@@ -121,7 +120,7 @@ private fun DebugSettings(app: CollectorApp) {
             }) { Text("저장") }
         Button(enabled = !busy && secretStatus != SecretStatus.MISSING, onClick = {
             action {
-                app.secrets.clear(GITHUB_TOKEN)
+                app.secrets.clear(settings.tokenName)
                 token = ""
                 secretStatus = SecretStatus.MISSING
             }

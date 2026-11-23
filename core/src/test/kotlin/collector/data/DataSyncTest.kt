@@ -339,6 +339,20 @@ class DataSyncTest {
         assertTrue(result(out, stop).ok)
     }
 
+    @Test fun feedbackUndoPreservesNewerDismissalsAndOtherCards() = withWorkspace { out, branch, prompts ->
+        val old = Feedback("card", Feedback.Kind.NOT_INTERESTED, "old", at = now.minusSeconds(2))
+        val newer = old.copy(reason = "new", at = now.minusSeconds(1))
+        val other = old.copy(cardId = "other")
+        write(out, "feedback.json", outputJson.encodeToString(listOf(newer, old, other)))
+        val sync = DataSync(out, prompts, clock)
+        sync.push(branch)
+        val undo = id()
+        enqueue(branch, InboxRequest.FeedbackUndo(1, undo, now.toString(), "card", old.at.toString()))
+        sync.pull(branch)
+        assertTrue(result(out, undo).ok)
+        assertEquals(listOf(newer, other), outputJson.decodeFromString<List<Feedback>>(out.resolve("feedback.json").readText()))
+    }
+
     @Test fun publicationRedactsFreeTextAndKeepsLocalCopies() = withWorkspace { out, branch, prompts ->
         // Fake values, split so the repository secret scan does not flag the fixture itself.
         val sensitive = "private@example.com " + "sk-" + "ant-example " + "ghp" + "_example Bearer example-value"

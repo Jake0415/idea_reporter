@@ -14,7 +14,7 @@ class FoundationTest {
     @Test fun inboxFileUsesTheRequestIdentity() {
         val request = InboxRequest.Reaction(DataBranch.VERSION, "00000000-0000-0000-0000-000000000001",
             "2026-11-23T07:40:00Z", "card", Feedback.Kind.STAR, "test")
-        assertEquals("inbox/2026-11-23T074000Z-00000000-0000-0000-0000-000000000001.json", inboxPath(request))
+        assertEquals("inbox/2026-11-23T074000.000Z-00000000-0000-0000-0000-000000000001.json", inboxPath(request))
     }
 
     @Test fun firstPeriodicSyncUsesLocalTime() {
