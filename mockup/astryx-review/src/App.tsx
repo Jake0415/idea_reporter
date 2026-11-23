@@ -1,7 +1,6 @@
 import {useMemo, useState} from 'react';
 import type {ReactNode} from 'react';
 import {Theme} from '@astryxdesign/core/theme';
-import {Avatar} from '@astryxdesign/core/Avatar';
 import {Badge} from '@astryxdesign/core/Badge';
 import {Banner} from '@astryxdesign/core/Banner';
 import {BottomSheet} from '@astryxdesign/core/BottomSheet';
@@ -96,6 +95,13 @@ export default function App() {
         <div className="review-bar" style={{justifyContent: 'flex-start'}}>
           {(['light', 'dark'] as const).map(m => <button key={m} className={mode === m ? 'on' : ''} onClick={() => setMode(m)}>{m === 'light' ? '라이트' : '다크'}</button>)}
         </div>
+        {screen === 'SC-01' && <>
+          <div className="review-group">SC-01 추적 상태(검토용)</div>
+          <div className="review-bar" style={{justifyContent: 'flex-start'}}>
+            {([['news', '새 소식 있음'], ['none', '새 소식 없음'], ['empty', '추적 0개']] as const).map(([k, l]) =>
+              <button key={k} className={(params.trackState ?? 'news') === k ? 'on' : ''} onClick={() => setParams(x => ({...x, trackState: k}))}>{l}</button>)}
+          </div>
+        </>}
         {groups.map(g => (
           <div key={g}>
             <div className="review-group">{g}</div>
@@ -320,15 +326,31 @@ function CriteriaForm() {
 }
 
 /* ───────── 오늘 ───────── */
-function TrackRow({ctx}: {ctx: Ctx}) {
+/** 추적 요약(2026-11-23 A안): 요약 줄 + 오늘 새 소식이 있는 추적만 1줄씩. 화살표는 글자 라벨과 함께. */
+const TREND_WORD: Record<'UP' | 'FLAT' | 'DOWN', [string, string]> = {UP: ['↑', '늘어남'], FLAT: ['→', '비슷함'], DOWN: ['↓', '줄어듦']};
+function TrackSummary({ctx}: {ctx: Ctx}) {
+  const state = ctx.params.trackState ?? 'news';
+  const tracked = state === 'empty' ? [] : TRACKED.map(t => (state === 'none' ? {...t, news: 0} : t));
+  if (tracked.length === 0)
+    return <div className="track-empty">★로 아이디어를 추적해 보세요 · 매일 새 소식을 모아 드립니다</div>;
+  const fresh = tracked.filter(t => t.news > 0).sort((a, b) => b.news - a.news);
   return (
-    <div className="story">
-      {[...TRACKED].sort((a, b) => b.news - a.news).map(t => (
-        <div className="story-item" key={t.id} onClick={() => ctx.go('SC-14', {track: t.id})} style={{cursor: 'pointer'}}>
-          <div className={`story-ring ${t.news ? '' : 'seen'}`}><Avatar name={t.short} size="lg" /></div>
-          <span className="story-label">{t.title}</span>
-        </div>
-      ))}
+    <div className="track-box">
+      <button type="button" className="track-head" onClick={() => ctx.jump('SC-13')}>
+        <span>추적 중 <b>{tracked.length}</b> · {fresh.length ? <>오늘 새 소식 <b>{fresh.length}</b></> : '오늘 새 소식 없음'}</span>
+        <span aria-hidden="true">›</span>
+      </button>
+      {fresh.map(t => {
+        const [arrow, word] = TREND_WORD[t.trend];
+        return (
+          <button type="button" key={t.id} className="track-row" onClick={() => ctx.go('SC-14', {track: t.id})}
+            aria-label={`${t.title}, 새 소식 ${t.news}건, 관련 글 ${word}`}>
+            <span className="track-title">{t.title}</span>
+            <span className="track-news">새 소식 {t.news}건</span>
+            <span className={`track-trend ${t.trend.toLowerCase()}`} aria-hidden="true">{arrow} {word}</span>
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -336,11 +358,11 @@ function TrackRow({ctx}: {ctx: Ctx}) {
 function Today({ctx}: {ctx: Ctx}) {
   return (
     <Page>
-      <TrackRow ctx={ctx} />
-      <HStack justify="between" vAlign="center">
-        <VStack gap={0.5}><Text type="label">11월 19일 (수)</Text><Text type="supporting">수집 412 → 후보 18 → 카드 5</Text></VStack>
-        <Text type="supporting">07:03 · $0.14</Text>
-      </HStack>
+      <TrackSummary ctx={ctx} />
+      <VStack gap={0.5}>
+        <HStack justify="between" vAlign="center"><Text type="label">11월 19일 (수)</Text><Text type="supporting">07:03 · $0.14</Text></HStack>
+        <Text type="supporting">단계별 건수 · 수집 412 → 카드 후보 18 → 카드 5</Text>
+      </VStack>
       <ClickableCard label="실행 상세" variant="transparent" padding={0} onClick={() => ctx.go('SC-10a')}>
         <Banner status="warning" title="Reddit 수집 실패" description="나머지 출처로 만들었습니다 · 눌러서 실행 상세" />
       </ClickableCard>

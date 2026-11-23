@@ -88,11 +88,20 @@ body { background: #e5e7eb; font-family: system-ui, "Malgun Gothic", sans-serif;
 .compare-item .review-note { max-width: 390px; }
 .phone { width: 390px; height: 800px; border: 10px solid #111; border-radius: 36px; overflow: hidden; display: flex; flex-direction: column; background: var(--color-background-body); transform: translateZ(0); }
 .phone-body { flex: 1; min-height: 0; overflow: auto; }
-.story { display: flex; gap: 14px; overflow-x: auto; padding: 4px 2px 2px; scrollbar-width: none; }
-.story-item { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 72px; flex: none; min-width: 0; }
-/* 추적 줄 이름: 칸 너비 안에서 최대 2줄, 넘치면 … (겹침 수정) */
-.story-label { width: 100%; text-align: center; font: var(--ic-size-small)/1.3 var(--ic-font); color: var(--ic-text-2);
-  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; word-break: keep-all; overflow-wrap: anywhere; }
-.story-ring { padding: 2px; border-radius: 50%; background: var(--ic-accent); }
-.story-ring.seen { background: var(--ic-border-strong); }
-.story-ring > * { border: 2px solid var(--color-background-body); border-radius: 50%; }
+/* SC-01 추적 요약(A안): 요약 줄 + 새 소식 목록. 각 줄 높이 48 이상 */
+.track-box { border: 1px solid var(--ic-border); border-radius: var(--ic-radius-container); overflow: hidden; }
+.track-head, .track-row { display: flex; align-items: center; gap: var(--ic-space-2); width: 100%; min-height: var(--ic-touch);
+  padding: 0 var(--ic-space-3); border: 0; background: none; cursor: pointer; text-align: left; color: var(--ic-text); font: var(--ic-size-body)/1.4 var(--ic-font); }
+.track-head { justify-content: space-between; font-weight: 600; }
+.track-head b { color: var(--ic-link); }
+.track-head > span:last-child { color: var(--ic-text-3); font-size: 18px; }
+.track-row { border-top: 1px solid var(--ic-border); }
+.track-head:focus-visible, .track-row:focus-visible { outline: 2px solid var(--ic-accent); outline-offset: -2px; }
+.track-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.track-news { flex: none; font-size: var(--ic-size-small); font-weight: 600; color: var(--ic-highlight-text); background: var(--ic-highlight-bg);
+  border-radius: var(--ic-radius-inner); padding: 2px 6px; white-space: nowrap; }
+.track-trend { flex: none; font-size: var(--ic-size-small); color: var(--ic-text-2); white-space: nowrap; }
+.track-trend.up { color: var(--ic-success-text); }
+.track-trend.down { color: var(--ic-error-text); }
+.track-empty { border: 1px dashed var(--ic-border-strong); border-radius: var(--ic-radius-container); padding: var(--ic-space-3);
+  color: var(--ic-text-2); font: var(--ic-size-body)/1.4 var(--ic-font); }
