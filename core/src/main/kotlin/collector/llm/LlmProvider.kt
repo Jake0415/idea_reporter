@@ -8,6 +8,7 @@ enum class ProviderId { ANTHROPIC, OPENAI }
 
 enum class Effort { LOW, MEDIUM, HIGH }
 
+@Serializable
 data class LlmRequest(
     val model: String,
     val system: String,
@@ -18,6 +19,7 @@ data class LlmRequest(
     val effort: Effort = Effort.MEDIUM
 )
 
+@Serializable
 data class LlmResult(
     val json: String,
     val provider: ProviderId,
@@ -55,7 +57,7 @@ internal data class LlmUsage(
 )
 
 internal class LlmServiceException(
-    status: Int? = null,
+    val status: Int? = null,
     val usage: LlmUsage? = null,
     val costUsd: Double = 0.0,
     val model: String? = null,

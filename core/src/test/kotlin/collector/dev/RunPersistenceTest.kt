@@ -6,6 +6,9 @@ import collector.config.SourceConfig
 import collector.config.SourcesFile
 import collector.item
 import collector.llm.*
+import collector.mail.MailDelivery
+import collector.mail.MailKind
+import collector.mail.MailSendResult
 import collector.mail.Mailer
 import collector.model.*
 import collector.pipeline.FullPipeline
@@ -58,6 +61,39 @@ class RunPersistenceTest {
         assertEquals(0, smtpCalls)
         assertEquals(before, out.resolve("$key.txt").readText())
         assertContains(out.resolve("logs/$key.log").readText(), "일일 요약 · 카드 0개")
+    }
+
+    @Test fun scheduledSameDayClassificationPendingStopsAfterSelectAndDefersMail() = kotlinx.coroutines.runBlocking {
+        val clock = Clock.fixed(now, java.time.ZoneId.systemDefault())
+        val key = LocalDate.now(clock).toString()
+        val prior = PipelineResult(emptyList(), emptyList(), RunReport(key, now.minusSeconds(60).toString(),
+            emptyList(), emptyList(), emptyMap(), 0), cards = listOf(card))
+        publishRun(out, FileHistorySearch(out, 30), HtmlRenderer(emptyList()), prior)
+        val before = out.resolve("$key.html").readText()
+        val priorMail = MailDelivery(out, Mailer { throw java.io.IOException("mock") }, clock = clock)
+        assertEquals(MailSendResult.FAILED, priorMail.send(MailKind.DAILY, key))
+        okhttp3.mockwebserver.MockWebServer().use { server ->
+            fun unavailable() = okhttp3.mockwebserver.MockResponse().setResponseCode(503).setBody("{}")
+            AnthropicProvider("mock", server.url("/").toString()).use { provider ->
+                server.enqueue(unavailable().setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AFTER_REQUEST))
+                val initial = LlmRouter(listOf(provider), CostGuard(1.0, ledger = costLedger(out, FileHistorySearch(out, 30))))
+                assertTrue(initial.batch("classify", key, out, config.batch,
+                    listOf(LlmRequest("", "system", "user", JsonObject(emptyMap()), "classify", 128)),
+                    mapOf("classify" to "default")).pending)
+            }
+            server.enqueue(unavailable())
+            var smtpCalls = 0
+            runMain(arrayOf("--scheduled"), out, SourcesFile(emptyList()) to emptyList(),
+                scheduledClock = clock, scheduledMailer = { Mailer { smtpCalls++ } }) {
+                listOf(AnthropicProvider("mock", server.url("/").toString()))
+            }
+            assertEquals(0, smtpCalls)
+            assertEquals(2, server.requestCount)
+            val report = archived().single().report
+            assertContains(report.issues, CLASSIFICATION_BATCH_PENDING)
+            assertEquals("select", report.stages.last().stage)
+            assertEquals(before, out.resolve("$key.html").readText())
+        }
     }
 
     @Test fun replacesAndArchivesSameDayThenKeepsCardsWhenRerunIsEmpty() = runTest {

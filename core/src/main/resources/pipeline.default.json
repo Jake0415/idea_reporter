@@ -5,6 +5,8 @@
     "fallback": true
   },
   "classifyBatchSize": 25,
+  "deadlineMinutes": 130,
+  "batch": { "classify": true, "backfill": true, "generate": false, "pollSeconds": 30, "maxWaitMinutes": 90 },
   "classifyConcurrency": 3,
   "profiles": {
     "tech-signal":   { "threshold": 6.0, "maxCandidates": 8 },
@@ -24,6 +26,6 @@
   "commentsPerItem": 5,
   "feedbackExamples": 10,
   "historyDays": 90,
-  "supplementSearch": { "enabled": false, "maxUses": 3 },
+  "supplementSearch": { "enabled": true, "maxUses": 3, "allowedDomains": [], "blockedDomains": [] },
   "dailyBudgetUsd": 0.5
 }

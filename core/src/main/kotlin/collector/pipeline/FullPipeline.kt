@@ -16,6 +16,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import okhttp3.OkHttpClient
+import java.io.File
 import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
@@ -26,7 +27,8 @@ class FullPipeline(
     router: LlmRouter, private val costs: CostGuard, private val http: OkHttpClient,
     private val history: RunHistory, private val trackedStore: TrackedStore,
     val collectOnly: Boolean = false,
-    private val reddit: RedditAdapter? = null
+    private val reddit: RedditAdapter? = null,
+    private val out: File? = null
 ) {
     private val classifier = Classifier(config, profiles, prompts, router)
     private val selector = Selector(config)
@@ -139,7 +141,8 @@ class FullPipeline(
                 active.filter { it.id !in reused.getValue(item.key).relevance }
             }.filterKeys { it.isNotEmpty() }
             val contexts = comments.contexts(newInputs + pending.values.flatten())
-            val result = classifier.classify(newInputs, recent, active, contexts)
+            val result = classifier.classify(newInputs, recent, active, contexts, date, out)
+            if (result.batchPending) return@stage result
             for (signal in result.signals) {
                 if (signal.item.key !in trackingKeys) continue
                 cache[signal.item.key] = TrackClassification(date, signal.classification.copy(trackedIdeaIds = emptyList()),
@@ -165,10 +168,16 @@ class FullPipeline(
                 if (classification.profile == "none") dropped += DroppedItem(item, DropReason.NOT_RELEVANT, classification.reason)
                 Signal(item, classification, hnContext = contexts[item.key])
             }
-            ClassificationResult(result.signals + cachedSignals, dropped, scoreClampWarnings)
+            result.copy(signals = result.signals + cachedSignals, dropped = dropped, scoreClampWarnings = scoreClampWarnings)
         }
+        issues += classified.issues
         val cardSignals = classified.signals.filter { it.item.key in cardKeys && it.classification.profile != "none" }
         val selected = stage("select", cardSignals.size, { it: SelectionResult -> it.kept.size }) { selector.select(cardSignals) }
+        if (classified.batchPending) {
+            return base.copy(report = base.report.copy(stages = stages, issues = issues.distinct(),
+                llmCalls = costs.drainCalls(), classificationBatchWaitMillis = classified.batchWaitMillis,
+                totalMillis = base.report.totalMillis + (System.nanoTime() - started) / 1_000_000))
+        }
         val enrichedSelection = stage("enrich", selected.kept.size, { it: SelectionResult -> it.kept.size }) {
             val kept = Enricher(http, profiles, comments).enrich(selected.kept, selected.groups)
             val groups = kept.associate { representative ->
@@ -190,9 +199,11 @@ class FullPipeline(
         }.take(config.feedbackExamples).toList()
         val recentCards = priorRuns.filter { it.report.runDate >= today.minusDays(config.recentCardDays.toLong()).toString() }
             .flatMap { it.cards }.map { it.title }
-        suspend fun generate(retryAfterTruncation: Boolean = false) = stage("generate", enriched.size, { it: GeneratedCards -> it.cards.size }) {
-            generator.generate(date, enriched, matches, feedback, recentCards, enrichedSelection.groups, retryAfterTruncation)
-        }
+        suspend fun generate(retryAfterTruncation: Boolean = false, batchAllowed: Boolean = true) =
+            stage("generate", enriched.size, { it: GeneratedCards -> it.cards.size }) {
+                generator.generate(date, enriched, matches, feedback, recentCards, enrichedSelection.groups,
+                    retryAfterTruncation, out, batchAllowed).also { issues += it.issues }
+            }
         var generated = generate()
         val topics = cardSignals.groupBy { it.classification.topicKey }.map { (key, rows) ->
             TopicHistory(key, rows.first().classification.topicLabel, date, rows.map { it.item.key })
@@ -220,7 +231,7 @@ class FullPipeline(
             firstAttemptIssues += validationIssues.map { "1차 시도: $it" }
             validationIssues.clear()
             cardRejections.clear()
-            generated = generate(retryAfterTruncation = generated.failure == TRUNCATED_RESPONSE)
+            generated = generate(retryAfterTruncation = generated.failure == TRUNCATED_RESPONSE, batchAllowed = false)
             cards = validate(generated.cards)
         }
         if (cards.isEmpty()) issues += generated.failure ?: "근거 링크·필수 항목·분류 검증을 통과한 카드가 없습니다."
@@ -282,6 +293,7 @@ class FullPipeline(
             report = base.report.copy(stages = stages, llmCalls = costs.drainCalls(), cardCount = cards.size,
                 trackingUpdateCount = updates.size, dropCounts = dropped.groupingBy { it.reason }.eachCount(),
                 issues = issues.distinct() + firstAttemptIssues + validationIssues,
+                classificationBatchWaitMillis = classified.batchWaitMillis,
                 totalMillis = base.report.totalMillis + (System.nanoTime() - started) / 1_000_000)
         )
     }

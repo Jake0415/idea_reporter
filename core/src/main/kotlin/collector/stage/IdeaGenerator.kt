@@ -1,21 +1,31 @@
 package collector.stage
 
 import collector.config.PipelineConfig
-import collector.llm.LlmRouter
+import collector.llm.*
+import collector.refine.UrlNormalizer
+import kotlinx.coroutines.CancellationException
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import java.io.File
 import collector.model.*
 import collector.prompt.PromptResolver
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.*
 import java.util.UUID
 
 @Serializable data class Category(val id: String, val name: String)
 @Serializable private data class Categories(val categories: List<Category>)
 
-data class GeneratedCards(val cards: List<IdeaCard>, val failure: String? = null)
+data class GeneratedCards(val cards: List<IdeaCard>, val failure: String? = null, val issues: List<String> = emptyList())
 
 class IdeaGenerator(
     private val config: PipelineConfig, private val prompts: PromptResolver, private val router: LlmRouter
 ) {
+    private fun verified(refs: List<SupplementRef>) = refs.filter { it.url.length <= supplementUrlChars }.distinctBy { UrlNormalizer.normalize(it.url) }
+        .take(supplementCount).associate {
+            UrlNormalizer.normalize(it.url) to it.copy(title = it.title.take(supplementTitleChars), note = it.note.take(supplementNoteChars))
+        }
+
     val categories: List<Category> = Json.decodeFromString<Categories>(
         checkNotNull(javaClass.getResource("/categories.json")).readText()
     ).categories
@@ -23,7 +33,7 @@ class IdeaGenerator(
     suspend fun generate(today: String, signals: List<Signal>, history: Map<String, List<HistoryHit>>,
                          feedback: List<String>, recentCards: List<String>,
                          merged: Map<String, List<Signal>> = emptyMap(),
-                         retryAfterTruncation: Boolean = false): GeneratedCards {
+                         retryAfterTruncation: Boolean = false, out: File? = null, batchAllowed: Boolean = true): GeneratedCards {
         val mergedEvidence = signals.associate { (item) ->
             item.key to merged[item.key].orEmpty().filter { it.item.url in item.mergedUrls }
         }
@@ -33,7 +43,10 @@ class IdeaGenerator(
         }
         val ideas = prompts.resolve("ideas")
         val criteria = prompts.resolve("criteria")
-        fun user(compact: Boolean) = buildJsonObject {
+        val issues = mutableListOf<String>()
+        val resumingBatch = batchAllowed && out != null && hasSavedBatch(out, today, "generate")
+        var verifiedRefs = emptyMap<String, SupplementRef>()
+        fun user(compact: Boolean, includeSupplement: Boolean = true) = buildJsonObject {
             put("today", today)
             put("ideaCount", config.ideaCount)
             put("maxCardsPerCategory", config.maxCardsPerCategory)
@@ -73,28 +86,72 @@ class IdeaGenerator(
             put("history", Json.encodeToJsonElement(history))
             put("feedback", Json.encodeToJsonElement(feedback))
             put("recentCards", Json.encodeToJsonElement(recentCards))
+            if (includeSupplement && verifiedRefs.isNotEmpty()) {
+                put("보충 자료", Json.encodeToJsonElement(verifiedRefs.values.toList()))
+                put("보충 자료 지시", "supplementRefs에 보충 자료 URL, 제목, 관련 설명을 최대 3개 넣는다. " +
+                    "해당 자료가 없으면 빈 배열을 쓴다. 쓸 수 있는 기술과 사람들의 요청·불편 또는 이미 나온 제품의 필수 근거는 수집 항목을 인용한다.")
+            }
         }
         val tokens = config.ideaCount * 1400 + 128
-        suspend fun request(compact: Boolean, limit: Int) = structuredCall<Output>(router, "generate", listOf(ideas, criteria),
-            ideas.text, user(compact), outputSchema, limit)
-        val first = request(compact = false, limit = if (retryAfterTruncation) tokens * 3 / 2 else tokens)
+        if (!resumingBatch && config.supplementSearch.enabled && config.supplementSearch.maxUses > 0) {
+            try {
+                val topics = signals.take(config.ideaCount * 2)
+                    .map { it.classification.topicLabel.ifBlank { it.item.title } }.distinct()
+                val standardRequest = LlmRequest("", ideas.text, user(compact = false).toString(), outputSchema(true),
+                    "generate", tokens, Effort.LOW)
+                verifiedRefs = verified(router.supplementSearch(Json.encodeToString(topics), config.supplementSearch, ideas.version,
+                    standardRequest))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: BudgetExceededException) {
+                issues += "예산 부족 · 보충 검색 생략"
+            } catch (_: Exception) {
+                issues += "보충 검색 실패 · 검색 없이 작성"
+            }
+        }
+        suspend fun request(compact: Boolean, limit: Int, useBatch: Boolean = false): Response<Output> {
+            val request = LlmRequest("", ideas.text, user(compact).toString(), outputSchema(verifiedRefs.isNotEmpty()), "generate", limit, Effort.LOW)
+            val batch = if (useBatch && out != null && (config.batch.generate || resumingBatch)) {
+                router.batch("generate", today, out, config.batch, listOf(request),
+                    mapOf(ideas.promptId to ideas.version, criteria.promptId to criteria.version),
+                    GenerationBatchResume(request.copy(user = user(compact, includeSupplement = false).toString(),
+                        jsonSchema = outputSchema(false)), verifiedRefs.values.toList()))
+            } else null
+            issues += batch?.issues.orEmpty()
+            if (batch?.pending == true) return Response.Failed("Batch 결과 대기")
+            if (resumingBatch && batch != null) verifiedRefs = verified(batch.supplementRefs)
+            val current = request.copy(user = user(compact).toString(), jsonSchema = outputSchema(verifiedRefs.isNotEmpty()))
+            return structuredCall(router, "generate", listOf(ideas, criteria), current,
+                initial = batch?.responses?.get(0))
+        }
+        val first = request(compact = false, limit = if (retryAfterTruncation) tokens * 3 / 2 else tokens, useBatch = batchAllowed)
         val response = if (first is Response.Failed && first.reason == "비용 상한") request(compact = true, limit = tokens) else first
         return when (response) {
-            is Response.Ok -> GeneratedCards(response.value.cards.map {
-                it.copy(id = UUID.randomUUID().toString(), runDate = today, badges = emptyList())
-            }, if (response.value.cards.isEmpty()) "작성 모델이 근거 조건을 충족한 아이디어를 찾지 못했습니다." else null)
-            is Response.Failed -> GeneratedCards(emptyList(), response.reason)
+            is Response.Ok -> GeneratedCards(response.value.cards.map { card ->
+                val refs = card.supplementRefs.mapNotNull { ref ->
+                    val url = ref.url.toHttpUrlOrNull() ?: return@mapNotNull null
+                    if (ref.note.isBlank() || url.username.isNotEmpty() || url.password.isNotEmpty()) return@mapNotNull null
+                    verifiedRefs[UrlNormalizer.normalize(ref.url)]?.copy(note = ref.note)
+                }.distinctBy { UrlNormalizer.normalize(it.url) }.take(3)
+                val removed = card.supplementRefs.size - refs.size
+                if (removed > 0) issues += "보충 근거 링크 ${removed}건 제거"
+                card.copy(id = UUID.randomUUID().toString(), runDate = today, badges = emptyList(), supplementRefs = refs)
+            }, if (response.value.cards.isEmpty()) "작성 모델이 근거 조건을 충족한 아이디어를 찾지 못했습니다." else null, issues)
+            is Response.Failed -> GeneratedCards(emptyList(), response.reason, issues)
         }
     }
 
     @Serializable private data class Output(val cards: List<IdeaCard>)
     private val refs = array(schema("itemId" to string, "url" to string, "note" to string))
-    private val outputSchema = schema("cards" to array(schema(
-        "title" to string, "oneLiner" to string, "whyToday" to string, "problem" to string,
-        "techSignals" to refs, "demandSignals" to refs, "competitors" to refs, "history" to strings,
-        "effort" to string, "differentiation" to string, "biggestRisk" to string, "validationPlan" to string,
-        "caveats" to strings, "category" to string, "tags" to strings
-    )))
+    private fun outputSchema(withSearch: Boolean) = schema("cards" to array(schema(*(
+        listOf(
+            "title" to string, "oneLiner" to string, "whyToday" to string, "problem" to string,
+            "techSignals" to refs, "demandSignals" to refs, "competitors" to refs, "history" to strings,
+            "effort" to string, "differentiation" to string, "biggestRisk" to string, "validationPlan" to string,
+            "caveats" to strings, "category" to string, "tags" to strings
+        ) + if (withSearch) listOf("supplementRefs" to array(schema("url" to string, "title" to string, "note" to string)))
+        else emptyList()
+    ).toTypedArray())))
 }
 
 internal data class CitationCheck(

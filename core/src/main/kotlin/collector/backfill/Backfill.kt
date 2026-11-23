@@ -11,6 +11,9 @@ import collector.dev.writeAtomically
 import collector.llm.CostGuard
 import collector.llm.ModelCatalog
 import collector.llm.StageModel
+import collector.llm.batchPath
+import collector.llm.isPendingBatch
+import collector.llm.markBatchConsumed
 import collector.model.DropReason
 import collector.model.Item
 import collector.model.RunReport
@@ -74,10 +77,6 @@ internal class Backfill(
         val configById = configs.associateBy { it.sourceId }
         val githubSearch by lazy { github.historicalSearch(warn = print) }
         val execute = yes && !dryRun
-        if (execute && monthlyBudget?.allows(LocalDate.ofInstant(clock(), ZoneId.systemDefault()), costs.dailyBudgetUsd) == false) {
-            print("과거 채우기 실행 불가 · $MONTHLY_TOTAL_EXCEEDED")
-            return
-        }
         var collected = 0
         var filled = 0
         var filledItems = 0
@@ -100,6 +99,11 @@ internal class Backfill(
                 continue
             }
             val startedAt = clock()
+            if (execute && monthlyBudget?.allows(LocalDate.ofInstant(startedAt, ZoneId.systemDefault()),
+                    (costs.dailyBudgetUsd - totalCost).coerceAtLeast(0.0)) == false) {
+                print("과거 채우기 실행 불가 · $MONTHLY_TOTAL_EXCEEDED")
+                return
+            }
             val successful = cached?.takeUnless { force }?.sources.orEmpty()
                 .filterValues { it.ok && it.complete }.toMutableMap()
             val replacing = cached?.replacing == true || (force && execute && resultFile.isFile)
@@ -159,21 +163,32 @@ internal class Backfill(
             val previousSignals = saved?.classified.orEmpty().associateBy { it.item.key }
             val remaining = items.filter { it.key !in previousSignals }
             val result = if (remaining.isEmpty()) null else checkNotNull(classifier)
-                .classify(remaining, emptyList(), emptyList())
+                .classify(remaining, emptyList(), emptyList(), runDate = day.toString(), out = out, backfill = true)
             val calls = saved?.report?.llmCalls.orEmpty() + costs.drainCalls()
             val signals = previousSignals + result?.signals.orEmpty().associateBy { it.item.key }
             val dropped = filtered.dropped + deduped.dropped + saved?.dropped.orEmpty().filter {
                 it.reason == DropReason.NOT_RELEVANT && it.item.key in previousSignals
             } + result?.dropped.orEmpty()
+            val batch = batchPath(out, day.toString(), "backfill")
+            val batchPending = result?.batchPending == true || isPendingBatch(batch)
             val budgetBlocked = result?.dropped.orEmpty().any { it.reason == DropReason.BUDGET_EXCEEDED }
             val report = RunReport(day.toString(), startedAt.toString(), sourceResults, emptyList(),
                 dropped.groupingBy { it.reason }.eachCount(), Duration.between(startedAt, clock()).toMillis(),
-                llmCalls = calls, issues = if (budgetBlocked) listOf("분류 예산 초과 · 다음 실행에서 이어서 처리") else emptyList())
+                llmCalls = calls, issues = (saved?.report?.issues.orEmpty().filterNot {
+                    it == "분류 예산 초과 · 다음 실행에서 이어서 처리"
+                } + result?.issues.orEmpty()).distinct() +
+                    if (budgetBlocked) listOf("분류 예산 초과 · 다음 실행에서 이어서 처리") else emptyList(),
+                classificationBatchWaitMillis = result?.batchWaitMillis ?: 0)
             totalCost += report.costUsd
+            result?.issues.orEmpty().forEach { print("$day · $it") }
             print("$day · ${items.size}건 · ${usd(report.costUsd)}" +
-                if (budgetBlocked) " · 미완료 · 분류 예산 초과" else "")
+                when {
+                    budgetBlocked -> " · 미완료 · 분류 예산 초과"
+                    batchPending -> " · 미완료 · Batch 결과 대기"
+                    else -> ""
+                })
             val classified = PipelineResult(items, dropped, report, items.mapNotNull { signals[it.key] })
-            if (budgetBlocked) {
+            if (budgetBlocked || batchPending) {
                 unfinished++
                 checkpoint.writeAtomically(outputJson.encodeToString(classified))
                 break
@@ -185,6 +200,7 @@ internal class Backfill(
                 outputJson.encodeToJsonElement(classified)
             }
             resultFile.writeAtomically(outputJson.encodeToString(resultJson))
+            markBatchConsumed(batch)
             Files.deleteIfExists(checkpoint.toPath())
             if (replacing) writeCache(cache, outputJson.encodeToString(collection.copy(replacing = false)))
             filled++

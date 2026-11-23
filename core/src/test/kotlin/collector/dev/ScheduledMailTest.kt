@@ -137,6 +137,49 @@ class ScheduledMailTest {
         assertTrue(sent.isEmpty())
     }
 
+    @Test fun `classification defers only daily mail for the corresponding dates`() = runTest {
+        val clock = Clock.fixed(Instant.parse("2026-11-21T22:00:00Z"), zone)
+        val today = "2026-11-22"
+        val yesterday = "2026-11-21"
+        val other = "2026-11-20"
+        val analysis = "20261120-120433420-d4475d94"
+        val failed = collector.mail.MailDelivery(out, Mailer { error("mock") }, clock = clock)
+        for (day in listOf(today, yesterday, other)) {
+            report("", day, day)
+            assertEquals(collector.mail.MailSendResult.FAILED, failed.send(collector.mail.MailKind.DAILY, day))
+        }
+        report("analysis", analysis, "analysis")
+        assertEquals(collector.mail.MailSendResult.FAILED, failed.send(collector.mail.MailKind.ANALYSIS, analysis))
+        collector.llm.batchPath(out, yesterday, "classify").writeAtomically("{}")
+        collector.llm.batchPath(out, today, "classify").writeAtomically("{}")
+        val sent = mutableListOf<String>()
+        assertEquals(0, runScheduled(out, secrets, clock, daily = { _, _ ->
+            collector.llm.batchPath(out, today, "classify").writeAtomically("{}")
+            true
+        }, trend = { report("trend", today, "trend") }, mailer = Mailer { sent += it.subject }))
+        assertEquals(setOf(other, "analysis", "trend"), sent.toSet())
+        assertEquals(3, sent.size)
+    }
+
+    @Test fun `deadline issue is recorded after sending mail`() = runTest {
+        val start = Instant.parse("2026-11-19T22:00:00Z")
+        val clock = Clock.fixed(start, zone)
+        var now = start
+        val deadlineClock = object : Clock() {
+            override fun getZone(): ZoneId = clock.zone
+            override fun withZone(zone: ZoneId) = Clock.fixed(now, zone)
+            override fun instant() = now
+        }
+        val key = "2026-11-20"
+        val status = runScheduled(out, secrets, clock, daily = { _, _ ->
+            report("", key, "daily")
+            out.resolve("$key.json").writeText("""{"report":{"issues":[]}}""")
+            true
+        }, mailer = Mailer { now = start.plusSeconds(61) }, deadlineMinutes = 1, deadlineClock = deadlineClock)
+        assertEquals(0, status)
+        assertContains(out.resolve("$key.json").readText(), "daily mail delivery exceeded the execution deadline")
+    }
+
     @Test fun `accepted message whose journal update fails gives exit code one and is not resent`() = runTest {
         val clock = Clock.fixed(Instant.parse("2026-11-19T22:00:00Z"), zone)
         val journal = out.resolve("mail/sent.json")

@@ -26,10 +26,12 @@ class HtmlRenderer(categories: List<Category>, private val appLinks: Boolean = f
         val funnel = report.stages.joinToString(" → ") { "${stageName(it.stage)} ${it.output}" }
         val failures = report.failedSources.joinToString(", ") { "${it.source} (${it.error})" }
         val costs = "오늘 비용 ${usd(todayCost)} · 이번 달 합계 ${usd(monthCost)} · 실행 시간 ${report.totalMillis}ms"
+        val batchWait = (report.classificationBatchWaitMillis / 60_000).takeIf { it > 0 }?.let { "분류 Batch 대기 ${it}분" }
         val titles = result.tracked.associate { it.id to it.title }
         val text = buildString {
             appendLine(subject)
             appendLine("단계별 건수 · $funnel")
+            batchWait?.let { appendLine(it) }
             if (failures.isNotEmpty()) appendLine("실패 출처 · $failures · 나머지 출처로 만들었습니다")
             report.issues.forEach { appendLine(it) }
             appendLine("\n목차")
@@ -41,6 +43,10 @@ class HtmlRenderer(categories: List<Category>, private val appLinks: Boolean = f
                 appendLine(card.oneLiner)
                 appendLine("오늘 고른 이유 · ${card.whyToday}")
                 evidence(card.techSignals, card.demandSignals + card.competitors).forEach { appendLine("- ${evidenceNote(it)} · ${it.url}") }
+                if (card.supplementRefs.isNotEmpty()) {
+                    appendLine("보충 자료(웹 검색)")
+                    card.supplementRefs.forEach { appendLine("- ${it.title} · ${it.note} · ${it.url}") }
+                }
                 appendLine("가장 큰 위험 · ${card.biggestRisk}")
                 if (appLinks) appendLine("앱에서 보기 · ideacollector://card/${card.id}")
             }
@@ -56,6 +62,7 @@ class HtmlRenderer(categories: List<Category>, private val appLinks: Boolean = f
             appendLine("<h1 style=\"${T.h1}\">AI 아이디어 · ${date.monthValue}월 ${date.dayOfMonth}일</h1>")
             appendLine("<p style=\"${T.meta}\">카드 ${result.cards.size}개 · 단계별 건수 · ${escape(funnel)}</p>")
             if (failures.isNotEmpty()) appendLine(T.banner("실패 출처 · ${escape(failures)} · 나머지 출처로 만들었습니다", T.Tone.WARNING))
+            batchWait?.let { appendLine("<p style=\"${T.meta}\">$it</p>") }
             report.issues.forEach { appendLine(T.banner(escape(it), T.Tone.INFO)) }
             appendLine("<h2 style=\"${T.h2}\">목차</h2><ol style=\"margin:0 0 8px;padding-left:20px\">")
             result.cards.forEach { card ->
@@ -75,7 +82,19 @@ class HtmlRenderer(categories: List<Category>, private val appLinks: Boolean = f
                         append(if (url == null) "<li>${escape(evidenceNote(it))}</li>" else
                             "<li><a href=\"${escape(url.toString())}\" style=\"${T.link}\">${escape(evidenceNote(it))}</a></li>")
                     }
-                    append("</ul><p style=\"margin:0\"><strong style=\"${T.strong}\">가장 큰 위험</strong> · ${escape(card.biggestRisk)}</p>")
+                    append("</ul>")
+                    if (card.supplementRefs.isNotEmpty()) {
+                        append("<p style=\"${T.meta}\"><strong>보충 자료(웹 검색)</strong></p>")
+                        append("<ul style=\"margin:0 0 8px;padding-left:20px\">")
+                        card.supplementRefs.forEach {
+                            val url = it.url.toHttpUrlOrNull()
+                            val label = escape("${it.title} · ${it.note}")
+                            append(if (url == null) "<li>$label</li>" else
+                                "<li><a href=\"${escape(url.toString())}\" style=\"${T.link}\">$label</a></li>")
+                        }
+                        append("</ul>")
+                    }
+                    append("<p style=\"margin:0\"><strong style=\"${T.strong}\">가장 큰 위험</strong> · ${escape(card.biggestRisk)}</p>")
                     if (appLinks) append("<p style=\"margin:8px 0 0;font-size:12px\"><a href=\"ideacollector://card/${escape(card.id)}\" style=\"${T.link}\">앱에서 보기</a></p>")
                 }
                 appendLine(T.card(inner, id = escape(card.id)))

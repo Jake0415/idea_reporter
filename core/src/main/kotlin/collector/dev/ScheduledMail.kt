@@ -1,6 +1,9 @@
 package collector.dev
 
 import collector.analysis.AnalysisReports
+import collector.llm.CLASSIFICATION_BATCH_PENDING
+import collector.llm.batchPath
+import collector.llm.isPendingBatch
 import collector.mail.MailDelivery
 import collector.mail.MailKind
 import collector.mail.MailSendResult
@@ -46,6 +49,10 @@ internal fun runMailCommand(args: Array<String>, out: File, secrets: SecretProvi
         }
         else -> LocalDate.now().toString()
     }
+    if (kind == MailKind.DAILY && isPendingBatch(batchPath(out, reportKey, "classify"))) {
+        println(CLASSIFICATION_BATCH_PENDING)
+        return
+    }
     val delivery = mailDelivery(out, secrets)
     if (delivery.send(kind, reportKey, resend) == MailSendResult.RECORD_FAILED) throw MailRecordFailure()
 }
@@ -86,9 +93,11 @@ internal suspend fun runScheduled(
     clock: Clock,
     daily: suspend (Instant, (String) -> Unit) -> Boolean,
     trend: (LocalDate) -> Unit = { publishTrend(out, it) },
-    mailer: Mailer? = SmtpMailer.from(secrets)
+    mailer: Mailer? = SmtpMailer.from(secrets),
+    startedAt: Instant = clock.instant(),
+    deadlineMinutes: Int = collector.config.PipelineConfig.defaults.deadlineMinutes,
+    deadlineClock: Clock = clock
 ): Int {
-    val startedAt = clock.instant()
     val day = LocalDate.ofInstant(startedAt, clock.zone)
     val key = day.toString()
     val sunday = day.dayOfWeek == DayOfWeek.SUNDAY
@@ -112,6 +121,13 @@ internal suspend fun runScheduled(
                 issues += message
                 log(message)
             }
+            fun checkDeadline(stage: String) {
+                if (deadlineClock.instant() >= startedAt.plusSeconds(deadlineMinutes * 60L)) {
+                    val message = "$stage exceeded the execution deadline"
+                    issue(message)
+                    recordMailIssue(out, MailKind.DAILY, key, message, ::log)
+                }
+            }
             suspend fun stage(
                 name: String,
                 completion: () -> String = { "완료" },
@@ -134,9 +150,12 @@ internal suspend fun runScheduled(
                     issue("보관 기간이 지난 로그 삭제 실패")
                 }
             }
+            val classifyPath = batchPath(out, key, "classify")
             var dailyPublished = false
             val dailyOk = stage("일일 파이프라인") { dailyPublished = daily(startedAt, ::log) }
             val trendPublished = sunday && stage("트렌드") { trend(day) }
+            if (sunday) checkDeadline("Trend publication")
+            val classificationPending = isPendingBatch(classifyPath)
             val mail = MailDelivery(out, mailer, (mailer as? SmtpMailer)?.recipientCount ?: 0, clock, print = { message ->
                 log(message)
                 if (message == UNKNOWN_DELIVERY_NOTICE || message == "발송은 됐으나 기록 실패") println(message)
@@ -149,7 +168,9 @@ internal suspend fun runScheduled(
             var missingRetryReport = false
             stage("메일 재시도", completion = { if (missingRetryReport) "보고서 없음" else "완료" }) {
                 var retryFailed = false
-                retried = mail.retry { kind, id, result ->
+                retried = mail.retry(eligible = { kind, id ->
+                    kind != MailKind.DAILY || (if (id == key) !classificationPending else !isPendingBatch(batchPath(out, id, "classify")))
+                }) { kind, id, result ->
                     when (result) {
                         MailSendResult.MISSING_REPORT -> missingRetryReport = true
                         MailSendResult.FAILED, MailSendResult.UNKNOWN, MailSendResult.RECORD_FAILED -> {
@@ -162,10 +183,12 @@ internal suspend fun runScheduled(
                 }
                 if (retryFailed) throw MailStageFailure()
             }
+            checkDeadline("Mail retry")
+            if (classificationPending) log(CLASSIFICATION_BATCH_PENDING)
             if (mailer == null) log("메일 설정 없음")
             else {
                 for (kind in listOf(MailKind.DAILY, MailKind.TREND)) {
-                    val published = if (kind == MailKind.DAILY) dailyPublished else trendPublished
+                    val published = if (kind == MailKind.DAILY) dailyPublished && !classificationPending else trendPublished
                     if (!published || (kind to key) in retried) continue
                     stage("${kind.label} 메일 처리") {
                         when (mail.send(kind, key)) {
@@ -177,6 +200,7 @@ internal suspend fun runScheduled(
                             else -> throw MailStageFailure()
                         }
                     }
+                    checkDeadline("${kind.label} mail delivery")
                 }
             }
             if (issues.isNotEmpty()) {

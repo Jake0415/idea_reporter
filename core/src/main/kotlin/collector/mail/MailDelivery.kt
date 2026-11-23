@@ -145,7 +145,8 @@ internal class MailDelivery(
         false
     }
 
-    fun retry(onResult: (MailKind?, String?, MailSendResult) -> Unit = { _, _, _ -> }): Set<Pair<MailKind, String>> {
+    fun retry(eligible: (MailKind, String) -> Boolean = { _, _ -> true },
+              onResult: (MailKind?, String?, MailSendResult) -> Unit = { _, _, _ -> }): Set<Pair<MailKind, String>> {
         val targets = try {
             val history = attempts()
             if (mailer == null) return emptySet()
@@ -157,7 +158,7 @@ internal class MailDelivery(
                 if (date !in today.minusDays(3)..today) return@mapNotNull null
                 val kind = MailKind.entries.first { it.label == firstFailure.kind }
                 kind.validateKey(firstFailure.key)
-                kind to firstFailure.key
+                if (eligible(kind, firstFailure.key)) kind to firstFailure.key else null
             }.toSet()
         } catch (_: Exception) {
             issue(null, null, "메일 재시도 기록 읽기 또는 복구 실패")

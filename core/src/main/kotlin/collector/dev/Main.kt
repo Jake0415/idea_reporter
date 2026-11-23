@@ -53,9 +53,10 @@ import java.util.Locale
 import kotlin.system.exitProcess
 
 fun main(args: Array<String>) {
+    val startedAt = Instant.now()
     System.setOut(PrintStream(FileOutputStream(FileDescriptor.out), true, "UTF-8"))
     try {
-        runBlocking { runMain(args) }
+        runBlocking { runMain(args, processStartedAt = startedAt) }
     } catch (e: Exception) {
         println("실행 실패 · ${safeFailure(e)}")
         when (e) {
@@ -78,6 +79,7 @@ internal suspend fun runMain(
     dailySources: Pair<SourcesFile, List<SourceAdapter>>? = null,
     scheduledClock: Clock = Clock.systemDefaultZone(),
     scheduledMailer: (() -> Mailer?)? = null,
+    processStartedAt: Instant? = null,
     dailyProviders: (() -> List<LlmProvider>)? = null
 ) {
     when (args.firstOrNull()) {
@@ -130,13 +132,16 @@ internal suspend fun runMain(
                 var result: PipelineResult? = null
                 try {
                     runDaily(emptyArray(), out, secrets, dailySources, dailyProviders, startedAt,
-                        print = {}, summary = { result = it })
+                        print = {}, summary = { result = it }, deadlineClock = if (processStartedAt == null) scheduledClock else Clock.systemUTC())
                 } finally {
                     log("일일 요약 · 카드 ${result?.cards?.size ?: 0}개 · " +
                         String.format(Locale.ROOT, "추정 USD %.6f", result?.report?.costUsd ?: 0.0) +
                         " · 실패 출처 ${result?.report?.failedSources?.size ?: 0}개")
                 }
-            }, mailer = if (scheduledMailer == null) SmtpMailer.from(secrets) else scheduledMailer())
+            }, mailer = if (scheduledMailer == null) SmtpMailer.from(secrets) else scheduledMailer(),
+                startedAt = processStartedAt ?: scheduledClock.instant(),
+                deadlineMinutes = PipelineConfig.load().deadlineMinutes,
+                deadlineClock = if (processStartedAt == null) scheduledClock else Clock.systemUTC())
             if (status != 0) throw ScheduledDailyFailure()
             return
         }
@@ -165,11 +170,11 @@ internal suspend fun runMain(
         return
     }
     if (args.firstOrNull() == "--backfill") {
-        runBackfill(args, secrets, defaults, out)
+        runBackfill(args, secrets, PipelineConfig.load(), out, processStartedAt ?: Instant.now())
         return
     }
     out.mkdirs()
-    withRunLock(out) { runDaily(args, out, secrets, dailySources, dailyProviders) }
+    withRunLock(out) { runDaily(args, out, secrets, dailySources, dailyProviders, processStartedAt ?: Instant.now()) }
 }
 
 private suspend fun runDaily(
@@ -180,9 +185,10 @@ private suspend fun runDaily(
     dailyProviders: (() -> List<LlmProvider>)?,
     runStartedAt: Instant? = null,
     print: (String) -> Unit = ::println,
-    summary: (PipelineResult) -> Unit = {}
+    summary: (PipelineResult) -> Unit = {},
+    deadlineClock: Clock = Clock.systemUTC()
 ): Boolean {
-    val defaults = PipelineConfig.defaults
+    val defaults = PipelineConfig.load()
     var budgetOverride: Double? = null
     var keepUnseen = false
     var noLlm = false
@@ -215,12 +221,28 @@ private suspend fun runDaily(
     val ledger = if (noLlm) null else costLedger(out, history)
     val startedAt = runStartedAt ?: Instant.now()
     val today = LocalDate.ofInstant(startedAt, java.time.ZoneId.systemDefault())
-    val skipReason = if (noLlm) null else monthlyBudget.dailySkipReason(today, config.dailyBudgetUsd)
+    val runClockStart = Instant.now()
+    val generationCheckpoint = batchPath(out, today.toString(), "generate")
+    val pendingBatches = out.resolve("batch").listFiles().orEmpty().any {
+        it.isFile && it.extension == "json" && it.name != "index.json"
+    } || out.resolve("batch/quarantine").listFiles().orEmpty().any { it.name.endsWith(".unsettled.json") }
+    val resumingBatch = hasSavedBatch(out, today.toString(), "classify") || hasSavedBatch(out, today.toString(), "generate")
+    fun budgetSkipReason(): String? {
+        if (noLlm || resumingBatch) return null
+        return try {
+            monthlyBudget.dailySkipReason(today, config.dailyBudgetUsd)
+        } catch (_: IllegalArgumentException) {
+            "Cost ledger could not be read"
+        } catch (_: java.io.IOException) {
+            "Cost ledger could not be read"
+        }
+    }
+    val initialSkip = if (pendingBatches) null else budgetSkipReason()
     val costs = CostGuard(config.dailyBudgetUsd, ledger = ledger, allowsReservation = monthlyBudget::allows)
     val http = Http.client()
     val providers = mutableListOf<LlmProvider>()
     try {
-        if (!noLlm && skipReason == null) {
+        if (!noLlm && (initialSkip == null || pendingBatches)) {
             if (dailyProviders != null) {
                 providers += dailyProviders()
             } else {
@@ -232,24 +254,42 @@ private suspend fun runDaily(
             mapOf("classify" to defaults.models.classify, "generate" to defaults.models.generate, "track" to defaults.models.classify)
         } else emptyMap()
         val router = LlmRouter(providers, costs, models, defaults.models.fallback, preflightBudget = true)
+        router.startRun(startedAt, config.deadlineMinutes, deadlineClock.instant())
+        val recoveryIssues = if (noLlm) emptyList() else router.recoverBatches(out, config.batch, config.recentTopicDays) {
+            it.name == "$today-classify.json" || it.name == "$today-generate.json"
+        }
+        val skipReason = budgetSkipReason()
         val tracked = JsonFileTrackedStore(out.resolve("tracked.json"))
         val seen = JsonFileSeenStore(out.resolve("seen.json"))
         val reddit = RedditAdapter(http, secrets)
         val full = FullPipeline(config, profiles, prompts, router, costs, http, history, tracked,
-            collectOnly = noLlm, reddit = reddit)
+            collectOnly = noLlm, reddit = reddit, out = out)
         val adapters = dailySources?.second ?: listOf(HackerNewsAdapter(http), GitHubAdapter(http, secrets), HuggingFaceAdapter(http),
             GitHubIssuesAdapter(http, secrets), reddit, ProductHuntAdapter(http, secrets), RssAdapter(http))
         val pipeline = Pipeline(adapters, seen, clock = { startedAt },
             onStage = { print("· 단계 \u00b7 ${HtmlRenderer.stageName(it)}") }, full = full,
             paidStageSkipReason = skipReason)
-        val result = try {
-            pipeline.run(sources)
+        var result = try {
+            val finished = kotlinx.coroutines.withTimeoutOrNull(router.remainingMillis()) { pipeline.run(sources) }
+            if (finished == null) {
+                val report = RunReport(today.toString(), startedAt.toString(), emptyList(), emptyList(), emptyMap(),
+                    java.time.Duration.between(runClockStart, Instant.now()).toMillis(), llmCalls = costs.drainCalls(),
+                    issues = recoveryIssues + "실행 마감")
+                val expired = PipelineResult(emptyList(), emptyList(), report)
+                summary(expired)
+                archiveFile(out, report).writeAtomically(outputJson.encodeToString(expired))
+                print("실행 마감 · 다음 실행에서 이어서")
+                return false
+            }
+            finished.copy(report = finished.report.copy(
+                issues = (recoveryIssues + finished.report.issues).distinct(),
+                llmCalls = finished.report.llmCalls + costs.drainCalls()))
         } catch (e: Exception) {
             if (!noLlm) {
                 val day = LocalDate.ofInstant(startedAt, java.time.ZoneId.systemDefault())
                 val report = RunReport(day.toString(), startedAt.toString(), emptyList(), emptyList(),
                     emptyMap(), java.time.Duration.between(startedAt, Instant.now()).toMillis(),
-                    llmCalls = costs.drainCalls(), issues = listOf(safeFailure(e)))
+                    llmCalls = costs.drainCalls(), issues = recoveryIssues + safeFailure(e))
                 val failed = PipelineResult(emptyList(), emptyList(), report)
                 summary(failed)
                 val archived = archiveFailedRun(out, failed)
@@ -274,8 +314,22 @@ private suspend fun runDaily(
             print("수집·정제 ${result.items.size}건 · out/$day-collect.json")
             return false
         }
+        if (CLASSIFICATION_BATCH_PENDING in result.report.issues || isPendingBatch(generationCheckpoint)) {
+            archiveFile(out, result.report).writeAtomically(outputJson.encodeToString(result))
+            router.markAppliedBatchesConsumed()
+            result.report.issues.forEach { print("· $it") }
+            return false
+        }
         val renderer = HtmlRenderer(IdeaGenerator(defaults, prompts, router).categories)
         val rendered = publishOrArchiveFailure(out, history, renderer, result, keepUnseen)
+        router.markAppliedBatchesConsumed()
+        if (router.remainingMillis() == 0L) {
+            result = result.copy(report = result.report.copy(issues = result.report.issues + "Publication exceeded the execution deadline"))
+            val file = if (rendered == null) archiveFile(out, result.report) else out.resolve("$day.json")
+            file.writeAtomically(outputJson.encodeToString(result.copy(metrics = if (rendered == null) result.metrics else result.metrics.copy(snapshots = emptyList()),
+                trackClassified = emptyMap())))
+            summary(result)
+        }
         print("${rendered?.subject ?: "카드 0개"} · 추적 ${result.trackingUpdates.size}건 · " +
             String.format(Locale.ROOT, "추정 USD %.6f", result.report.costUsd))
         result.metrics.profiles.forEach { (profile, counts) ->
@@ -299,7 +353,7 @@ internal fun costLedger(out: File, history: FileHistorySearch) = FileCostLedger(
         (prior?.report?.llmCalls?.sumOf { maxOf(it.costUsd, it.reservedUsd) } ?: 0.0)
 }
 
-private suspend fun runBackfill(args: Array<String>, secrets: SecretProvider, defaults: PipelineConfig, out: File) {
+private suspend fun runBackfill(args: Array<String>, secrets: SecretProvider, defaults: PipelineConfig, out: File, startedAt: Instant) {
     val period = args.getOrNull(1).orEmpty()
     val days = if (period == "4w") 28 else {
         val match = requireNotNull(Regex("([1-9][0-9]*)d").matchEntire(period))
@@ -344,6 +398,7 @@ private suspend fun runBackfill(args: Array<String>, secrets: SecretProvider, de
         val providers = mutableListOf<LlmProvider>()
         val http = Http.client()
         try {
+            var runRouter: LlmRouter? = null
             val classifier = if (execute) {
                 anthropicKey?.let { providers += AnthropicProvider(it) }
                 openAiKey?.let { providers += OpenAiProvider(it) }
@@ -353,12 +408,22 @@ private suspend fun runBackfill(args: Array<String>, secrets: SecretProvider, de
                     println("출처 설정 오류:\n- " + routingIssues.joinToString("\n- "))
                     throw InvalidSourceRoutingException()
                 }
-                Classifier(defaults, profiles, PromptResolver(FilePromptStore(File("config/prompts").toPath())),
-                    LlmRouter(providers, costs, mapOf("classify" to model), defaults.models.fallback, preflightBudget = true))
+                val router = LlmRouter(providers, costs, mapOf("classify" to model), defaults.models.fallback, preflightBudget = true)
+                router.startRun(startedAt, defaults.deadlineMinutes)
+                runRouter = router
+                val activeDates = (1..days).map { "${date.minusDays(it.toLong())}-backfill.json" }.toSet()
+                router.recoverBatches(out, defaults.batch, defaults.recentTopicDays) { it.name in activeDates }.forEach(::println)
+                Classifier(defaults, profiles, PromptResolver(FilePromptStore(File("config/prompts").toPath())), router)
             } else null
-            Backfill(out, sources, HackerNewsAdapter(http), GitHubAdapter(http, secrets), model, costs, classifier,
-                monthlyBudget = monthlyBudget)
-                .run(date, days, dryRun, yes, force)
+            val backfill = Backfill(out, sources, HackerNewsAdapter(http), GitHubAdapter(http, secrets), model, costs,
+                classifier, monthlyBudget = monthlyBudget)
+            if (runRouter == null) {
+                backfill.run(date, days, dryRun, yes, force)
+            } else if (kotlinx.coroutines.withTimeoutOrNull(runRouter.remainingMillis()) {
+                    backfill.run(date, days, dryRun, yes, force)
+                } == null) {
+                println("실행 마감 · 다음 실행에서 이어서")
+            }
         } finally {
             providers.filterIsInstance<AutoCloseable>().forEach { it.close() }
             http.dispatcher.executorService.shutdown()

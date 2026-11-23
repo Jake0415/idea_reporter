@@ -22,7 +22,10 @@ data class ModelPrice(
     val cachedInputUsd: Double,
     val priceVerified: Boolean = true,
     val cacheWriteUsd: Double? = null,
-    val longContext: LongContextPrice? = null
+    val longContext: LongContextPrice? = null,
+    val batchMultiplier: Double = 0.5,
+    val webSearchUsd: Double = 0.01,
+    val webSearchPriceVerified: Boolean = false
 )
 
 @Serializable
@@ -51,10 +54,11 @@ class ModelCatalog(private val prices: List<ModelPrice>) {
                          useLongContextPrice: Boolean): Double =
         costUsd(requirePrice(provider, model), LlmUsage(input, output, cached), useLongContextPrice)
 
-    internal fun response(provider: ProviderId, model: String, usage: LlmUsage, content: () -> String?): LlmResult {
+    internal fun response(provider: ProviderId, model: String, usage: LlmUsage, batch: Boolean = false, content: () -> String?): LlmResult {
         val price = find(provider, model)
-        val appliedPrice = price ?: prices.filter { it.provider == provider }.maxBy { costUsd(it, usage) }
-        val cost = costUsd(appliedPrice, usage)
+        fun chargedAt(price: ModelPrice) = costUsd(price, usage) * if (batch) price.batchMultiplier else 1.0
+        val appliedPrice = price ?: prices.filter { it.provider == provider }.maxBy(::chargedAt)
+        val cost = chargedAt(appliedPrice)
         val fallback = price == null
         val unverified = !appliedPrice.priceVerified
         val text = try {
@@ -73,7 +77,7 @@ class ModelCatalog(private val prices: List<ModelPrice>) {
             usage.cachedInputTokens, cost, text == null, usage.cacheWriteTokens, fallback, unverified)
     }
 
-    private fun costUsd(price: ModelPrice, usage: LlmUsage, useLongContextPrice: Boolean = false): Double {
+    internal fun costUsd(price: ModelPrice, usage: LlmUsage, useLongContextPrice: Boolean = false): Double {
         val long = price.longContext?.takeIf { useLongContextPrice || usage.inputTokens > it.thresholdInputTokens }
         val inputPrice = long?.input ?: price.inputUsd
         val outputPrice = long?.output ?: price.outputUsd

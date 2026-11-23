@@ -54,7 +54,7 @@ class BackfillTest {
                          batchSize: Int = defaults.classifyBatchSize,
                          hnConfig: HnConfig = HnConfig(queries = listOf("AI")),
                          writeCache: (File, String) -> Unit = File::writeAtomically,
-                         monthlyBudget: MonthlyBudget? = null): Backfill {
+                         monthlyBudget: MonthlyBudget? = null, runClock: () -> LocalDate = { date }): Backfill {
         val http = OkHttpClient()
         val guard = CostGuard(budget, ledger = FileCostLedger(out.resolve("cost-ledger")), budgetPerRun = true)
         val fake = object : LlmProvider {
@@ -81,17 +81,34 @@ class BackfillTest {
         return Backfill(out, SourcesFile(sources),
             HackerNewsAdapter(http, server.url("/").toString()), githubAdapter,
             model, guard, classifier, messages::add,
-            clock = { date.atStartOfDay().toInstant(ZoneOffset.UTC) }, writeCache = writeCache, monthlyBudget = monthlyBudget)
+            clock = { runClock().atStartOfDay().toInstant(ZoneOffset.UTC) }, writeCache = writeCache, monthlyBudget = monthlyBudget)
     }
 
     @Test fun overallMonthlyCapRejectsBeforeCollectionOrClassification() = runTest {
         FileCostLedger(out.resolve("cost-ledger-analysis")).reserve(date, "analysis", 0.25)
+        out.resolve("batch/$newest-backfill.json").writeAtomically("{}")
         val monthly = MonthlyBudget(out, BudgetSettings(monthlyTotalUsd = 0.50))
         MockWebServer().use { server ->
             backfill(server, 0.50, monthlyBudget = monthly).run(date, 1, false, true, false)
             assertEquals(0, server.requestCount)
             assertEquals(0, llmCalls)
             assertContains(messages.single(), "전체 월 상한")
+        }
+    }
+
+    @Test fun checksMonthlyCapAgainBeforeMovingToAnotherDate() = runTest {
+        val nextMonth = date.plusMonths(1)
+        FileCostLedger(out.resolve("cost-ledger-analysis")).reserve(nextMonth, "analysis", 0.50)
+        val monthly = MonthlyBudget(out, BudgetSettings(monthlyTotalUsd = 0.50))
+        var current = date
+        MockWebServer().use { server ->
+            server.story(newest)
+            backfill(server, 0.50, monthlyBudget = monthly, runClock = { current },
+                writeCache = { file, value -> file.writeAtomically(value); current = nextMonth })
+                .run(date, 2, false, true, false)
+            assertEquals(1, server.requestCount)
+            assertEquals(1, llmCalls)
+            assertContains(messages.last(), "전체 월 상한")
         }
     }
 

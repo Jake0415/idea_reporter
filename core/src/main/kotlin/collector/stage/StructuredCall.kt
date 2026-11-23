@@ -32,12 +32,18 @@ internal suspend inline fun <reified T> structuredCall(
     router: LlmRouter, stage: String, prompts: List<ResolvedPrompt>, system: String,
     user: JsonObject, schema: JsonObject, tokens: Int, retryInvalid: Boolean = false, allowFallback: Boolean = true,
     effort: Effort = Effort.LOW
+): Response<T> = structuredCall(router, stage, prompts, LlmRequest("", system, user.toString(), schema, stage, tokens, effort),
+    retryInvalid, allowFallback)
+
+internal suspend inline fun <reified T> structuredCall(
+    router: LlmRouter, stage: String, prompts: List<ResolvedPrompt>, request: LlmRequest,
+    retryInvalid: Boolean = false, allowFallback: Boolean = true, initial: Result<LlmResult>? = null, noinline onAttempt: () -> Unit = {}
 ): Response<T> {
     repeat(if (retryInvalid) 2 else 1) {
         try {
-            val response = router.complete(stage, LlmRequest("", system, user.toString(), schema, stage, tokens, effort),
+            val response = if (it == 0 && initial != null) initial.getOrThrow() else router.complete(stage, request,
                 prompts.first().promptId, prompts.first().version, prompts.associate { it.promptId to it.version },
-                fallbackOnInvalidJson = false, allowFallback = allowFallback)
+                fallbackOnInvalidJson = false, allowFallback = allowFallback, onAttempt = onAttempt)
             if (response.refused) return Response.Failed("응답 거절")
             return Response.Ok(Json.decodeFromString<T>(response.json))
         } catch (e: CancellationException) {

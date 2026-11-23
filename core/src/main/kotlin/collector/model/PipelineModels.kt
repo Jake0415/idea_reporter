@@ -26,8 +26,11 @@ data class IdeaCard(
     val problem: String, val techSignals: List<SignalRef>, val demandSignals: List<SignalRef>,
     val competitors: List<SignalRef>, val history: List<String>, val effort: String, val differentiation: String,
     val biggestRisk: String, val validationPlan: String, val caveats: List<String>, val category: String,
-    val badges: List<String> = emptyList(), val tags: List<String>
+    val badges: List<String> = emptyList(), val tags: List<String>,
+    val supplementRefs: List<SupplementRef> = emptyList()
 )
+
+@Serializable data class SupplementRef(val url: String, val title: String, val note: String)
 
 @Serializable data class SignalRef(val itemId: String, val url: String, val note: String, val license: String? = null)
 @Serializable data class TopicHistory(val topicKey: String, val topicLabel: String, val runDate: String, val itemKeys: List<String>)
