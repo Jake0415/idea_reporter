@@ -45,6 +45,21 @@ class AnalysisTest {
         "수요 증가", "팀장", listOf(ref(repo)), listOf(ref(demand), ref(demand2)), listOf(ref(repo)), emptyList(),
         scoreLabels.keys.associateWith { score }, false, "", "유료 고객 확인", emptyList())
 
+    @Test fun changedAnalysisCapInvalidatesQuoteBeforeProviderCreation() = runTest {
+        seed()
+        val runtime = collector.runtime.CollectorRuntime(
+            collector.runtime.CollectorPaths(out, out.resolve("config")), { null }, clock,
+            dailyProviders = { error("A stale quote must not create a provider") })
+        val quote = runtime.estimateAnalysis(listOf("local-doc"))
+        assertTrue(quote.canReserve)
+        val cap = BudgetSettings.load(out).analysisRequestUsd
+        BudgetSettings.update(out, listOf("analysisRequestUsd=" + (cap + 1)))
+        val response = runtime.runAnalysis(listOf("local-doc"), assertNotNull(quote.reservationUsd),
+            mail = false, budgetVersion = quote.budgetVersion)
+        assertFalse(response.successful)
+        assertNotEquals(quote.budgetVersion, runtime.estimateAnalysis(listOf("local-doc")).budgetVersion)
+    }
+
     @Test fun successfulAnalysisMailsSavedReportUnlessDisabled() = runTest {
         seed()
         val delivered = mutableListOf<collector.mail.MailMessage>()
@@ -444,7 +459,8 @@ class AnalysisTest {
         assertContains(lines, warning)
         assertContains(out.resolve("analysis/${run.id}.html").readText(), warning)
         command.run(arrayOf("--analyze", "local-doc", "other"))
-        assertEquals(collector.runtime.AnalysisEstimate(0.0, 0.0, true), estimates.last())
+        assertNotNull(estimates.last().budgetVersion)
+        assertEquals(collector.runtime.AnalysisEstimate(0.0, 0.0, true), estimates.last().copy(budgetVersion = null))
         assertEquals(1, fake.requests.size)
         lines.clear()
         command.run(arrayOf("--analysis-list"))

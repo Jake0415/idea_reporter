@@ -185,15 +185,18 @@ core/src/main/kotlin/collector/
 ├── track/     TrackingKeywords(키워드 추출), TrackingSearch(전용 검색어), TrackingUpdater(⑧-1), StrengthCalculator
 ├── port/      SeenStore, ItemStore, IdeaStore, FeedbackStore, StatsStore, TrackedStore, Mailer, SecretProvider
 ├── pipeline/  Pipeline, Stage
+├── runtime/   CollectorRuntime(PC·폰 공용 실행 진입점), CollectorPaths(경로 주입), Backup(R4 백업 묶음)
+├── analysis/ trend/ backfill/ budget/  7단계 사업성 분석·트렌드 리포트·과거 채우기·예산 상한
 └── dev/       Main, JsonFile*Store, EnvSecretProvider (PC 실행 전용)
 
-app/src/main/kotlin/collector/app/
-├── work/    DailyCollectWorker, WorkScheduler
-├── data/    AppDatabase(Room + FTS), Room*Store, RoomHistorySearch
-├── mail/    SmtpMailer
-├── secret/  KeystoreSecretProvider
-└── ui/      menu.md의 화면 단위(SC-xx)로 구성
+app/src/main/kotlin/app/ideacollector/   (2026-11-24 폰 실행 전환, R2·R3)
+├── work/    CollectorRunService(포그라운드 실행·단계 알림·취소), Workers(RunScheduler: 정확 알람 + 예비 WorkManager·묶음 처리 이어받기), RunNotifications
+├── data/    AppDatabase(Room + FTS, 로컬 out/ → Room 반영·실행 중 저장 대기열)
+├── secret/  KeystoreSecretProvider(AI 키·GitHub 토큰·메일 앱 비밀번호)
+└── *.kt     화면(SC-xx): FirstRunWizard(SC-00), FeedScreens·PhoneRunScreens(SC-01), PhoneSettings(SC-11), SourceScreens(SC-07), ConfigScreens(SC-09), PromptTrial(SC-15·16), SettingsScreens(분석·백업)
 ```
+
+폰에서 기록은 앱 전용 폴더의 `out/`, 설정은 `config/*.local.json`에 둔다(PC와 같은 core 경로 규칙). 메일은 core의 SMTP 메일러를 폰에서 그대로 쓴다.
 
 ## 7. 파이프라인
 
@@ -463,7 +466,7 @@ data class SourceStats(val source: String, val days: Int, val fetched: Int, val 
 | Cursor 포럼, Lobsters | 제외 — 자동 접근 금지 / robots.txt가 AI input 금지 신호 | forum.cursor.com/tos, lobste.rs/robots.txt |
 | Hacker News(사용 중) | 확인 필요 — 공식 API는 속도 제한 없음, 그러나 YC 약관이 "사이트"의 data mining·scraping·파생물 판매를 금지하며 공식 API와의 관계는 문서에 없음(회색 지대). Algolia 약관 미확인 | github.com/HackerNews/API, ycombinator.com/legal |
 
-공통 제외 키워드: crypto, giveaway, hiring. 앱의 출처 설정 화면에서 수정한 값은 Room에 덮어써 저장한다.
+공통 제외 키워드: crypto, giveaway, hiring. 앱의 출처 설정 화면(SC-07)에서 수정한 값은 `config/sources.local.json`에 저장한다(기본값 파일은 그대로, 분류 기준 배정은 저장 전에 검증). 실행 중에 저장하면 실행이 끝난 뒤 반영한다.
 
 **RSS 안전 규칙(P3):** 피드마다 격리(한 피드 실패는 "RSS 부분 실패" 경고만, 전부 실패할 때만 출처 실패). 피드별 기한 = min(남은 출처 시간, 피드당 상한), 출처 기한이 먼저 끝나도 완료된 피드는 반환하고 진행 중 HTTP 호출은 취소. 피드 URL의 비밀 후보(쿼리 값 6자 이상·userinfo)는 결과의 모든 문자열에서 `[redacted]`로 치환, 오류에는 상태 코드만. 피드 이름은 설정 라벨이며 중복 이름·비밀값 포함 이름은 설정 단계에서 거부.
 

@@ -66,6 +66,7 @@ internal fun routeFrom(intent: Intent): Route? {
     when (intent.getStringExtra("runDestination")) {
         "today" -> return Route(Page.TODAY)
         "runs" -> return Route(Page.RUNS)
+        "analysis" -> return Route(Page.ANALYSIS)
     }
     val uri = intent.data ?: return null
     if (uri.scheme != "ideacollector" || uri.pathSegments.size != 1) return null

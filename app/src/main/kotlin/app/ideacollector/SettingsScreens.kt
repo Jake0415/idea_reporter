@@ -5,6 +5,9 @@ package app.ideacollector
 import android.app.Activity
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.Alignment
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -23,35 +26,36 @@ import androidx.compose.ui.unit.dp
 import app.ideacollector.data.RequestRow
 import app.ideacollector.github.contractJson
 import app.ideacollector.github.sha256
-import app.ideacollector.work.requestNotifications
-import app.ideacollector.work.RunOptions
 import app.ideacollector.work.CollectorRunService
-import collector.budget.BudgetSettings
 import collector.data.DataBranch.VERSION
 import collector.data.InboxRequest
-import collector.data.ScheduleSettings
 import collector.model.RunReport
 import collector.prompt.PromptCatalog
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import collector.config.ConfigLoader
-import collector.config.PipelineConfig
 import java.time.Instant
 
 @Composable
 internal fun Field(value: String, update: (String) -> Unit, label: Int, singleLine: Boolean = false,
-    secret: Boolean = false, monospace: Boolean = false, enabled: Boolean = true) {
-    OutlinedTextField(value, update, Modifier.fillMaxWidth(), label = { Text(stringResource(label)) },
-        enabled = enabled,
-        singleLine = singleLine, maxLines = if (monospace) 10 else Int.MAX_VALUE, shape = MaterialTheme.shapes.small,
-        keyboardOptions = if (secret) androidx.compose.foundation.text.KeyboardOptions(
-            keyboardType = androidx.compose.ui.text.input.KeyboardType.Password
-        ) else androidx.compose.foundation.text.KeyboardOptions.Default,
+    secret: Boolean = false, monospace: Boolean = false, enabled: Boolean = true,
+    email: Boolean = false, error: Int? = null, hint: String? = null, minLines: Int = 1, help: Int? = null,
+    decimal: Boolean = false, modifier: Modifier = Modifier, onDone: (() -> Unit)? = null) {
+    OutlinedTextField(value, update, modifier.fillMaxWidth(), label = { Text(stringResource(label)) },
+        enabled = enabled, isError = error != null,
+        supportingText = (error ?: help)?.let { id -> { Text(stringResource(id)) } },
+        placeholder = hint?.let { message -> { Text(message) } },
+        singleLine = singleLine, minLines = minLines, maxLines = if (monospace) 10 else Int.MAX_VALUE, shape = MaterialTheme.shapes.small,
+        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = when {
+            secret -> androidx.compose.ui.text.input.KeyboardType.Password
+            email -> androidx.compose.ui.text.input.KeyboardType.Email
+            decimal -> androidx.compose.ui.text.input.KeyboardType.Decimal
+            else -> androidx.compose.ui.text.input.KeyboardType.Text
+        }, imeAction = if (onDone == null) androidx.compose.ui.text.input.ImeAction.Default
+            else androidx.compose.ui.text.input.ImeAction.Done),
+        keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = onDone?.let { action -> { action() } }),
         textStyle = if (monospace) MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace)
             else MaterialTheme.typography.bodyMedium,
         visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
@@ -59,135 +63,120 @@ internal fun Field(value: String, update: (String) -> Unit, label: Int, singleLi
             focusedLabelColor = MaterialTheme.colorScheme.tertiary, cursorColor = MaterialTheme.colorScheme.tertiary))
 }
 
-@Composable private fun SecureTokenInput() {
+private val secureInputs = mutableMapOf<android.view.Window, Pair<Int, Boolean>>()
+
+@Composable internal fun SecureTokenInput() {
     val window = (LocalContext.current as Activity).window
     DisposableEffect(window) {
         val flag = android.view.WindowManager.LayoutParams.FLAG_SECURE
-        val alreadySecure = window.attributes.flags and flag != 0
-        window.addFlags(flag)
-        onDispose { if (!alreadySecure) window.clearFlags(flag) }
+        val (count, owned) = secureInputs[window] ?: (0 to (window.attributes.flags and flag == 0))
+        secureInputs[window] = count + 1 to owned
+        if (owned) window.addFlags(flag)
+        onDispose {
+            val (active, clear) = secureInputs.getValue(window)
+            if (active == 1) {
+                secureInputs.remove(window)
+                if (clear) window.clearFlags(flag)
+            } else secureInputs[window] = active - 1 to clear
+        }
     }
 }
 
-@Composable internal fun Connection(app: CollectorApp, operation: (suspend () -> Unit) -> Unit,
-    done: () -> Unit) {
-    SecureTokenInput()
-    val activity = LocalContext.current as Activity
-    val labels = listOf(
-        "ANTHROPIC_API_KEY" to R.string.key_anthropic, "OPENAI_API_KEY" to R.string.key_openai,
-        "GITHUB_TOKEN" to R.string.token, "SMTP_USERNAME" to R.string.key_smtp_username,
-        "SMTP_PASSWORD" to R.string.key_smtp_password, "MAIL_TO" to R.string.key_mail_to)
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        labels.forEach { (name, label) ->
-            var value by remember { mutableStateOf("") }
-            Field(value, { value = it }, label, singleLine = true, secret = true)
-            Primary(R.string.save, value.isNotBlank()) {
-                operation { check(app.secrets.set(name, value.trim())); value = "" }
+@Composable internal fun AnalysisControls(app: CollectorApp, viewModel: ScreensViewModel, report: collector.trend.TrendReport,
+    budget: String?) {
+    var selected by rememberSaveable(report.date) { mutableStateOf(arrayListOf<String>()) }
+    var quote by rememberSaveable(report.date) { mutableStateOf<String?>(null) }
+    var approved by rememberSaveable { mutableStateOf(false) }
+    var quotedSelection by rememberSaveable(report.date) { mutableStateOf<ArrayList<String>?>(null) }
+    var quotedBudget by rememberSaveable(report.date) { mutableStateOf<String?>(null) }
+    var revision by rememberSaveable(report.date) { mutableIntStateOf(0) }
+    var failure by rememberSaveable(report.date) { mutableStateOf<String?>(null) }
+    var requote by rememberSaveable(report.date) { mutableStateOf(false) }
+    val outcome by CollectorRunService.analysisOutcome.collectAsState()
+    LaunchedEffect(outcome) {
+        val result = outcome ?: return@LaunchedEffect
+        if (!result.successful) {
+            requote = result.requote
+            if (result.requote) {
+                quote = null
+                revision++
+            } else failure = result.failure ?: ""
+        }
+        CollectorRunService.analysisOutcome.compareAndSet(result, null)
+    }
+    val running by app.operationRunning.collectAsState()
+    var quoteLocked by remember { mutableStateOf(false) }
+    LaunchedEffect(report.date, budget, selected, revision, running) {
+        if (quote != null && quotedSelection == selected && quotedBudget == budget) return@LaunchedEffect
+        quote = null
+        approved = false
+        quoteLocked = false
+        if (selected.isEmpty() || running) return@LaunchedEffect
+        val themes = ArrayList(selected)
+        repeat(4) { attempt ->
+            val answer = viewModel.analysisQuote(app, report.date, budget, themes, revision)
+            quoteLocked = answer.exceptionOrNull() is collector.runtime.RunLockedException
+            if (quoteLocked && app.operationRunning.value) return@LaunchedEffect
+            if (quoteLocked && attempt < 3) {
+                kotlinx.coroutines.delay(2_000)
+            } else {
+                quoteLocked = false
+                answer.onSuccess {
+                    quotedSelection = themes
+                    quotedBudget = budget
+                    quote = contractJson.encodeToString(collector.runtime.AnalysisEstimate.serializer(), it)
+                }.onFailure { failure = "" }
+                return@LaunchedEffect
             }
         }
-        Secondary(R.string.run_notifications) { requestNotifications(activity, 52) }
-        Secondary(R.string.back) { done() }
     }
-}
-
-@Composable internal fun Operations(app: CollectorApp, settings: app.ideacollector.data.AppSettings, data: ScreenState,
-    send: (List<InboxRequest>) -> Unit, retry: (RequestRow) -> Unit, operation: (suspend () -> Unit) -> Unit,
-    settingsReadError: Boolean) {
-    val schedule = runCatching { data.file("settings/schedule.json")?.let { contractJson.decodeFromString<ScheduleSettings>(it) } }
-    val budgetSettings = runCatching { data.file("settings/budget.json")?.let { contractJson.decodeFromString<BudgetSettings>(it) } }
-    val readError = schedule.isFailure || budgetSettings.isFailure || settingsReadError
-    if (readError) {
-        Notice(stringResource(R.string.settings_read_error), warning = true)
-    }
-    val savedSchedule = schedule.getOrNull()
-    val savedBudget = budgetSettings.getOrNull()
-    val requests = data.requestsOf<InboxRequest.SettingsSet>()
-    val pending = requests.filter { it.status in optimisticStatuses }.mapNotNull { data.payload(it) as? InboxRequest.SettingsSet }
-    val currentEnabled = pending.firstNotNullOfOrNull { it.schedule?.enabled } ?: savedSchedule?.enabled ?: true
-    val currentBudget = pending.firstNotNullOfOrNull { it.budget?.get("dailyCardUsd")?.toString() }
-        ?: (savedBudget ?: BudgetSettings()).dailyCardUsd.toString()
-    var enabledDraft by rememberSaveable { mutableStateOf<Boolean?>(null) }
-    var budgetDraft by rememberSaveable { mutableStateOf<String?>(null) }
-    val enabled = enabledDraft ?: currentEnabled
-    val budget = budgetDraft ?: currentBudget
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(stringResource(R.string.daily_enabled), Modifier.weight(1f))
-        Switch(enabled, { enabledDraft = it.takeUnless { value -> value == currentEnabled } },
-            modifier = Modifier.heightIn(min = 48.dp))
-    }
-    Field(budget, { budgetDraft = it.takeUnless { value -> value == currentBudget } }, R.string.daily_budget, true)
-    val amount = budget.toBigDecimalOrNull()
-    val valid = amount != null && amount.signum() >= 0 && amount.stripTrailingZeros().scale() <= 2 && amount.toDouble().isFinite()
-    val budgetChanged = amount?.compareTo(currentBudget.toBigDecimal()) != 0
-    val saveEnabled = !readError && valid && (enabled != currentEnabled || budgetChanged)
-    Primary(R.string.save, saveEnabled) {
-        send(listOf(InboxRequest.SettingsSet(VERSION, requestId(), Instant.now().toString(),
-            budget = if (budgetChanged) JsonObject(mapOf("dailyCardUsd" to JsonPrimitive(amount))) else null,
-            schedule = if (enabled != currentEnabled) ScheduleSettings(enabled) else null)))
-    }
-    if (!saveEnabled) Small(when {
-        readError -> R.string.sync_then_retry
-        !valid -> R.string.budget_invalid
-        else -> R.string.budget_save_hint
-    })
-    RequestChips(requests, retry)
+    val estimate = quote?.takeIf { quotedSelection == selected && quotedBudget == budget }?.let { contractJson.decodeFromString(collector.runtime.AnalysisEstimate.serializer(), it) }
     HorizontalDivider()
-    val savedTime = java.time.LocalTime.ofSecondOfDay(settings.runTimeSeconds)
-    var time by rememberSaveable(savedTime) { mutableStateOf(savedTime.toString()) }
-    Field(time, { time = it }, R.string.run_time_setting, true)
-    var wifi by rememberSaveable(settings.wifiOnly) { mutableStateOf(settings.wifiOnly) }
-    var charging by rememberSaveable(settings.chargingOnly) { mutableStateOf(settings.chargingOnly) }
-    var batch by rememberSaveable(settings.batch) { mutableStateOf(settings.batch) }
-    RunOption(R.string.run_wifi, wifi) { wifi = it }
-    RunOption(R.string.run_charging, charging) { charging = it }
-    RunOption(R.string.run_batch, batch) { batch = it }
-    val parsed = runCatching { java.time.LocalTime.parse(time) }.getOrNull()
-    val changed = parsed != savedTime || wifi != settings.wifiOnly || charging != settings.chargingOnly || batch != settings.batch
-    Primary(R.string.save, parsed != null && changed) {
-        operation { app.schedule.save(RunOptions(checkNotNull(parsed), wifi, charging, batch)) }
+    if (selected.isNotEmpty() && (quoteLocked || (running && quote == null))) Small(R.string.r3_analysis_quote_wait)
+    if (report.themes.none { it.candidate && it.id.isNotBlank() }) Small(R.string.r3_analysis_empty)
+    Small(R.string.r3_analysis_help)
+    if (requote) Notice(stringResource(R.string.r3_analysis_requote), true)
+    failure?.let {
+        Notice(stringResource(R.string.r3_analysis_failure, it.ifBlank { stringResource(R.string.run_failed) }), true)
     }
-    data.latestTrend?.takeIf { it.themes.isNotEmpty() }?.let { AnalysisControls(app, it, operation) }
-}
-
-@Composable private fun AnalysisControls(app: CollectorApp, report: collector.trend.TrendReport,
-    operation: (suspend () -> Unit) -> Unit) {
-    var selected by remember(report.date) { mutableStateOf(emptyList<String>()) }
-    var estimate by remember(selected) { mutableStateOf<collector.runtime.AnalysisEstimate?>(null) }
-    val running by CollectorRunService.running.collectAsState()
-    HorizontalDivider()
-    Text(stringResource(R.string.analysis_title), style = MaterialTheme.typography.titleMedium)
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        report.themes.filter { it.id.isNotBlank() }.forEach { theme ->
+        report.themes.filter { it.candidate && it.id.isNotBlank() }.forEach { theme ->
             val included = theme.id in selected
             FilterChip(included, {
-                selected = if (included) selected - theme.id else selected + theme.id
-            }, label = { Text(theme.name) }, enabled = included || selected.size < 3)
-        }
-    }
-    Primary(R.string.analysis_estimate, selected.isNotEmpty()) {
-        val themes = selected
-        if (themes.isNotEmpty()) operation {
-            val answer = app.estimateAnalysis(themes)
-            if (selected == themes) estimate = answer
+                selected = ArrayList(if (included) selected - theme.id else selected + theme.id)
+            }, label = { Text(stringResource(R.string.r3_analysis_candidate, theme.name)) }, enabled = included || selected.size < 3)
         }
     }
     estimate?.let { answer ->
         val limit = answer.reservationUsd
         if (answer.canReserve && limit != null) {
-            Small(R.string.analysis_estimate_result, java.math.BigDecimal.valueOf(answer.estimatedUsd ?: limit).toPlainString(),
-                java.math.BigDecimal.valueOf(limit).toPlainString())
-            Primary(R.string.analysis_approve, !running) {
-                operation { app.startAnalysis(selected, limit) }
-            }
+            val amount = answer.estimatedUsd ?: limit
+            val estimateLabel = if (amount < 0.01) stringResource(R.string.r3_analysis_execute_small)
+                else stringResource(R.string.r3_analysis_execute, amount)
+            val limitLabel = if (limit < 0.01) stringResource(R.string.r3_analysis_cap_small)
+                else stringResource(R.string.r3_analysis_cap, limit)
+            val amountLine = stringResource(R.string.analysis_estimate_result, estimateLabel, limitLabel)
+            Small(amountLine)
+            Primary(R.string.r3_analysis_run, !running) { approved = true }
+            if (approved) AlertDialog(onDismissRequest = { approved = false },
+                title = { Text(stringResource(R.string.analysis_approve)) },
+                text = { Text(amountLine) },
+                dismissButton = { Secondary(R.string.cancel) { approved = false } },
+                confirmButton = { Primary(R.string.r3_check, !running) {
+                    approved = false
+                    failure = null
+                    requote = false
+                    app.startAnalysis(selected, limit, answer.budgetVersion)
+                } })
         } else Notice(stringResource(R.string.analysis_unavailable), warning = true)
     }
 }
 
-@Composable private fun RunOption(label: Int, enabled: Boolean, change: (Boolean) -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+@Composable internal fun RunOption(label: Int, enabled: Boolean, change: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).toggleable(enabled, role = Role.Switch, onValueChange = change),
+        horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(stringResource(label), Modifier.weight(1f))
-        Switch(enabled, change, modifier = Modifier.heightIn(min = 48.dp))
+        Switch(enabled, onCheckedChange = null)
     }
 }
 
@@ -266,11 +255,12 @@ private fun stageName(stage: String) = when (stage) {
                     id, promptHash(data.prompt(id)))
             })
         } }, dismissButton = { Secondary(R.string.cancel) { resetAll = false } })
-    Small(R.string.prompt_later)
     val ids = listOf("classify") + PromptCatalog.entries.keys.filter { it.startsWith("profile.") } +
-        listOf("ideas", "track", "criteria")
+        listOf("ideas", "track", "criteria", "analysis-opportunity")
     ids.forEach { id ->
-        Nav(promptName(id), promptStatus(data, id)) {
+        val info = PromptCatalog.entries.getValue(id)
+        val detail = stringResource(R.string.prompt_io, info.input, info.output)
+        Nav(promptName(id), stringResource(R.string.reason_row, promptStatus(data, id), detail)) {
             open(Page.PROMPT_EDIT, id)
         }
     }
@@ -302,6 +292,7 @@ private fun revisions(data: ScreenState, id: String) =
 
 @Composable internal fun PromptEditor(data: ScreenState, id: String, send: (List<InboxRequest>) -> Unit,
     retry: (RequestRow) -> Unit, back: () -> Unit, save: (InboxRequest.PromptSet, () -> Unit) -> Unit,
+    trial: (@Composable (String) -> Unit)? = null,
     registerLeave: (((() -> Unit) -> Unit)?) -> Unit) {
     val info = PromptCatalog.entries[id]
     if (info == null) { Secondary(R.string.back, back); Small(R.string.missing); return }
@@ -331,76 +322,79 @@ private fun revisions(data: ScreenState, id: String) =
         onDispose { registerLeave(null) }
     }
     BackHandler { leave(back) }
-    val backLabel = stringResource(R.string.back)
-    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-        IconButton(onClick = { leave(back) }, modifier = Modifier.size(48.dp)) {
-            Text("←", modifier = Modifier.clearAndSetSemantics { contentDescription = backLabel })
+    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(promptName(id), style = MaterialTheme.typography.titleMedium)
+            Small(promptStatus(data, id))
+            Small(R.string.prompt_io, info.input, info.output)
+            Notice(stringResource(R.string.prompt_format))
+            if (trial == null) {
+                Small(R.string.prompt_later)
+                RequestChips(requests, retry)
+            }
+            val rejected = requests.firstOrNull()?.takeIf { it.status == "REJECTED" && it.reason == "Prompt baseHash does not match" }
+                ?.let(data::payload) as? InboxRequest.PromptSet
+            if (rejected != null) TextButton(onClick = {
+                baseline = current
+                baselineHash = promptHash(raw)
+                draft = visiblePromptBody(rejected.body)
+                editing = true
+                compare = true
+            }) { Text(stringResource(R.string.prompt_rebase)) }
+            Small(R.string.char_count, if (editing) draft.length else current.length, 20_000)
+            FlowRow {
+                if (!editing) Secondary(R.string.edit) { baseline = current; baselineHash = promptHash(raw); draft = current; editing = true }
+                Secondary(R.string.compare) { compare = !compare }
+                if (!editing && current != visiblePromptBody(base)) Secondary(R.string.reset) { resetting = true }
+                if (!editing && revisions(data, id).isNotEmpty()) Secondary(R.string.revisions) { history = !history }
+            }
+            if (editing) {
+                Field(draft, { draft = it }, R.string.prompt_body, monospace = true)
+                when {
+                    draft.length > 20_000 -> Small(R.string.prompt_too_long)
+                    promptBody(draft).isBlank() -> Small(R.string.prompt_empty)
+                    !dirty -> Small(R.string.prompt_unchanged)
+                }
+            }
+            if (revisionError) Notice(stringResource(R.string.prompt_revision_too_long), warning = true)
+            if (history) revisions(data, id).forEach { revision ->
+                Nav(stringResource(R.string.revision, revision.version, revision.savedAt.orEmpty().take(10)),
+                    stringResource(R.string.load_revision)) {
+                    revisionError = revision.text.length > 20_000
+                    if (!revisionError) {
+                        baseline = current; baselineHash = promptHash(raw); draft = visiblePromptBody(revision.text)
+                        editing = true; history = false
+                    }
+                }
+            }
+            if (compare) {
+                val before = if (editing) baseline else visiblePromptBody(base)
+                val after = if (editing) draft else current
+                val (removed, added) = remember(before, after) { lineChanges(before, after) }
+                Block(R.string.removed_lines, removed.joinToString("\n"))
+                Block(R.string.added_lines, added.joinToString("\n"))
+                if (removed.isEmpty() && added.isEmpty()) Small(R.string.no_changed_lines)
+            }
+            val notes = remember(raw) { promptComments.findAll(raw).joinToString("\n") { it.value } }
+            if (notes.isNotEmpty()) {
+                TextButton(onClick = { notesExpanded = !notesExpanded },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.tertiary)) {
+                    Text(stringResource(if (notesExpanded) R.string.prompt_notes_hide else R.string.prompt_notes_show))
+                }
+                if (notesExpanded) Small(notes)
+            }
+            if (!editing) Text(current, style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace))
         }
-        Text(stringResource(R.string.prompt_edit), style = MaterialTheme.typography.titleLarge)
-    }
-    Text(promptName(id), style = MaterialTheme.typography.titleMedium)
-    Small(promptStatus(data, id))
-    Small(R.string.prompt_io, info.input, info.output)
-    Notice(stringResource(R.string.prompt_format))
-    Small(R.string.prompt_later)
-    RequestChips(requests, retry)
-    val rejected = requests.firstOrNull()?.takeIf { it.status == "REJECTED" && it.reason == "Prompt baseHash does not match" }
-        ?.let(data::payload) as? InboxRequest.PromptSet
-    if (rejected != null) TextButton(onClick = {
-        baseline = current
-        baselineHash = promptHash(raw)
-        draft = visiblePromptBody(rejected.body)
-        editing = true
-        compare = true
-    }) { Text(stringResource(R.string.prompt_rebase)) }
-    Small(R.string.char_count, if (editing) draft.length else current.length, 20_000)
-    FlowRow {
+        if (editing || trial != null) HorizontalDivider()
         if (editing) Primary(R.string.save, dirty && promptBody(draft).isNotBlank() && draft.length <= 20_000) {
             val submitted = draft
             save(InboxRequest.PromptSet(VERSION, requestId(), Instant.now().toString(), id, submitted, baselineHash)) {
                 if (draft == submitted) editing = false
             }
         }
-        else Secondary(R.string.edit) { baseline = current; baselineHash = promptHash(raw); draft = current; editing = true }
-        Secondary(R.string.compare) { compare = !compare }
-        if (!editing && current != visiblePromptBody(base)) Secondary(R.string.reset) { resetting = true }
-        if (!editing && revisions(data, id).isNotEmpty()) Secondary(R.string.revisions) { history = !history }
+        trial?.invoke(if (editing) draft else current)
     }
-    if (editing) {
-        Field(draft, { draft = it }, R.string.prompt_body, monospace = true)
-        when {
-            draft.length > 20_000 -> Small(R.string.prompt_too_long)
-            promptBody(draft).isBlank() -> Small(R.string.prompt_empty)
-            !dirty -> Small(R.string.prompt_unchanged)
-        }
-    }
-    if (revisionError) Notice(stringResource(R.string.prompt_revision_too_long), warning = true)
-    if (history) revisions(data, id).forEach { revision ->
-        Nav(stringResource(R.string.revision, revision.version, revision.savedAt.orEmpty().take(10)),
-            stringResource(R.string.load_revision)) {
-            revisionError = revision.text.length > 20_000
-            if (!revisionError) {
-                baseline = current; baselineHash = promptHash(raw); draft = visiblePromptBody(revision.text)
-                editing = true; history = false
-            }
-        }
-    }
-    if (compare) {
-        val before = if (editing) baseline else visiblePromptBody(base)
-        val after = if (editing) draft else current
-        val (removed, added) = remember(before, after) { lineChanges(before, after) }
-        Block(R.string.removed_lines, removed.joinToString("\n"))
-        Block(R.string.added_lines, added.joinToString("\n"))
-        if (removed.isEmpty() && added.isEmpty()) Small(R.string.no_changed_lines)
-    }
-    val notes = remember(raw) { promptComments.findAll(raw).joinToString("\n") { it.value } }
-    if (notes.isNotEmpty()) {
-        TextButton(onClick = { notesExpanded = !notesExpanded }) {
-            Text(stringResource(if (notesExpanded) R.string.prompt_notes_hide else R.string.prompt_notes_show))
-        }
-        if (notesExpanded) Small(notes)
-    }
-    if (!editing) Text(current, style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace))
     if (resetting) AlertDialog(onDismissRequest = { resetting = false },
         title = { Text(stringResource(R.string.reset)) },
         confirmButton = { Primary(R.string.reset) {
@@ -456,41 +450,7 @@ internal fun lineChanges(before: String, after: String): Pair<List<String>, List
 private fun promptBody(text: String) = text.replaceFirst(Regex("""^(?:\s*<!--.*?-->)+""", RegexOption.DOT_MATCHES_ALL), "").trim()
 private val promptComments = Regex("""<!--.*?-->""", RegexOption.DOT_MATCHES_ALL)
 private fun visiblePromptBody(text: String) = text.replace(promptComments, "").trim()
-private fun promptHash(text: String) = promptBody(text).toByteArray().sha256()
-
-@Composable internal fun ReadOnlySources() {
-    Small(R.string.read_only)
-    Small(R.string.sources_defaults)
-    val sourceConfig = remember { runCatching { ConfigLoader.loadDefault() }.getOrNull() }
-    if (sourceConfig == null) Small(R.string.error)
-    else sourceConfig.sources.forEach { source ->
-        val name = when (source.sourceId) {
-            "hn" -> R.string.source_hn
-            "github" -> R.string.source_github
-            "github-issues" -> R.string.source_issues
-            "hf" -> R.string.source_hf
-            "reddit" -> R.string.source_reddit
-            "ph" -> R.string.source_ph
-            else -> R.string.source_rss
-        }
-        Panel {
-            Text(stringResource(name), style = MaterialTheme.typography.titleMedium)
-            Small(if (source.enabled) R.string.enabled else R.string.disabled)
-            Small(R.string.source_values, source.window().toHours(), source.minRawScore, source.maxItems)
-        }
-    }
-}
-
-@Composable internal fun ReadOnlyCriteria(data: ScreenState) {
-    Small(R.string.read_only)
-    Text(data.prompt("criteria"))
-    val defaults = PipelineConfig.defaults
-    Panel {
-        Text(stringResource(R.string.card_defaults), style = MaterialTheme.typography.titleMedium)
-        Small(R.string.card_defaults_values, defaults.ideaCount, defaults.maxCardsPerCategory,
-            defaults.maxCandidatesPerTag, defaults.feedbackExamples)
-    }
-}
+internal fun promptHash(text: String) = promptBody(text).toByteArray().sha256()
 
 @Composable internal fun About() {
     val context = LocalContext.current

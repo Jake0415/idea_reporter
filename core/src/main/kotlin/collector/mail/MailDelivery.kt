@@ -51,7 +51,8 @@ internal class MailDelivery(
     private val onIssue: (MailKind?, String?, String) -> Unit = { _, _, _ -> },
     private val publish: ((Attempt?) -> Boolean)? = null,
     private val beforeSend: () -> Unit = {},
-    private val beforeTransport: () -> Unit = {}
+    private val beforeTransport: () -> Unit = {},
+    private val mailEnabled: () -> Boolean = { true }
 ) {
     @Serializable
     internal data class Attempt(
@@ -79,6 +80,17 @@ internal class MailDelivery(
     private fun readHistory(): List<Attempt> =
         if (journal.exists()) outputJson.decodeFromString<List<Attempt>>(journal.readText()) else emptyList()
 
+    fun previousFailureCount(today: LocalDate): Int =
+        readHistory().groupBy { it.kind to it.key }.values.count { entries ->
+            val latest = entries.last()
+            latest.kind in setOf(MailKind.DAILY.label, MailKind.TREND.label) &&
+                latest.key != today.toString() &&
+                Instant.parse(entries.first().firstFailureAt ?: entries.first().at).atZone(clock.zone)
+                    .toLocalDate() in today.minusDays(3)..today && entries.none { it.result == "sent" } &&
+                (latest.result == "unknown" || latest.result == "failed" &&
+                    latest.issue !in setOf(PUBLICATION_PENDING, LEGACY_PUBLICATION_PENDING, "메일 발송 대기"))
+        }
+
     fun failureReason(key: String): String {
         val issues = readHistory().filter { it.key == key }.groupBy { it.kind }.values
             .map { it.last().issue }
@@ -101,6 +113,7 @@ internal class MailDelivery(
     }
 
     fun defer(kind: MailKind, key: String, reason: String = "메일 단계 시작 시간 부족") {
+        if (!mailEnabled()) return
         kind.validateKey(key)
         val history = attempts()
         if (history.any { it.kind == kind.label && it.key == key && it.result in setOf("sent", "unknown", "failed") }) return
@@ -108,6 +121,7 @@ internal class MailDelivery(
     }
 
     fun send(kind: MailKind, key: String, resend: Boolean = false): MailSendResult {
+        if (!mailEnabled()) return MailSendResult.SKIPPED_DUPLICATE
         kind.validateKey(key)
         val transport = mailer ?: run {
             unavailable()
@@ -154,6 +168,7 @@ internal class MailDelivery(
             } else MailSendResult.RECORD_FAILED
         }
         beforeSend()
+        if (!mailEnabled()) return MailSendResult.SKIPPED_DUPLICATE
         try {
             save(history + attempt)
         } catch (e: Exception) {
@@ -174,6 +189,11 @@ internal class MailDelivery(
                 publishOutcome(kind, key)
             }
             throw e
+        }
+        if (!mailEnabled()) {
+            save(history)
+            publishJournal(null)
+            return MailSendResult.SKIPPED_DUPLICATE
         }
         val result = try {
             transport.send(message)
@@ -239,7 +259,7 @@ internal class MailDelivery(
                 if (date < today.minusDays(3) && onExpired != null) {
                     expired += entries.last().copy(at = clock.instant().toString(), result = "expired", issue = "메일 재시도 기간 만료")
                 }
-                if (mailer != null && date in today.minusDays(3)..today && eligible(kind, firstFailure.key)) {
+                if (mailer != null && mailEnabled() && date in today.minusDays(3)..today && eligible(kind, firstFailure.key)) {
                     kind to firstFailure.key
                 } else null
             }.toSet()

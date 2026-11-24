@@ -44,6 +44,8 @@ class ModelCatalog(private val prices: List<ModelPrice>) {
     fun defaultModel(provider: ProviderId, tier: ModelTier): StageModel? =
         prices.firstOrNull { it.provider == provider && it.tier == tier }?.let { StageModel(provider, it.model) }
 
+    fun supports(provider: ProviderId, model: String): Boolean = runCatching { requirePrice(provider, model) }.isSuccess
+
     internal fun requirePrice(provider: ProviderId, model: String): ModelPrice =
         find(provider, model) ?: throw LlmConfigException(model)
 

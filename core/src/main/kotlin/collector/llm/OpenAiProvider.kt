@@ -20,12 +20,14 @@ class OpenAiProvider(
 
     override fun close() = client.close()
 
-    override suspend fun listModels(): List<ModelInfo> = sdk {
+    override suspend fun listModels(): List<ModelInfo> = listModels(firstPageOnly = false)
+
+    suspend fun listModels(firstPageOnly: Boolean): List<ModelInfo> = sdk {
         buildList {
             var page = client.models().list().await()
             while (true) {
                 addAll(page.items().map { ModelInfo(it.id()) })
-                if (!page.hasNextPage()) break
+                if (firstPageOnly || !page.hasNextPage()) break
                 page = page.nextPage().await()
             }
         }

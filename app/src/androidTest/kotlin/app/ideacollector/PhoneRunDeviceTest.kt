@@ -62,11 +62,23 @@ class DeniedRunWorker(context: android.content.Context, params: androidx.work.Wo
 class PhoneRunDeviceTest {
     private val app get() = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as CollectorApp
 
+    private var onboardingBefore: Boolean? = null
+
     @org.junit.Before fun allowNotifications() {
+        val prefs = app.getSharedPreferences("first-run", 0)
+        onboardingBefore = prefs.all["finished"] as? Boolean
+        prefs.edit().putBoolean("finished", true).commit()
         if (android.os.Build.VERSION.SDK_INT >= 33) {
             InstrumentationRegistry.getInstrumentation().uiAutomation.grantRuntimePermission(
                 app.packageName, android.Manifest.permission.POST_NOTIFICATIONS)
         }
+    }
+
+    @org.junit.After fun restoreOnboarding() {
+        val edit = app.getSharedPreferences("first-run", 0).edit()
+        val previous = onboardingBefore
+        if (previous == null) edit.remove("finished") else edit.putBoolean("finished", previous)
+        edit.commit()
     }
 
     @Test fun serviceRunsOneFakePipelineAndRefreshesRoom() = runBlocking {
@@ -174,14 +186,16 @@ class PhoneRunDeviceTest {
             .setInputData(androidx.work.workDataOf("date" to date.toString(), "batch" to batch)).build()
         try {
             prefs.edit().putBoolean(key, true).commit()
-            CollectorRunService.running.value = true
-            assertEquals(ListenableWorker.Result.retry(), worker(false).doWork())
-            CollectorRunService.running.value = false
+            app.operationRunning.value = true
+            val pending = app.schedule.pendingReservation()
+            assertEquals(ListenableWorker.Result.success(), worker(false).doWork())
+            assertEquals(pending, app.schedule.pendingReservation())
+            app.operationRunning.value = false
             assertEquals(ListenableWorker.Result.success(), worker(false).doWork())
             assertEquals(ListenableWorker.Result.success(), worker(true).doWork())
         } finally {
             prefs.edit().putBoolean(key, previous).commit()
-            CollectorRunService.running.value = false
+            app.operationRunning.value = false
             app.runtimeOverride = null
         }
     }
@@ -272,12 +286,11 @@ class PhoneRunDeviceTest {
             withTimeout(10_000) { while (CollectorRunService.running.value) delay(25) }
             prefs.edit().remove("success-$date").commit()
 
-            // The active run can release before the service saves the reservation.
-            CollectorRunService.running.value = true
-            assertFalse(CollectorRunService.running.compareAndSet(expect = false, update = true))
-            CollectorRunService.running.value = false
-            app.schedule.releaseReservation()
-            app.schedule.holdReservation(date)
+            // Mail and prompt trials hold reservations even without a daily service.
+            app.operationRunning.value = true
+            app.schedule.dispatch(date) { error("The shared operation must hold this reservation") }
+            assertEquals(date, app.schedule.pendingReservation())
+            app.finishOperation()
             assertNull(app.schedule.pendingReservation())
             assertTrue(work.getWorkInfosForUniqueWork(name).get(10, TimeUnit.SECONDS).any { it.id !in workIds })
         } finally {

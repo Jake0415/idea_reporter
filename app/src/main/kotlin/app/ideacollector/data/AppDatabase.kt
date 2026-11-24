@@ -54,8 +54,10 @@ data class PendingLocalChange(@PrimaryKey(autoGenerate = true) val id: Long = 0,
 @Dao
 interface AppDao {
     @Insert suspend fun enqueueLocalChange(change: PendingLocalChange)
+    @Query("SELECT * FROM pending_local_changes WHERE failed = 0 ORDER BY id") fun observeQueuedChanges(): Flow<List<PendingLocalChange>>
     @Query("SELECT * FROM pending_local_changes WHERE failed = 0 ORDER BY id") suspend fun localChanges(): List<PendingLocalChange>
     @Query("UPDATE pending_local_changes SET failed = 1 WHERE id = :id") suspend fun failLocalChange(id: Long)
+    @Query("UPDATE pending_local_changes SET failed = 0 WHERE id = :id") suspend fun retryLocalChange(id: Long)
     @Query("SELECT * FROM pending_local_changes WHERE failed = 1 ORDER BY id")
     fun observeFailedLocalChanges(): Flow<List<PendingLocalChange>>
     @Query("DELETE FROM pending_local_changes WHERE id = :id") suspend fun removeLocalChange(id: Long)
@@ -84,6 +86,7 @@ interface AppDao {
     @Query("DELETE FROM artifacts WHERE repository = :repo AND path = :path")
     suspend fun deleteArtifact(repo: String, path: String)
 
+    @Query("SELECT EXISTS(SELECT 1 FROM cards WHERE repository = :repo)") suspend fun hasCards(repo: String): Boolean
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun saveCards(cards: List<CardRow>)
     @Insert suspend fun indexCards(cards: List<CardSearch>)
     @Query("DELETE FROM cards WHERE repository = :repo AND path = :path")

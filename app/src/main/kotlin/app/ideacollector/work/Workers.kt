@@ -88,10 +88,10 @@ internal class RunScheduler(private val app: CollectorApp) {
 
     suspend fun finishScheduleUpdate(force: Boolean = false) = scheduleUpdates.withLock {
         if (force) markScheduleUpdatePending()
-        if (!hasPendingUpdate() || CollectorRunService.running.value) return@withLock
+        if (!hasPendingUpdate() || app.operationRunning.value) return@withLock
         try {
             app.runtime().withRunLock {
-                if (CollectorRunService.running.value) return@withRunLock
+                if (app.operationRunning.value) return@withRunLock
                 register(update = true, keepRunning = true)
                 preferences.edit().remove("schedule-update-pending").commit()
             }
@@ -132,6 +132,17 @@ internal class RunScheduler(private val app: CollectorApp) {
         preferences.edit().putBoolean("batch-expired-$date", true).commit()
     }
 
+    fun failed(date: LocalDate) = preferences.contains("failure-$date")
+
+    fun unpublishedBatchDates() = preferences.all.keys.mapNotNull { key ->
+        val date = when {
+            key.startsWith("batch-unpublished-notified-") -> key.removePrefix("batch-unpublished-notified-")
+            key.startsWith("batch-expired-") -> key.removePrefix("batch-expired-")
+            else -> return@mapNotNull null
+        }
+        runCatching { LocalDate.parse(date) }.getOrNull()
+    }.distinct().filterNot(::recorded).sortedDescending()
+
     fun paidFailure(date: LocalDate) =preferences.getString("failure-$date", null) == "paid"
 
     fun blockPaidRetry(date: LocalDate) {
@@ -151,12 +162,20 @@ internal class RunScheduler(private val app: CollectorApp) {
         if (!cancelled(date)) preferences.edit().putBoolean("system-cancelled-$date", true).commit()
     }
 
+    fun wasSystemCancelled(date: LocalDate) = preferences.getBoolean("system-cancelled-$date", false)
+
     fun cancelled(date: LocalDate) = preferences.getBoolean("cancelled-$date", false)
 
-    fun mayRetry(date: LocalDate) = !cancelled(date) && !paidFailure(date) && !preferences.getBoolean("paid-retry-block-$date", false)
+    fun mayRetryPaid(date: LocalDate) =
+        !paidFailure(date) && !preferences.getBoolean("paid-retry-block-$date", false)
+
+    fun mayRetry(date: LocalDate) = !cancelled(date) && mayRetryPaid(date)
+
+    suspend fun hasBatchContinuation(date: LocalDate) =
+        work.getWorkInfosForUniqueWorkFlow("phone-batch-$date").first().any { !it.state.isFinished }
 
     suspend fun canRunNew(date: LocalDate): Boolean {
-        if (!enabled() || recorded(date) || cancelled(date)) return false
+        if (!app.migrateFirstRun() || !enabled() || recorded(date) || cancelled(date)) return false
         if (!mayRetry(date)) {
             notifyRetryBlocked(date)
             return false
@@ -200,7 +219,7 @@ internal class RunScheduler(private val app: CollectorApp) {
 
     suspend fun eligible(date: LocalDate, resume: Boolean, manual: Boolean = false): Boolean {
         if ((!manual && !enabled()) || cancelled(date)) return false
-        if (resume) return !recorded(date) && app.runtime().hasBatchToResume(date)
+        if (resume) return (manual || app.migrateFirstRun()) && !recorded(date) && app.runtime().hasBatchToResume(date)
         return validRunDate(ZonedDateTime.now(), date) && canRunNew(date)
     }
 
@@ -217,10 +236,14 @@ internal class RunScheduler(private val app: CollectorApp) {
 
     suspend fun releaseReservation() {
         reservationRelease.withLock {
-            if (CollectorRunService.running.value) return
+            if (app.operationRunning.value) return
             val date = pendingReservation() ?: return
-            if (!validRunDate(ZonedDateTime.now(), date)) notifyMissed(date)
-            else if (enabled() && !recorded(date) && !cancelled(date)) enqueueDeferred(date, false)
+            if (app.migrateFirstRun() && enabled() && !recorded(date) && !cancelled(date)) {
+                val now = ZonedDateTime.now()
+                val backup = !validRunDate(now, date)
+                if (backup && !validBackupRunDate(now, date, options().time)) notifyMissed(date)
+                else enqueueDeferred(date, backup, ExistingWorkPolicy.APPEND_OR_REPLACE)
+            }
             synchronized(this) {
                 if (pendingReservation() == date) preferences.edit().remove("pending-reservation").commit()
             }
@@ -270,7 +293,7 @@ internal class RunScheduler(private val app: CollectorApp) {
             alarms.cancel(alarm)
             // 실행 중(서비스·워커 공용 플래그)이면 예비 작업을 지금 취소하지 않고, 실행이 끝난 뒤 finishRun에서 반영한다.
             if (keepRunning) return
-            if (CollectorRunService.running.value) {
+            if (app.operationRunning.value) {
                 markScheduleUpdatePending()
                 return
             }
@@ -300,13 +323,14 @@ internal class RunScheduler(private val app: CollectorApp) {
     suspend fun dispatch(date: LocalDate, startService: () -> Boolean = {
         exact() && CollectorRunService.startDaily(app, date)
     }) {
+        if (!app.migrateFirstRun()) return
         val now = ZonedDateTime.now()
         if (!validRunDate(now, date)) {
             notifyMissed(date)
             return
         }
         if (!enabled() || recorded(date)) return
-        if (CollectorRunService.running.value) {
+        if (app.operationRunning.value) {
             holdReservation(date)
             return
         }
@@ -316,9 +340,9 @@ internal class RunScheduler(private val app: CollectorApp) {
         }
     }
 
-    suspend fun enqueueDeferred(date: LocalDate, fromBackup: Boolean) {
+    suspend fun enqueueDeferred(date: LocalDate, fromBackup: Boolean, policy: ExistingWorkPolicy = ExistingWorkPolicy.KEEP) {
         val name = if (fromBackup) "phone-backup-conditions-$date" else "phone-conditions-$date"
-        work.enqueueUniqueWork(name, ExistingWorkPolicy.KEEP,
+        work.enqueueUniqueWork(name, policy,
             OneTimeWorkRequestBuilder<DeferredRunWorker>()
                 .setInputData(workDataOf("date" to date.toString(), "backup" to fromBackup))
                 .setBackoffCriteria(BackoffPolicy.LINEAR, 30, TimeUnit.MINUTES)
@@ -349,7 +373,8 @@ internal class RunScheduler(private val app: CollectorApp) {
             app.runtime().hasTerminalDailyRecord(date)) return
         if (batchExpired && !app.runtime().hasBatchToResume(date)) return
         try {
-            if (enabled()) continueBatch(date, 0, manual = false, policy = ExistingWorkPolicy.KEEP)
+            val firstRun = app.firstRunDate() == date && !app.firstRunFinished()
+            if (enabled() || firstRun) continueBatch(date, 0, manual = firstRun, policy = ExistingWorkPolicy.KEEP)
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
@@ -409,7 +434,15 @@ abstract class AutomaticRunWorker(context: Context, params: WorkerParameters) : 
     protected suspend fun execute(date: LocalDate, resume: Boolean = false, deferrals: Int = 0,
         fromBackup: Boolean = false, manual: Boolean = false): Result {
         val scheduler = app.schedule
-        if (!CollectorRunService.running.compareAndSet(expect = false, update = true)) return Result.retry()
+        if (!(resume && manual) && !app.migrateFirstRun()) return Result.success()
+        if (!app.operationRunning.compareAndSet(expect = false, update = true)) {
+            if (resume) return Result.retry()
+            if (scheduler.enabled() && !scheduler.recorded(date) && !scheduler.cancelled(date)) {
+                scheduler.holdReservation(date)
+            }
+            return Result.success()
+        }
+        CollectorRunService.running.value = true
         var started = false
         var chargedAttempt = false
         return try {
@@ -422,7 +455,7 @@ abstract class AutomaticRunWorker(context: Context, params: WorkerParameters) : 
                 scheduler.canRunNew(date)
             } else scheduler.eligible(date, resume, manual)
             if (!eligible) return Result.success()
-            if (!app.canRunDaily()) {
+            if (!resume && !app.canRunDaily()) {
                 RunNotifications.result(app, R.string.run_missing_key)
                 return Result.failure()
             }
@@ -497,10 +530,7 @@ abstract class AutomaticRunWorker(context: Context, params: WorkerParameters) : 
             CancelRunWorkerReceiver.active.value = null
             CollectorRunService.running.value = false
             withContext(NonCancellable) {
-                if (started) app.finishRun() else {
-                    runCatching { scheduler.finishScheduleUpdate() }
-                    runCatching { scheduler.releaseReservation() }
-                }
+                app.finishOperation()
             }
         }
     }
@@ -534,7 +564,7 @@ class BackupRunWorker(context: Context, params: WorkerParameters) : AutomaticRun
         val scheduler = app.schedule
         scheduler.clearBatteryExemptionIfGranted()
         scheduler.register()
-        if (CollectorRunService.running.value) return Result.retry()
+        if (!app.migrateFirstRun()) return Result.success()
         val now = ZonedDateTime.now()
         val options = scheduler.options()
         val date = backupRunDate(now, options.time)
@@ -557,6 +587,8 @@ class DeferredRunWorker(context: Context, params: WorkerParameters) : AutomaticR
         val date = inputData.getString("date")?.let(LocalDate::parse) ?: return Result.failure()
         if (app.schedule.cancelled(date)) return Result.success()
         val resume = inputData.getBoolean("batch", false)
+        val manual = inputData.getBoolean("manual", false)
+        if (!(resume && manual) && !app.migrateFirstRun()) return Result.success()
         val backup = inputData.getBoolean("backup", false)
         val now = ZonedDateTime.now()
         val options = app.schedule.options()
@@ -566,6 +598,6 @@ class DeferredRunWorker(context: Context, params: WorkerParameters) : AutomaticR
         }
         if (!app.schedule.conditionsMet(options)) return Result.retry()
         return execute(date, resume, inputData.getInt("deferrals", 0), fromBackup = backup,
-            manual = inputData.getBoolean("manual", false))
+            manual = manual)
     }
 }

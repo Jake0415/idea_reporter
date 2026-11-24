@@ -37,6 +37,54 @@ class ScheduledMailTest {
         assertEquals(json, dir.resolve("$id.json").readText())
     }
 
+    @Test fun `disabled mail is not retried after re-enabling`() = runTest {
+        val clock = Clock.fixed(Instant.parse("2026-11-19T22:00:00Z"), zone)
+        val date = java.time.LocalDate.now(clock)
+        var sent = 0
+        val mailer = Mailer { sent++ }
+        runScheduled(out, secrets, clock, daily = { _, _ ->
+            report("", date.toString(), "fixture")
+            true
+        }, noMail = true, runDate = date)
+        assertFalse(out.resolve("mail/scheduled.json").exists())
+        assertFalse(out.resolve("mail/sent.json").exists())
+        runScheduled(out, secrets, Clock.offset(clock, java.time.Duration.ofDays(1)),
+            daily = { _, _ -> false }, mailer = mailer)
+        assertEquals(0, sent)
+    }
+
+    @Test fun `mail disabled during collection never enters the delivery queue`() = runTest {
+        val clock = Clock.fixed(Instant.parse("2026-11-19T22:00:00Z"), zone)
+        val date = java.time.LocalDate.now(clock)
+        var enabled = true
+        var sent = 0
+        val mailer = Mailer { sent++ }
+        runScheduled(out, secrets, clock, daily = { _, _ ->
+            report("", date.toString(), "fixture")
+            enabled = false
+            true
+        }, mailer = mailer, runDate = date, mailEnabled = { enabled })
+        assertFalse(out.resolve("mail/sent.json").exists())
+        enabled = true
+        runScheduled(out, secrets, Clock.offset(clock, java.time.Duration.ofDays(1)),
+            daily = { _, _ -> false }, mailer = mailer, mailEnabled = { enabled })
+        assertEquals(0, sent)
+    }
+
+    @Test fun `mail disabled at transport does not leave a failed send`() {
+        val clock = Clock.fixed(Instant.parse("2026-11-19T22:00:00Z"), zone)
+        val key = "2026-11-20"
+        report("", key, "fixture")
+        var enabled = true
+        var sent = 0
+        val delivery = collector.mail.MailDelivery(out, Mailer { sent++ }, clock = clock,
+            beforeTransport = { enabled = false }, mailEnabled = { enabled })
+        delivery.send(collector.mail.MailKind.DAILY, key)
+        enabled = true
+        assertTrue(delivery.retry().isEmpty())
+        assertEquals(0, sent)
+    }
+
     @Test fun `weekday sends daily once and prunes old dated logs`() = runTest {
         val clock = Clock.fixed(Instant.parse("2026-11-19T22:00:00Z"), zone)
         val sent = mutableListOf<String>()

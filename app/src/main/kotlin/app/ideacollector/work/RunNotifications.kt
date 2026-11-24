@@ -12,6 +12,12 @@ import app.ideacollector.R
 import collector.runtime.RunStage
 
 internal object RunNotifications {
+    val currentStage = kotlinx.coroutines.flow.MutableStateFlow(R.string.run_collecting)
+    val previousFailures = kotlinx.coroutines.flow.MutableStateFlow(0)
+    fun restorePreviousFailures(context: Context) {
+        previousFailures.value = context.getSharedPreferences("run-mail-results", 0).getInt("previous-failures", 0)
+    }
+
     fun dailyMessage(context: android.content.Context, summary: collector.runtime.ScheduledSummary,
         tracking: Int): String {
         val message = when (summary.mailStatus) {
@@ -33,7 +39,13 @@ internal object RunNotifications {
         val failures = summary.previousMailRetries.filterKeys {
             it != collector.mail.MailSendResult.SENT && it != collector.mail.MailSendResult.SKIPPED_DUPLICATE
         }.values.sum()
+
         return failures.takeIf { it > 0 }?.let { context.getString(R.string.run_previous_mail_failed, it) }
+    }
+
+    fun updatePreviousFailures(context: Context, count: Int) {
+        context.getSharedPreferences("run-mail-results", 0).edit().putInt("previous-failures", count).apply()
+        previousFailures.value = count
     }
 
     fun dailyResult(context: android.content.Context, summary: collector.runtime.ScheduledSummary, tracking: Int) {
@@ -71,15 +83,16 @@ internal object RunNotifications {
             RunStage.GENERATE -> R.string.run_writing
             RunStage.MAIL -> R.string.run_mailing
         }
+        currentStage.value = label
         manager(context).notify(id, progress(context, context.getString(label), cancel))
     }
 
     fun result(context: Context, message: Int) =
         result(context, context.getString(message), false)
 
-    fun result(context: Context, message: String, successful: Boolean) {
+    fun result(context: Context, message: String, successful: Boolean, destination: String? = null) {
         channel(context)
-        manager(context).notify(RESULT, notification(context, message, if (successful) "today" else "runs").build())
+        manager(context).notify(RESULT, notification(context, message, destination ?: if (successful) "today" else "runs").build())
     }
 
     fun unpublishedBatch(context: Context, date: java.time.LocalDate) {

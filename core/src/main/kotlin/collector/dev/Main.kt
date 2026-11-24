@@ -180,7 +180,7 @@ internal suspend fun runMain(
             require(args.size == 1 || noMail)
             val status = try {
                 runtime.runScheduled(
-                    ScheduledOptions(mail = !noMail, deadline = cliDeadline()),
+                    ScheduledOptions(mail = !noMail, deadline = cliDeadline(), deferMailDelivery = noMail),
                     dailySources?.first, processStartedAt ?: scheduledClock.instant(), deadlineClock
                 ).exitCode
             } catch (e: RunLockedException) {

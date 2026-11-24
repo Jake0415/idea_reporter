@@ -61,7 +61,7 @@ data class PipelineConfig(
     companion object {
         internal val LOCAL_PATH: String get() = CollectorPaths.workingDirectory().pipelineConfig.invariantSeparatorsPath
 
-        internal fun load(file: File): PipelineConfig =
+        fun load(file: File): PipelineConfig =
             if (file.isFile) Json.decodeFromString(merge(defaultJson, Json.parseToJsonElement(file.readText()).jsonObject).toString())
             else defaults
 

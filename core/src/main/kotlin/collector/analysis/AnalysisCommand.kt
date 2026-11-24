@@ -41,7 +41,10 @@ internal class AnalysisCommand(
     private val sendMail: (String) -> Unit = {},
     private val beforePaidRun: () -> Unit = {},
     private val runLock: RunLock? = null,
-    private val onEstimate: (AnalysisEstimate) -> Unit = {}
+    private val onEstimate: (AnalysisEstimate) -> Unit = {},
+    private val approvedReservation: Double? = null,
+    private val approvalBudgetVersion: String? = null,
+    private val onFailure: (String, Boolean) -> Unit = { _, _ -> }
 ) {
     private val reports = AnalysisReports(out.resolve("analysis"))
     private fun settings() = settingsOverride ?: BudgetSettings.load(out, print)
@@ -114,6 +117,12 @@ internal class AnalysisCommand(
         themes: List<String>, requestedDate: LocalDate?, yes: Boolean, force: Boolean, budgetOverride: Double?, fitNumber: Int?
     ): Boolean {
         val settings = settings()
+        val budgetVersion = PromptResolver.hash(settings.toString())
+        fun requote(): Boolean {
+            onFailure("", true)
+            return false
+        }
+        if (approvalBudgetVersion != null && approvalBudgetVersion != budgetVersion) return requote()
         val requestBudget = budgetOverride ?: settings.analysisRequestUsd
         val monthly = MonthlyBudget(out, settings)
         val trendDir = out.resolve("trend")
@@ -178,13 +187,15 @@ internal class AnalysisCommand(
         val today = LocalDate.now(runClock)
         val spent = monthly.analysisSpend(today)
         val analysisRemaining = monthly.analysisRemaining(today, spent)
-        if (fitNumber == null && baseline != null && reuse(baseline)) {
-            onEstimate(AnalysisEstimate(0.0, 0.0, true))
-            return true
-        }
         val totalRemaining = monthly.remaining(today) ?: Double.POSITIVE_INFINITY
         val available = minOf(requestBudget, analysisRemaining, totalRemaining)
         val reservable = available * RESERVABLE_BUDGET_FRACTION
+        if (yes && approvedReservation != null && (!approvedReservation.isFinite() ||
+                approvedReservation > reservable)) return requote()
+        if (fitNumber == null && baseline != null && reuse(baseline)) {
+            onEstimate(AnalysisEstimate(0.0, 0.0, true, budgetVersion))
+            return true
+        }
         if (baseline != null) {
             print("분석 비용 추정 · ${usd(baseline.estimate)} · 최대 출력 기준 예약 ${usd(baseline.reserve)} · 요청 상한 ${usd(requestBudget)}")
         }
@@ -196,7 +207,7 @@ internal class AnalysisCommand(
             print("분석 실행 불가 · $limits · 남은 예산 ${usd(available)} · " +
                 "월 초기화일 ${nextBudgetMonth(today)} · --set-budget key=value")
         }
-        onEstimate(AnalysisEstimate(baseline?.estimate, baseline?.reserve, false))
+        onEstimate(AnalysisEstimate(baseline?.estimate, baseline?.reserve, false, budgetVersion))
         val selected = if (baseline != null && baseline.reserve <= reservable && fitNumber == null) baseline else {
             val options = buildList {
                 var previousReserve = baseline?.reserve ?: Double.POSITIVE_INFINITY
@@ -212,14 +223,14 @@ internal class AnalysisCommand(
                 requireNotNull(options.find { it.fit.step == number }) { "존재하지 않는 맞춤안입니다." }
             }
             if (requested != null && reuse(requested)) {
-                onEstimate(AnalysisEstimate(0.0, 0.0, true))
+                onEstimate(AnalysisEstimate(0.0, 0.0, true, budgetVersion))
                 return true
             }
             if (available <= 0 || (settings.overBudget == OverBudget.STOP &&
                     (baseline == null || baseline.reserve > reservable))) {
                 monthly.analysisBlockReason(today)?.let(print)
                 reject()
-                return !yes
+                return if (yes && approvedReservation != null) requote() else !yes
             }
             options.forEach {
                 print("맞춤안 ${it.fit.step} · ${it.fit.description()} · 예약 ${usd(it.reserve)}" +
@@ -232,28 +243,29 @@ internal class AnalysisCommand(
                 else -> null
             }
             if (choice != null && requested == null && reuse(choice)) {
-                onEstimate(AnalysisEstimate(0.0, 0.0, true))
+                onEstimate(AnalysisEstimate(0.0, 0.0, true, budgetVersion))
                 return true
             }
             if (options.none { it.reserve <= reservable } || (choice != null && choice.reserve > reservable)) {
                 reject(choice?.reserve ?: options.lastOrNull()?.reserve ?: baseline?.reserve)
-                return !yes
+                return if (yes && approvedReservation != null) requote() else !yes
             }
             if (choice == null) {
                 print("맞춤안을 선택하려면 --fit <번호> --yes")
-                return !yes
+                return if (yes && approvedReservation != null) requote() else !yes
             }
             print("${choice.fit.display()} · 예약 ${usd(choice.reserve)}")
             choice
         }
         val (fit, input, schema, estimate, reserve) = selected
-        onEstimate(AnalysisEstimate(estimate, reserve, true))
+        onEstimate(AnalysisEstimate(estimate, reserve, true, budgetVersion))
         if (input.reportUrlMismatches > 0) {
             print("근거 URL 불일치 ${input.reportUrlMismatches}건 · 리포트 URL 사용")
         }
         if (!yes) return true
 
         val guard = CostGuard(reservable, clock = runClock, ledger = monthly.analysisLedger, budgetPerRun = true)
+        if (approvedReservation != null && reserve > approvedReservation) return requote()
         val openAi = provider()
         var publicationFailure: Exception? = null
         val response = try {
@@ -298,6 +310,7 @@ internal class AnalysisCommand(
         if (config.mail.analysis && issues.isEmpty() && opportunities.any { it.decision != OpportunityDecision.INVALID }) {
             sendMail(run.id)
         }
+        failure?.let { onFailure(it, false) }
         return failure == null
     }
 

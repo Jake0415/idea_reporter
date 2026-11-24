@@ -276,7 +276,7 @@ class CollectorRuntimeTest {
             server.enqueue(batch("in_progress"))
             val runtime = CollectorRuntime(paths, SecretProvider { null }, clock, listOf(source),
                 { listOf(AnthropicProvider("mock", server.url("/").toString())) })
-            val options = ScheduledOptions(mail = false)
+            val options = ScheduledOptions(mail = false, deferMailDelivery = true)
             val first = launch { runtime.runScheduled(options) }
             withTimeout(10_000) {
                 while (!checkpoint.isFile || "batch_mock" !in checkpoint.readText()) delay(10)

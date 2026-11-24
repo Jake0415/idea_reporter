@@ -55,7 +55,14 @@ class KeystoreSecretProvider internal constructor(
             val resetKey = readLocked(name).first == SecretStatus.NEEDS_REGISTRATION
             secretStorage.registering = true
             try {
-                write(name, value, resetKey)
+                storage.edit { it[stringPreferencesKey(name)] = encrypt(name, value, resetKey) }
+                true
+            } catch (_: GeneralSecurityException) {
+                false
+            } catch (_: ProviderException) {
+                false
+            } catch (_: IOException) {
+                false
             } finally {
                 secretStorage.registering = false
             }
@@ -64,7 +71,15 @@ class KeystoreSecretProvider internal constructor(
         return registered
     }
 
-    private suspend fun write(name: String, value: String, resetKey: Boolean): Boolean = try {
+    internal suspend fun setAll(values: Map<String, String>) = keyAccess.withLock {
+        require(values.values.none { it.isBlank() })
+        val encrypted = values.mapValues { (name, value) ->
+            encrypt(name, value, readLocked(name).first == SecretStatus.NEEDS_REGISTRATION)
+        }
+        storage.edit { prefs -> encrypted.forEach { (name, blob) -> prefs[stringPreferencesKey(name)] = blob } }
+    }
+
+    private fun encrypt(name: String, value: String, resetKey: Boolean): String {
         if (resetKey) store().deleteEntry(alias(name))
         val key = key(name) ?: KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE).run {
             init(KeyGenParameterSpec.Builder(alias(name), KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
@@ -78,14 +93,7 @@ class KeystoreSecretProvider internal constructor(
         cipher.init(Cipher.ENCRYPT_MODE, key)
         val encrypted = cipher.doFinal(value.toByteArray(Charsets.UTF_8))
         val encoder = Base64.getEncoder()
-        storage.edit { it[stringPreferencesKey(name)] = encoder.encodeToString(cipher.iv) + "." + encoder.encodeToString(encrypted) }
-        true
-    } catch (_: GeneralSecurityException) {
-        false
-    } catch (_: ProviderException) {
-        false
-    } catch (_: IOException) {
-        false
+        return encoder.encodeToString(cipher.iv) + "." + encoder.encodeToString(encrypted)
     }
 
     suspend fun clear(name: String) = keyAccess.withLock {
@@ -97,6 +105,9 @@ class KeystoreSecretProvider internal constructor(
     suspend fun last4(name: String): String? = read(name).second?.takeLast(4)
     suspend fun status(name: String): SecretStatus = read(name).first
     internal suspend fun get(name: String): String? = read(name).second
+    internal suspend fun getAll(names: Collection<String>): Map<String, String?> = keyAccess.withLock {
+        names.associateWith { readLocked(it).second }
+    }
 
     private suspend fun read(name: String): Pair<SecretStatus, String?> = keyAccess.withLock {
         readLocked(name)

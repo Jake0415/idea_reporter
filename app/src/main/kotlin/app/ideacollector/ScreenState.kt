@@ -4,6 +4,8 @@ import app.ideacollector.data.Artifact
 import app.ideacollector.data.RequestRow
 import app.ideacollector.data.AppDao
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.async
 import app.ideacollector.github.contractJson
 import collector.data.InboxRequest
 import collector.model.Feedback
@@ -21,6 +23,26 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flowOn
 
 internal class ScreensViewModel(private val dao: AppDao) : ViewModel() {
+    private var quoteKey: List<Any?>? = null
+    private var quoteRequest: kotlinx.coroutines.Deferred<Result<collector.runtime.AnalysisEstimate>>? = null
+
+    suspend fun analysisQuote(app: CollectorApp, date: String, budget: String?, themes: List<String>, revision: Int):
+        Result<collector.runtime.AnalysisEstimate> {
+        val key = listOf(date, budget, themes, revision)
+        if (quoteKey != key) {
+            quoteRequest?.cancel()
+            quoteKey = key
+            quoteRequest = viewModelScope.async {
+                runCatching { app.estimateAnalysis(themes) }.onFailure {
+                    if (it is kotlinx.coroutines.CancellationException) throw it
+                    if (quoteKey === key) quoteKey = null
+                }
+            }
+        }
+        return checkNotNull(quoteRequest).await()
+    }
+
+    val promptTrials = mutableMapOf<String, PromptTrialState>()
     fun observe(repository: String) = combine(dao.observeArtifacts(repository), dao.observeRequests(repository),
         ::ScreenState).flowOn(Dispatchers.Default)
 }
@@ -55,12 +77,24 @@ internal inline fun <reified T> Artifact.decode(): T = contractJson.decodeFromSt
 internal fun RequestRow.payload(): InboxRequest = contractJson.decodeFromString(json)
 internal fun requestId(): String = UUID.randomUUID().toString()
 
+@kotlinx.serialization.Serializable
+internal data class AnalysisResult(val id: String, val createdAt: String, val judgment: String, val actualUsd: Double,
+    val opportunities: List<Opportunity>) {
+    @kotlinx.serialization.Serializable
+    data class Opportunity(val validated: Validated)
+
+    @kotlinx.serialization.Serializable
+    data class Validated(val name: String, val problem: String)
+}
+
 internal class ScreenState(artifacts: List<Artifact>, val requests: List<RequestRow>) {
     private val payloads = requests.associate { it.requestId to runCatching { it.payload() }.getOrNull() }
     fun payload(row: RequestRow) = payloads[row.requestId]
     val daily = artifacts.filter { it.kind == "daily" }.sortedByDescending { it.path }.map { it.decode<PipelineResult>() }
     val cards = daily.flatMap { it.cards }.distinctBy { it.id }
     val latestTrend = artifacts.filter { it.kind == "trend" }.maxByOrNull { it.path }?.decode<collector.trend.TrendReport>()
+    val analyses = artifacts.filter { it.kind == "analysis" && it.path.endsWith(".json") }
+        .mapNotNull { runCatching { it.decode<AnalysisResult>() }.getOrNull() }.sortedByDescending { it.createdAt }
     val tracks = artifacts.firstOrNull { it.kind == "tracking" }?.decode<List<TrackedIdea>>().orEmpty()
     val updates = daily.flatMap { it.trackingUpdates }.distinctBy { it.id }
     val runs = artifacts.filter { it.kind == "run" }.map {

@@ -70,9 +70,10 @@ internal fun sendReportMail(out: File, delivery: MailDelivery, kind: MailKind,
 }
 
 internal fun mailDelivery(out: File, secrets: SecretProvider, publish: ((MailDelivery.Attempt?) -> Boolean)? = null,
-                          mailer: Mailer? = SmtpMailer.from(secrets), clock: Clock = Clock.systemDefaultZone()): MailDelivery {
+                          mailer: Mailer? = SmtpMailer.from(secrets), clock: Clock = Clock.systemDefaultZone(),
+                          mailEnabled: () -> Boolean = { true }): MailDelivery {
     return MailDelivery(out, mailer, (mailer as? SmtpMailer)?.recipientCount ?: 0, clock,
-        onIssue = { kind, key, reason -> recordMailIssue(out, kind, key, reason, ::println) }, publish = publish)
+        onIssue = { kind, key, reason -> recordMailIssue(out, kind, key, reason, ::println) }, publish = publish, mailEnabled = mailEnabled)
 }
 
 private fun recordMailIssue(out: File, kind: MailKind?, key: String?, reason: String, print: (String) -> Unit) {
@@ -128,8 +129,8 @@ internal fun sendScheduledPublication(out: File, secrets: SecretProvider, clock:
     if (recordFailed) throw MailRecordFailure()
 }
 
-internal fun queuePublicationMail(out: File, kind: MailKind, day: LocalDate, clock: Clock) {
-    MailDelivery(out, null, clock = clock).defer(kind, day.toString(), collector.mail.PUBLICATION_PENDING)
+internal fun queuePublicationMail(out: File, kind: MailKind, day: LocalDate, clock: Clock, mailEnabled: () -> Boolean) {
+    MailDelivery(out, null, clock = clock, mailEnabled = mailEnabled).defer(kind, day.toString(), collector.mail.PUBLICATION_PENDING)
 }
 
 private class MailDeadlineReached : RuntimeException("Mail delivery exceeded the execution deadline")
@@ -145,6 +146,8 @@ internal suspend fun runScheduled(
     deadlineMinutes: Int = collector.config.PipelineConfig.defaults.deadlineMinutes,
     deadlineClock: Clock = clock,
     noMail: Boolean = false,
+    deferMailDelivery: Boolean = false,
+    mailEnabled: () -> Boolean = { !noMail },
     runLock: RunLock = FileRunLock,
     onMail: () -> Unit = {},
     propagateLocked: Boolean = false,
@@ -228,9 +231,9 @@ internal suspend fun runScheduled(
             val trendPublished = sunday && stage("트렌드") {
                 if (trend != null) trend(day)
                 else publishTrend(out, day, beforeReplace = { file ->
-                    if (runDate != null && !noMail && file.name == "$day.json") {
+                    if (runDate != null && mailEnabled() && file.name == "$day.json") {
                         try {
-                            queuePublicationMail(out, MailKind.TREND, day, clock)
+                            queuePublicationMail(out, MailKind.TREND, day, clock, mailEnabled)
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Exception) {
@@ -241,7 +244,7 @@ internal suspend fun runScheduled(
             }
             if (sunday) checkDeadline("Trend publication")
             val classificationPending = isPendingBatch(classifyPath)
-            if (noMail) {
+            if (noMail && deferMailDelivery) {
                 val published = buildList {
                     if (dailyPublished && !classificationPending) add(MailKind.DAILY.label)
                     if (trendPublished) add(MailKind.TREND.label)
@@ -262,11 +265,11 @@ internal suspend fun runScheduled(
                     mailStarted = true
                 }
                 ensureTimeToSend()
-            }, beforeTransport = { if (runDate != null) ensureTimeToSend() })
+            }, beforeTransport = { if (runDate != null) ensureTimeToSend() }, mailEnabled = mailEnabled)
             var recordFailed = false
             var retried = emptySet<Pair<MailKind, String>>()
             var missingRetryReport = false
-            if (!noMail) stage("메일 재시도", completion = { if (missingRetryReport) "보고서 없음" else "완료" }) {
+            if (mailEnabled()) stage("메일 재시도", completion = { if (missingRetryReport) "보고서 없음" else "완료" }) {
                 ensureTimeToSend()
                 var retryFailed = false
                 retried = mail.retry(eligible = { kind, id ->
@@ -287,9 +290,9 @@ internal suspend fun runScheduled(
                 }
                 if (retryFailed) throw MailStageFailure()
             }
-            if (!noMail) checkDeadline("Mail retry")
+            if (mailEnabled()) checkDeadline("Mail retry")
             if (classificationPending) log(CLASSIFICATION_BATCH_PENDING)
-            if (noMail) Unit
+            if (!mailEnabled()) Unit
             else if (mailer == null) log("메일 설정 없음")
             else {
                 for (kind in listOf(MailKind.DAILY, MailKind.TREND)) {

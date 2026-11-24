@@ -5,6 +5,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -31,15 +32,18 @@ import kotlinx.coroutines.launch
 
 internal enum class Page(val title: Int) {
     TODAY(R.string.today_title), TRACK(R.string.track), ARCHIVE(R.string.archive), SETTINGS(R.string.settings),
-    CONNECT(R.string.connect), CARD(R.string.card), TRACK_DETAIL(R.string.track_detail), RUNS(R.string.runs),
+    CARD(R.string.card), TRACK_DETAIL(R.string.track_detail), RUNS(R.string.runs),
     RUN_DETAIL(R.string.run_detail), PROMPTS(R.string.prompts), PROMPT_EDIT(R.string.prompt_edit),
-    OPERATE(R.string.operate), SOURCES(R.string.sources), CRITERIA(R.string.criteria), ABOUT(R.string.about)
+    OPERATE(R.string.operate), SOURCES(R.string.sources), CRITERIA(R.string.criteria), ABOUT(R.string.about),
+    SOURCE_DETAIL(R.string.sources), ANALYSIS(R.string.analysis_title), ANALYSIS_RESULT(R.string.r3_analysis_result)
 }
 
 internal data class Route(val page: Page, val id: String = "")
 private val routeStackSaver = listSaver<List<Route>, String>(
     save = { routes -> routes.flatMap { listOf(it.page.name, it.id) } },
-    restore = { items -> items.chunked(2).map { Route(Page.valueOf(it[0]), it[1]) } }
+    restore = { items -> items.chunked(2).map {
+        Route(if (it[0] == "CONNECT") Page.OPERATE else Page.valueOf(it[0]), it[1])
+    } }
 )
 internal const val SAMPLE_REPO = "@sample"
 
@@ -69,6 +73,8 @@ internal fun CollectorScreens(app: CollectorApp, viewModel: ScreensViewModel, de
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var stack by rememberSaveable(stateSaver = routeStackSaver) { mutableStateOf(emptyList<Route>()) }
     var leaveEditor by remember { mutableStateOf<((() -> Unit) -> Unit)?>(null) }
+    var onboarding by remember(app) { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(app) { onboarding = !app.migrateFirstRun() }
     val route = stack.lastOrNull() ?: Route(tabs[tab].page)
     fun go(next: Route) { stack = stack + next }
     fun back() { stack = stack.dropLast(1) }
@@ -89,8 +95,13 @@ internal fun CollectorScreens(app: CollectorApp, viewModel: ScreensViewModel, de
     val syncState by syncFlow.collectAsState(null)
     val scope = rememberCoroutineScope()
     var error by remember(repo) { mutableStateOf<Int?>(null) }
+    var runBlockedReason by remember { mutableStateOf<Int?>(null) }
     var syncing by remember(repo) { mutableStateOf(false) }
     val running by CollectorRunService.running.collectAsState()
+    var canRun by remember { mutableStateOf(false) }
+    LaunchedEffect(route.page, running) {
+        if (route.page == Page.TODAY) canRun = app.runtimeOverride != null || app.hasVerifiedKey()
+    }
     var confirmRun by remember { mutableStateOf(false) }
     var reload by remember { mutableIntStateOf(0) }
 
@@ -127,14 +138,51 @@ internal fun CollectorScreens(app: CollectorApp, viewModel: ScreensViewModel, de
     }
     val open: (Page, String) -> Unit = { page, id -> go(Route(page, id)) }
 
-    Scaffold(topBar = {
-        if (route.page != Page.CONNECT && route.page != Page.PROMPT_EDIT) {
+    if (onboarding == null && !sample) return
+    if (onboarding == true && !sample) {
+        Scaffold { padding ->
+            Column(Modifier.padding(padding).consumeWindowInsets(padding).fillMaxSize()) {
+                error?.let { Notice(stringResource(it), warning = true) }
+                val estimate = state?.daily?.map { it.report.costUsd }?.filter { it > 0 }
+                    ?.takeIf { it.isNotEmpty() }?.average()
+                var showingRuns by rememberSaveable { mutableStateOf(false) }
+                BackHandler(showingRuns) { showingRuns = false }
+                if (showingRuns) {
+                    Secondary(R.string.back) { showingRuns = false }
+                    val data = state
+                    if (data != null) Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp)) {
+                        val detail = stack.lastOrNull()?.takeIf { it.page == Page.RUN_DETAIL }
+                        if (detail == null) Runs(data, open) else RunDetail(data, detail.id)
+                    }
+                } else FirstRunWizard(app, ::operation, estimate, showRuns = { showingRuns = true }) {
+                    tab = 0
+                    stack = emptyList()
+                    onboarding = false
+                }
+            }
+        }
+        return
+    }
+    val operationRunning by app.operationRunning.collectAsState()
+    val pendingLocal by app.pendingLocalChanges.collectAsState(false)
+    val failedLocal by app.failedLocalChanges.collectAsState(emptyList())
+    val snackbar = remember { SnackbarHostState() }
+    val pendingMessage = stringResource(R.string.r3_saved_pending)
+    LaunchedEffect(operationRunning, failedLocal.isNotEmpty()) {
+        if (!operationRunning || failedLocal.isNotEmpty()) {
+            snackbar.currentSnackbarData?.takeIf { it.visuals.message == pendingMessage }?.dismiss()
+        }
+    }
+    Scaffold(snackbarHost = { SnackbarHost(snackbar) }, topBar = {
+        run {
             val backLabel = stringResource(R.string.back)
             val runLabel = stringResource(R.string.run_now)
             TopAppBar(title = {
-                if (route.page != Page.CARD) Text(stringResource(route.page.title))
+                if (route.page != Page.CARD) Text(stringResource(if (route.page == Page.SOURCE_DETAIL)
+                    sourceName(route.id) else route.page.title))
             }, navigationIcon = {
-                if (stack.isNotEmpty()) IconButton(onClick = ::back, modifier = Modifier.size(48.dp)) {
+                if (stack.isNotEmpty()) IconButton(onClick = { leaveEditor?.invoke(::back) ?: back() },
+                    modifier = Modifier.size(48.dp)) {
                     Text("←", modifier = Modifier.clearAndSetSemantics { contentDescription = backLabel })
                 }
             }, actions = {
@@ -144,18 +192,25 @@ internal fun CollectorScreens(app: CollectorApp, viewModel: ScreensViewModel, de
                     if (data != null && card != null) Star(data, card, send)
                 }
                 if (route.page == Page.TODAY) IconButton(
-                    onClick = { confirmRun = true },
-                    enabled = !sample && !running,
+                    onClick = {
+                        val reason = runBlockedReason ?: R.string.r3_key_warning.takeUnless { canRun }
+                        if (reason == null) confirmRun = true
+                        else scope.launch { snackbar.showSnackbar(activity.getString(reason)) }
+                    },
+                    enabled = !sample && !running && !operationRunning,
                     modifier = Modifier.size(48.dp)
                 ) {
-                    if (running) CircularProgressIndicator(Modifier.size(20.dp)
-                        .clearAndSetSemantics { contentDescription = runLabel }, strokeWidth = 2.dp)
-                    else Text("↻", modifier = Modifier.clearAndSetSemantics { contentDescription = runLabel })
+                    Icon(painterResource(R.drawable.ic_refresh),
+                        contentDescription = if (running) stringResource(R.string.r3_running) else runLabel,
+                        tint = when {
+                            running -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                            canRun && runBlockedReason == null -> MaterialTheme.colorScheme.onSurface
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        })
                 }
             })
         }
     }, bottomBar = {
-        if (route.page != Page.CONNECT) {
         NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
             tabs.forEachIndexed { index, item ->
                 val selected = index == tab
@@ -168,67 +223,109 @@ internal fun CollectorScreens(app: CollectorApp, viewModel: ScreensViewModel, de
                     Text(stringResource(item.label), style = MaterialTheme.typography.labelSmall,
                         fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium)
                 }, colors = NavigationBarItemDefaults.colors(
-                    selectedIconColor = MaterialTheme.colorScheme.primary,
+                    selectedIconColor = if (isSystemInDarkTheme()) MaterialTheme.colorScheme.tertiary
+                        else MaterialTheme.colorScheme.primary,
                     unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
                     selectedTextColor = MaterialTheme.colorScheme.onSurface,
                     unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    indicatorColor = MaterialTheme.colorScheme.secondaryContainer
+                    indicatorColor = if (isSystemInDarkTheme()) MaterialTheme.colorScheme.surfaceVariant
+                        else MaterialTheme.colorScheme.secondaryContainer
                 ))
             }
-        }
         }
     }) { padding ->
         PullToRefreshBox(isRefreshing = syncing, onRefresh = {
             if (route.page == Page.TODAY) operation { sync() }
-        }, modifier = Modifier.padding(padding).fillMaxSize()) {
+        }, modifier = Modifier.padding(padding).consumeWindowInsets(padding).fillMaxSize()) {
             key(route.page.name, route.id) {
-                Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+                val scroll = rememberScrollState()
+                val content = if (route.page in setOf(Page.SOURCE_DETAIL, Page.PROMPT_EDIT)) Modifier else Modifier.verticalScroll(scroll)
+                val keyboard = if (route.page in setOf(Page.OPERATE, Page.CRITERIA, Page.PROMPT_EDIT)) {
+                    Modifier.imePadding()
+                } else Modifier
+                Column(Modifier.fillMaxSize().then(keyboard).then(content).padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     error?.let { Notice(stringResource(it), warning = true) }
+                    if (pendingLocal && operationRunning && failedLocal.isEmpty() && route.page in setOf(Page.TODAY, Page.CARD, Page.OPERATE, Page.CRITERIA,
+                        Page.SOURCE_DETAIL, Page.PROMPT_EDIT, Page.TRACK, Page.TRACK_DETAIL)) Small(R.string.r3_pending)
                     val data = state
                     when {
-                        route.page == Page.CONNECT -> Connection(app, ::operation) {
-                            tab = 0
-                            stack = emptyList()
-                        }
                         readError -> Notice(stringResource(R.string.error), warning = true)
                         data == null -> Text(stringResource(R.string.loading))
                         else -> when (route.page) {
                             Page.TODAY -> {
-                                TodayContent(data, syncState, open, send, retry, undo, { tab = 1 }, running) {
-                                    SyncStatusNotice(syncState?.status, { go(Route(Page.OPERATE)) }) { operation { sync() } }
+                                val status = if (sample) null else rememberRunStatus(app, running, current, data)
+                                if (!sample) TodayRunStatus(app, data, status, running, open,
+                                    blocked = { runBlockedReason = it })
+                                val noToday = when {
+                                    status?.next != null -> stringResource(R.string.no_today, scheduleTime(status.next))
+                                    status != null -> stringResource(R.string.no_today_disabled)
+                                    else -> stringResource(R.string.before_sync)
+                                }
+                                TodayContent(data, syncState, open, send, retry, undo, { tab = 1 }, noToday) {
+                                    if (sample) SyncStatusNotice(syncState?.status, { go(Route(Page.OPERATE)) }) { operation { sync() } }
                                 }
                                 if (confirmRun) AlertDialog(onDismissRequest = { confirmRun = false },
                                     title = { Text(stringResource(R.string.confirm_run)) },
                                     confirmButton = { Primary(R.string.run_now) {
                                         confirmRun = false
                                         operation { check(CollectorRunService.startDaily(app)) }
-                                    } }, dismissButton = { Secondary(R.string.cancel) { confirmRun = false } })
+                                    } }, dismissButton = { Secondary(R.string.cancel) { confirmRun = false } },
+                                    text = { Text(stringResource(R.string.r3_run_mail_rule)) })
                             }
                             Page.TRACK -> Tracks(data, open, send, retry)
                             Page.ARCHIVE -> Archive(dao, repo, data, open, send, retry, undo)
                             Page.CARD -> CardDetail(data, route.id, open, send, retry, undo)
                             Page.TRACK_DETAIL -> TrackDetail(data, route.id, open, send, retry)
                             Page.SETTINGS -> {
-                                ListRow(stringResource(R.string.run_keys)) { go(Route(Page.CONNECT)) }
-                                Primary(R.string.local_refresh, !sample && !syncing) { operation { sync() } }
-                                listOf(Page.OPERATE, Page.PROMPTS, Page.SOURCES, Page.CRITERIA, Page.RUNS, Page.ABOUT).forEach {
+                                listOf(Page.OPERATE, Page.PROMPTS, Page.SOURCES, Page.CRITERIA, Page.RUNS, Page.ANALYSIS, Page.ABOUT).forEach {
                                     HorizontalDivider()
                                     ListRow(stringResource(it.title)) { go(Route(it)) }
                                 }
                                 DebugEntry { activity.startActivity(android.content.Intent().setClassName(activity, it)) }
                             }
-                            Page.OPERATE -> Operations(app, current, data, send, retry, ::operation,
-                                syncState?.issue?.lineSequence()?.any { it.startsWith("settings/") } == true)
-                            Page.SOURCES -> ReadOnlySources()
-                            Page.CRITERIA -> ReadOnlyCriteria(data)
-                            Page.RUNS -> Runs(data, open)
+                            Page.OPERATE -> PhoneOperations(app, current, data, ::operation, route.id,
+                                syncState?.issue?.lineSequence()?.any { it.startsWith("settings/") } == true) {
+                                if (operationRunning) scope.launch {
+                                    snackbar.currentSnackbarData?.dismiss()
+                                    if (operationRunning && failedLocal.isEmpty()) snackbar.showSnackbar(pendingMessage)
+                                }
+                            }
+                            Page.SOURCES, Page.SOURCE_DETAIL -> SourceSettings(app, data, route.id, open, ::operation)
+                            Page.CRITERIA -> CriteriaFields(app, ::operation)
+                            Page.RUNS -> {
+                                app.schedule.unpublishedBatchDates().forEach { Small(R.string.run_batch_date_unapplied, it.toString()) }
+                                Runs(data, open)
+                            }
+                            Page.ANALYSIS -> {
+                                val trend = data.latestTrend
+                                if (trend != null && trend.themes.any { it.candidate }) AnalysisControls(app, viewModel, trend, data.file("settings/budget.json"))
+                                else Small(R.string.r3_analysis_empty)
+                                data.analyses.forEach { result ->
+                                    ListRow(runTime(result.createdAt), result.judgment) { open(Page.ANALYSIS_RESULT, result.id) }
+                                }
+                            }
+                            Page.ANALYSIS_RESULT -> {
+                                val result = data.analyses.firstOrNull { it.id == route.id }
+                                if (result == null) Small(R.string.missing)
+                                else {
+                                    Small(R.string.meta_cost, result.actualUsd)
+                                    Text(result.judgment)
+                                    result.opportunities.forEach { opportunity ->
+                                        Panel {
+                                            Text(opportunity.validated.name, style = MaterialTheme.typography.titleMedium)
+                                            Text(opportunity.validated.problem)
+                                        }
+                                    }
+                                }
+                            }
                             Page.RUN_DETAIL -> RunDetail(data, route.id)
                             Page.PROMPTS -> Prompts(data, open, send)
                             Page.PROMPT_EDIT -> PromptEditor(data, route.id, send, retry, ::back,
-                                { request, saved -> operation { enqueue(listOf(request)); saved() } }) { leaveEditor = it }
+                                { request, saved -> operation { enqueue(listOf(request)); saved() } },
+                                trial = if (sample) null else { body -> PromptTrial(app, viewModel, data, route.id, body) }
+                            ) { leaveEditor = it }
                             Page.ABOUT -> About()
-                            Page.CONNECT -> Unit
                         }
                     }
                 }
@@ -259,8 +356,11 @@ internal fun CollectorScreens(app: CollectorApp, viewModel: ScreensViewModel, de
     }
 }
 
-@Composable internal fun Secondary(id: Int, onClick: () -> Unit) {
+@Composable internal fun Secondary(id: Int, onClick: () -> Unit) = Secondary(id, false, onClick)
+
+@Composable internal fun Secondary(id: Int, alignStart: Boolean, onClick: () -> Unit) {
     TextButton(onClick, Modifier.heightIn(min = 48.dp),
+        contentPadding = if (alignStart) PaddingValues(end = 12.dp) else ButtonDefaults.TextButtonContentPadding,
         colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.tertiary)) {
         Text(stringResource(id))
     }

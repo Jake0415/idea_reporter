@@ -80,7 +80,9 @@ data class ScheduledOptions(
     val batchOverrideForRun: (suspend () -> Boolean)? = null,
     val resumeBatch: Boolean = false,
     val onUnpublishedBatch: suspend (LocalDate) -> Unit = {},
-    val onMailRetriesExpired: (Int) -> Unit = {}
+    val onMailRetriesExpired: (Int) -> Unit = {},
+    val deferMailDelivery: Boolean = false,
+    val mailEnabled: () -> Boolean = { mail }
 )
 
 data class DailySummary(
@@ -100,8 +102,10 @@ data class ScheduledSummary(
     val previousMailRetries: Map<MailSendResult, Int> = emptyMap(), val expiredMailRetries: Int = 0
 )
 data class TrendSummary(val date: LocalDate, val subject: String)
-data class AnalysisEstimate(val estimatedUsd: Double?, val reservationUsd: Double?, val canReserve: Boolean)
-data class AnalysisSummary(val successful: Boolean)
+@kotlinx.serialization.Serializable
+data class AnalysisEstimate(val estimatedUsd: Double?, val reservationUsd: Double?, val canReserve: Boolean,
+    val budgetVersion: String? = null)
+data class AnalysisSummary(val successful: Boolean, val requote: Boolean = false, val failure: String? = null)
 
 class CollectorRuntime(
     val paths: CollectorPaths,
@@ -112,6 +116,7 @@ class CollectorRuntime(
     private val mailer: (() -> Mailer?)? = null,
     private val runLock: RunLock = FileRunLock,
     private val batchCheckpointHook: () -> Boolean = { true },
+    private val batchRecoverySecrets: SecretProvider = secrets,
     private val providerFactory: (ProviderId, String) -> LlmProvider = { id, key ->
         when (id) {
             ProviderId.ANTHROPIC -> AnthropicProvider(key)
@@ -166,9 +171,9 @@ class CollectorRuntime(
                         runDate = options.runDate,
                         onUnpublishedBatch = options.onUnpublishedBatch,
                         beforePublish = { day ->
-                            if (options.runDate != null && options.mail) {
+                            if (options.runDate != null && options.mailEnabled()) {
                                 try {
-                                    queuePublicationMail(out, MailKind.DAILY, day, clock)
+                                    queuePublicationMail(out, MailKind.DAILY, day, clock, options.mailEnabled)
                                 } catch (e: CancellationException) {
                                     throw e
                                 } catch (e: Exception) {
@@ -185,7 +190,7 @@ class CollectorRuntime(
                         " · 실패 출처 ${daily.failedSources}개")
                 }
             }, mailer = scheduledMailer, startedAt = startedAt,
-            deadlineClock = deadlineClock, noMail = !options.mail, runLock = runLock, runDate = options.runDate,
+            deadlineClock = deadlineClock, noMail = !options.mail, mailEnabled = options.mailEnabled, deferMailDelivery = options.deferMailDelivery, runLock = runLock, runDate = options.runDate,
             onMail = { options.onStage(RunStage.MAIL) }, propagateLocked = true,
             requireDailyPublication = options.runDate != null,
             beforeRun = {
@@ -202,7 +207,7 @@ class CollectorRuntime(
                 options.onMailRetriesExpired(count)
             }
         )
-        val mailStatus = if (options.mail && options.runDate != null && summary?.published == true) {
+        val mailStatus = if (options.mailEnabled() && options.runDate != null && summary?.published == true) {
             if (scheduledMailer == null) ScheduledMailStatus.FAILED else scheduledMailStatus(options.runDate)
         } else null
         val mailFailureReason = if (mailStatus == ScheduledMailStatus.FAILED) {
@@ -221,7 +226,10 @@ class CollectorRuntime(
         print: (String) -> Unit = ::println,
         sendMail: ((String) -> Unit)? = null,
         beforePaidRun: () -> Unit = {},
-        onEstimate: (AnalysisEstimate) -> Unit = {}
+        onEstimate: (AnalysisEstimate) -> Unit = {},
+        approvedReservation: Double? = null,
+        approvalBudgetVersion: String? = null,
+        onFailure: (String, Boolean) -> Unit = { _, _ -> }
     ) = AnalysisCommand(
         out, AnalysisConfig.load(paths.analysisConfig, PipelineConfig.defaults.analysis),
         PromptResolver(FilePromptStore(paths.promptsDir.toPath())), provider = {
@@ -236,26 +244,38 @@ class CollectorRuntime(
             }
         }, clock = clock, print = print, sendMail = sendMail ?: { id ->
             if (delivery().send(MailKind.ANALYSIS, id) == MailSendResult.RECORD_FAILED) throw MailRecordFailure()
-        }, beforePaidRun = beforePaidRun, runLock = runLock, onEstimate = onEstimate
+        }, beforePaidRun = beforePaidRun, runLock = runLock, onEstimate = onEstimate,
+        approvedReservation = approvedReservation, approvalBudgetVersion = approvalBudgetVersion, onFailure = onFailure
     )
 
     suspend fun estimateAnalysis(themeIds: List<String>): AnalysisEstimate {
         var estimate = AnalysisEstimate(null, null, false)
-        analysisCommand(print = {}, onEstimate = { estimate = it })
-            .run((listOf("--analyze") + themeIds).toTypedArray())
+        check(analysisCommand(print = {}, onEstimate = { estimate = it })
+            .run((listOf("--analyze") + themeIds).toTypedArray()))
         return estimate
     }
 
-    suspend fun runAnalysis(themeIds: List<String>, approvedMaxUsd: Double): AnalysisSummary =
-        AnalysisSummary(analysisCommand(print = {}).run(
-            (listOf("--analyze") + themeIds + listOf("--yes", "--budget", approvedMaxUsd.toString())).toTypedArray()
-        ))
+    suspend fun runAnalysis(themeIds: List<String>, approvedMaxUsd: Double, mail: Boolean = true,
+        budgetVersion: String? = null, mailEnabled: () -> Boolean = { mail }): AnalysisSummary {
+        var requote = false
+        var failure: String? = null
+        val successful = analysisCommand(print = {}, sendMail = { id ->
+            if (mailEnabled() && delivery(mailEnabled).send(MailKind.ANALYSIS, id) == MailSendResult.RECORD_FAILED)
+                throw MailRecordFailure()
+        },
+            approvedReservation = approvedMaxUsd, approvalBudgetVersion = budgetVersion,
+            onFailure = { reason, stale -> requote = stale; failure = reason.takeIf(String::isNotBlank) }).run(
+            (listOf("--analyze") + themeIds + "--yes").toTypedArray()
+        )
+        return AnalysisSummary(successful, requote, failure)
+    }
 
     suspend fun publishTrend(date: LocalDate): TrendSummary = locked {
         TrendSummary(date, collector.trend.publishTrend(out, date))
     }
 
-    private fun delivery() = mailDelivery(out, secrets, mailer = createMailer(), clock = clock)
+    private fun delivery(mailEnabled: () -> Boolean = { true }) =
+        mailDelivery(out, secrets, mailer = createMailer(), clock = clock, mailEnabled = mailEnabled)
 
     internal suspend fun runMailCommand(args: Array<String>) = locked {
         collector.dev.runMailCommand(args, out, secrets, delivery(), clock)
@@ -264,7 +284,70 @@ class CollectorRuntime(
     suspend fun sendMail(kind: MailKind, key: String, resend: Boolean = false): MailSendResult? =
         locked { sendReportMail(out, delivery(), kind, key, resend) }
 
+    fun previousMailFailureCount(date: LocalDate): Int = mailDelivery(out, secrets, mailer = null, clock = clock)
+        .previousFailureCount(date)
+
     suspend fun mailTest(): MailSendResult = locked { delivery().test() }
+
+    suspend fun testSource(config: collector.config.SourceConfig): List<collector.model.Item> {
+        val http = Http.client()
+        val adapter = if (sourceAdapters != null) sourceAdapters.first { it.id == config.sourceId } else when (config.sourceId) {
+            "hn" -> HackerNewsAdapter(http)
+            "github" -> GitHubAdapter(http, secrets)
+            "github-issues" -> GitHubIssuesAdapter(http, secrets, repositoryCache = paths.cacheDir.resolve("github-repos.json"),
+                debugDirectory = paths.debugDir)
+            "hf" -> HuggingFaceAdapter(http)
+            "reddit" -> RedditAdapter(http, secrets)
+            "ph" -> ProductHuntAdapter(http, secrets)
+            "rss" -> RssAdapter(http)
+            else -> error("Unknown source")
+        }
+        return adapter.fetch(config, clock.instant())
+    }
+
+    private fun promptTrial(id: String, body: String, items: List<collector.model.Item>): LlmRequest {
+        collector.prompt.PromptCatalog.requireEntry(id)
+        require(items.size == 5)
+        val schema = kotlinx.serialization.json.Json.parseToJsonElement(
+            """{"type":"object","properties":{"result":{"type":"string"}},"required":["result"],"additionalProperties":false}"""
+        ) as kotlinx.serialization.json.JsonObject
+        val input = items.joinToString("\n\n") { "${it.source}: ${it.title}\n${it.snippet}" }
+        return LlmRequest("", PromptResolver.validate(body), input, schema, "prompt_trial", 1200)
+    }
+
+    private fun trialModel(id: String): StageModel {
+        val models = pipelineConfig().models
+        val preferred = if (id in setOf("ideas", "criteria", "analysis-opportunity")) models.generate else models.classify
+        if (dailyProviders != null || secrets.get("${preferred.provider.name}_API_KEY") != null) return preferred
+        val other = ProviderId.entries.firstOrNull { secrets.get("${it.name}_API_KEY") != null } ?: return preferred
+        val tier = ModelCatalog.defaults.requirePrice(preferred.provider, preferred.model).tier
+        return checkNotNull(ModelCatalog.defaults.defaultModel(other, tier))
+    }
+
+    fun estimatePromptTrial(id: String, body: String, items: List<collector.model.Item>): Double =
+        LlmRouter(emptyList(), CostGuard(0.0)).projectedTokens(promptTrial(id, body, items), trialModel(id))
+
+    suspend fun runPromptTrial(id: String, body: String, items: List<collector.model.Item>, approvedUsd: Double): LlmResult = locked {
+        val request = promptTrial(id, body, items)
+        val model = trialModel(id)
+        val budget = BudgetSettings.load(out) {}
+        val monthly = MonthlyBudget(out, budget)
+        val guard = CostGuard(budget.dailyCardUsd, clock = clock,
+            ledger = costLedger(out, FileHistorySearch(out, pipelineConfig().historyDays)), allowsReservation = monthly::allows)
+        val projection = LlmRouter(emptyList(), guard).projectedTokens(request, model)
+        if (projection > budget.dailyCardUsd - dailyCost(LocalDate.now(clock)) ||
+            !monthly.allows(LocalDate.now(clock), projection)) throw BudgetExceededException()
+        require(projection <= approvedUsd)
+        val providers = dailyProviders?.invoke() ?: listOf(providerFactory(model.provider,
+            secrets.get("${model.provider.name}_API_KEY") ?: throw LlmKeyMissingException(model.provider)))
+        try {
+            val router = LlmRouter(providers, guard, mapOf("test" to model), fallback = false, preflightBudget = true,
+                timeoutMillis = 60_000)
+            router.complete("test", request, id, "trial", allowFallback = false)
+        } finally {
+            providers.forEach { (it as? AutoCloseable)?.close() }
+        }
+    }
 
     suspend fun budgetStatus(): List<String> = locked {
         MonthlyBudget(out, BudgetSettings.load(out)).status(LocalDate.now(clock))
@@ -319,6 +402,13 @@ class CollectorRuntime(
 
     fun dailyCost(date: LocalDate): Double = collector.dev.FileCostLedger(out.resolve("cost-ledger")).total(date)
 
+    fun dailyBudgetExceeded(date: LocalDate): Boolean {
+        val settings = BudgetSettings.load(out) {}
+        val monthly = MonthlyBudget(out, settings)
+        val spend = costLedger(out, FileHistorySearch(out, pipelineConfig().historyDays)).total(date)
+        return spend >= settings.dailyCardUsd || monthly.dailySkipReason(date, settings.dailyCardUsd) != null
+    }
+
     suspend fun applyLocalChanges(changes: List<collector.data.InboxRequest>) = locked {
         LocalEditor().applyChanges(changes)
     }
@@ -326,6 +416,8 @@ class CollectorRuntime(
     suspend fun saveLocalConfig(name: String, json: String) = locked {
         LocalEditor().saveConfig(name, json)
     }
+
+    suspend fun editLocal(change: (LocalEditor) -> Unit) = locked { change(LocalEditor()) }
 
     inner class LocalEditor internal constructor() {
         fun applyChanges(changes: List<collector.data.InboxRequest>) {
@@ -364,7 +456,7 @@ class CollectorRuntime(
     }
 
     private suspend fun <T> withBatchProvider(block: suspend (BatchCapableProvider?) -> T): T {
-        val providers = dailyProviders?.invoke() ?: listOfNotNull(secrets.get("ANTHROPIC_API_KEY")?.let {
+        val providers = dailyProviders?.invoke() ?: listOfNotNull(batchRecoverySecrets.get("ANTHROPIC_API_KEY")?.let {
             providerFactory(ProviderId.ANTHROPIC, it)
         })
         return try {
@@ -486,9 +578,16 @@ class CollectorRuntime(
                     secrets.get("OPENAI_API_KEY")?.let { providers += providerFactory(ProviderId.OPENAI, it) }
                 }
             }
-            val models = if (providers.any { it.id == ProviderId.ANTHROPIC } || providers.isEmpty()) {
-                mapOf("classify" to defaults.models.classify, "generate" to defaults.models.generate, "track" to defaults.models.classify)
-            } else emptyMap()
+            val models = buildMap {
+                val active = providers.map { it.id }
+                val classify = defaults.models.classify
+                val generate = defaults.models.generate
+                if (classify.provider in active || active.isEmpty()) {
+                    put("classify", classify)
+                    put("track", classify)
+                }
+                if (generate.provider in active || active.isEmpty()) put("generate", generate)
+            }
             val router = LlmRouter(providers, costs, models, defaults.models.fallback, preflightBudget = true,
                 batchCheckpointHook = batchCheckpointHook, batchEnabled = !batchDisabled, deferBatch = options.deferBatch)
             router.startRun(startedAt, options.deadline?.toMinutes()?.toInt() ?: config.deadlineMinutes, deadlineClock.instant())
@@ -497,8 +596,19 @@ class CollectorRuntime(
                     options.onStage(RunStage.RECOVER)
                     currentCoroutineContext().ensureActive()
                 }
-                router.recoverBatches(out, config.batch, config.recentTopicDays) {
-                    it.name == "$today-classify.json" || it.name == "$today-generate.json"
+                val recoveryKey = if (pendingBatches && dailyProviders == null && providers.none { it.id == ProviderId.ANTHROPIC })
+                    batchRecoverySecrets.get("ANTHROPIC_API_KEY") else null
+                val recoveryProvider = recoveryKey?.let { providerFactory(ProviderId.ANTHROPIC, it) }
+                try {
+                    val recoveryRouter = if (recoveryProvider == null) router else LlmRouter(listOf(recoveryProvider), costs,
+                        batchCheckpointHook = batchCheckpointHook).also {
+                            it.startRun(startedAt, options.deadline?.toMinutes()?.toInt() ?: config.deadlineMinutes, deadlineClock.instant())
+                        }
+                    recoveryRouter.recoverBatches(out, config.batch, config.recentTopicDays) {
+                        it.name == "$today-classify.json" || it.name == "$today-generate.json"
+                    }
+                } finally {
+                    (recoveryProvider as? AutoCloseable)?.close()
                 }
             } else emptyList()
             if (runDate != null) {

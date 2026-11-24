@@ -40,42 +40,49 @@ internal fun runTime(value: String, withDate: Boolean = true): String = runCatch
 @Composable
 internal fun TodayContent(data: ScreenState, sync: SyncState?, open: (Page, String) -> Unit,
     send: (List<InboxRequest>) -> Unit, retry: (RequestRow) -> Unit, undo: (RequestRow) -> Unit,
-    showTracks: () -> Unit, running: Boolean,
+    showTracks: () -> Unit,
+    noToday: String,
     runAction: @Composable () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val starGuide = remember { context.getSharedPreferences("tracking-guide", 0) }
+    var firstStarUsed by remember { mutableStateOf(starGuide.getBoolean("used", false)) }
+    DisposableEffect(starGuide) {
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { prefs, _ ->
+            firstStarUsed = prefs.getBoolean("used", false)
+        }
+        starGuide.registerOnSharedPreferenceChangeListener(listener)
+        onDispose { starGuide.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
     val tracks = data.tracks.filter(data::isTracking)
     val fresh = data.updates.filter { it.runDate == today() }.groupBy { it.trackedId }
-    Panel {
-        if (tracks.isEmpty() && data.startingCards.isEmpty()) Small(R.string.track_empty)
-        else {
-            val count = tracks.count { it.id in fresh }
-            val total = tracks.size + data.startingCards.size
-            ListRow(if (count == 0) stringResource(R.string.track_none, total).removeSuffix(" ›")
-                else stringResource(R.string.track_summary, total, count).removeSuffix(" ›"), onClick = showTracks)
-            tracks.filter { it.id in fresh }.sortedByDescending { fresh[it.id]?.size }.forEach { track ->
-                HorizontalDivider()
-                FlowRow(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable { open(Page.TRACK_DETAIL, track.id) }
-                    .padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    itemVerticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                    Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Tag(stringResource(R.string.news, fresh[track.id]?.size ?: 0), true)
-                    TrendLabel(track.trend)
-                }
-            }
-            data.startingCards.forEach { card ->
-                HorizontalDivider()
-                ListRow(card.title, stringResource(R.string.tracking_starting)) { open(Page.CARD, card.id) }
+    if (tracks.isNotEmpty() || data.startingCards.isNotEmpty()) Panel {
+        val count = tracks.count { it.id in fresh }
+        val total = tracks.size + data.startingCards.size
+        ListRow(if (count == 0) stringResource(R.string.track_none, total).removeSuffix(" ›")
+            else stringResource(R.string.track_summary, total, count).removeSuffix(" ›"), onClick = showTracks)
+        tracks.filter { it.id in fresh }.sortedByDescending { fresh[it.id]?.size }.forEach { track ->
+            HorizontalDivider()
+            FlowRow(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable { open(Page.TRACK_DETAIL, track.id) }
+                .padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp),
+                itemVerticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Tag(stringResource(R.string.news, fresh[track.id]?.size ?: 0), true)
+                TrendLabel(track.trend)
             }
         }
+        data.startingCards.forEach { card ->
+            HorizontalDivider()
+            ListRow(card.title, stringResource(R.string.tracking_starting)) { open(Page.CARD, card.id) }
+        }
     }
-    if (running) Notice(stringResource(R.string.running))
     if (data.hasBatch) Notice(stringResource(R.string.classify_waiting))
     val run = data.daily.firstOrNull()
     if (run == null) {
-        if (sync == null || sync.status == "OK") Small(if (sync == null) R.string.before_sync else R.string.no_today)
+        if (sync == null || sync.status == "OK") Small(noToday)
     }
     else {
-        if (run.report.runDate != today()) Notice(stringResource(R.string.no_today))
-        Small(R.string.meta, displayDate(run.report.runDate), runTime(run.report.startedAt, withDate = false), run.report.costUsd)
+        if (run.report.runDate != today()) Notice(noToday)
+        Small(R.string.r3_today_meta, displayDate(run.report.runDate), run.report.costUsd)
         RunCounts(run.report)
         if (run.report.failedSources.isNotEmpty()) {
             val failure = stringResource(R.string.failed_sources, run.report.failedSources.joinToString { it.source })
@@ -89,6 +96,7 @@ internal fun TodayContent(data: ScreenState, sync: SyncState?, open: (Page, Stri
     if (run != null) {
         run.cards.forEachIndexed { index, card -> FeedCard(data, card, open, send, retry, undo, index + 1) }
         if (run.cards.isEmpty()) Small(R.string.no_results)
+        else if (!firstStarUsed && data.tracks.isEmpty() && data.startingCards.isEmpty()) Small(R.string.track_empty)
     }
 }
 
@@ -157,7 +165,9 @@ internal fun Star(data: ScreenState, card: IdeaCard, send: (List<InboxRequest>) 
     val label = stringResource(if (starred) R.string.tracking else R.string.track_start)
     val active = data.tracks.filter(data::isTracking)
     var limit by remember { mutableStateOf(false) }
+    val context = androidx.compose.ui.platform.LocalContext.current
     fun start(replace: TrackedIdea? = null) {
+        context.getSharedPreferences("tracking-guide", 0).edit().putBoolean("used", true).apply()
         val at = Instant.ofEpochMilli(Instant.now().toEpochMilli())
         val startAt = if (replace == null) at else at.plusMillis(1)
         send(listOfNotNull(replace?.let { InboxRequest.TrackStop(VERSION, requestId(), at.toString(), it.id) },

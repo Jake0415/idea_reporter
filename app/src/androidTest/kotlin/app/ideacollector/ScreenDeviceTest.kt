@@ -42,7 +42,7 @@ class ScreenDeviceTest {
         node(R.string.archive).performClick()
         node(R.string.search).assertIsDisplayed()
         node(R.string.settings).performClick()
-        node(R.string.run_keys).assertIsDisplayed()
+        node(R.string.operate).assertIsDisplayed()
     }
 
     @Test fun starEnqueuesTrackAndFeedback() = screen {
@@ -57,7 +57,9 @@ class ScreenDeviceTest {
         assertTrue(sent.any { it.payload() is collector.data.InboxRequest.Reaction && it.reaction == "STAR" })
         assertEquals(1L, java.time.Duration.between(java.time.Instant.parse(sent[0].createdAt),
             java.time.Instant.parse(sent[1].createdAt)).toMillis())
-        compose.onAllNodesWithText(app.getString(R.string.pending)).assertCountEquals(2)
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithText(app.getString(R.string.pending)).fetchSemanticsNodes().size == 2
+        }
     }
 
     @Test fun notInterestedShowsReasonSheet() = screen("card/sample-card-2") {
@@ -81,7 +83,7 @@ class ScreenDeviceTest {
         compose.onNodeWithText("관심 아이디어 추적").performScrollTo().performClick()
         node(R.string.edit).performScrollTo().performClick()
         node(R.string.prompt_body).performScrollTo().performTextReplacement("수정한 프롬프트")
-        compose.onNodeWithContentDescription(app.getString(R.string.back)).performScrollTo().performClick()
+        compose.onNodeWithContentDescription(app.getString(R.string.back)).performClick()
         node(R.string.discard_title).assertIsDisplayed()
         node(R.string.discard).performClick()
         node(R.string.prompts).assertIsDisplayed()

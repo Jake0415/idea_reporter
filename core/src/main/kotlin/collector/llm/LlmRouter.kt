@@ -234,7 +234,7 @@ class LlmRouter(
         return attempt(request, call.copy(provider = alternate.provider, model = alternate.model, fallbackUsed = true), onAttempt)
     }
 
-    private fun projectedTokens(request: LlmRequest, model: StageModel, extraInput: Long = 0): Double {
+    internal fun projectedTokens(request: LlmRequest, model: StageModel, extraInput: Long = 0): Double {
         val price = catalog.requirePrice(model.provider, model.model)
         val input = estimateInputTokens(request.system, request.user, request.jsonSchema.toString()) + 1024L + extraInput
         val long = price.longContext?.takeIf { input > it.thresholdInputTokens }
