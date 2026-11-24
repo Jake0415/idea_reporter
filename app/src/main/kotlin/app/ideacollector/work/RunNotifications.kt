@@ -70,7 +70,8 @@ internal object RunNotifications {
 
     fun notification(context: Context, title: String, destination: String = "today"): NotificationCompat.Builder {
         val intent = Intent(context, MainActivity::class.java).putExtra("runDestination", destination)
-        return NotificationCompat.Builder(context, CHANNEL).setSmallIcon(android.R.drawable.ic_popup_sync)
+        return NotificationCompat.Builder(context, CHANNEL).setSmallIcon(app.ideacollector.R.drawable.ic_stat_collector)
+            .setColor(androidx.core.content.ContextCompat.getColor(context, app.ideacollector.R.color.notification_accent))
             .setContentTitle(title).setOnlyAlertOnce(true).setAutoCancel(true)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setContentIntent(PendingIntent.getActivity(context, destination.hashCode(), intent,

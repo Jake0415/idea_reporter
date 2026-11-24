@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 알림 작은 아이콘: BI C안을 흰색 한 가지로 줄인 모양(알림 아이콘은 투명도만 쓰인다). 작은 크기에서 보이도록 선을 굵게 했다. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#FFFFFF"
+        android:pathData="M10,32a8,8 0,1 0,16 0a8,8 0,1 0,-16 0z M8,56a8,8 0,1 0,16 0a8,8 0,1 0,-16 0z M12,80a8,8 0,1 0,16 0a8,8 0,1 0,-16 0z" />
+    <path android:strokeColor="#FFFFFF" android:strokeWidth="8" android:strokeLineCap="round"
+        android:pathData="M26,34 Q46,40 54,52 M24,56 L52,56 M28,78 Q46,72 54,60" />
+    <path android:fillColor="#FFFFFF"
+        android:pathData="M76,30 L82,50 L102,56 L82,62 L76,82 L70,62 L50,56 L70,50 Z" />
+</vector>

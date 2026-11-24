@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- BI 바탕색 = A 피드 포인트색(mockup/tokens.css 의 accent) -->
+    <color name="ic_launcher_background">#0095F6</color>
+    <!-- 알림 강조색 = 흰 글자 버튼색(#0077D9) -->
+    <color name="notification_accent">#0077D9</color>
+</resources>
