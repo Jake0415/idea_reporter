@@ -435,4 +435,23 @@
     <string name="r3_category_cap_help">하루 카드 중 같은 분류는 이 개수까지만</string>
     <string name="r3_tag_cap_help">비슷한 주제 후보가 한쪽으로 몰리지 않게 합니다</string>
     <string name="r3_feedback_count_help">최근 ★·숨김 기록 중 다음 카드에 참고할 개수</string>
+    <string name="backup_title">백업</string>
+    <string name="backup_help">카드·추적·피드백·실행 기록·설정·프롬프트·내 기준을 파일 하나로 저장합니다. AI 키·앱 비밀번호·메일 주소는 들어가지 않으니, 새 폰에서는 가져온 뒤 다시 입력하세요. 예산은 새 폰에서 다시 정하세요.</string>
+    <string name="backup_export">내보내기</string>
+    <string name="backup_import">가져오기</string>
+    <string name="backup_exported">백업 파일을 저장했습니다. 새 폰에서는 이 파일을 [가져오기]로 불러오세요.</string>
+    <string name="backup_imported">백업을 가져왔습니다. 이 폰에 AI 키나 메일 설정이 없으면 [AI 키]·[메일]에서 다시 입력하세요.</string>
+    <string name="backup_export_error">백업 파일을 저장하지 못했습니다. 다른 저장 위치를 골라 다시 시도하세요.</string>
+    <string name="backup_import_error">가져오지 못했습니다. 지금 데이터는 그대로입니다. 잠시 뒤 다시 시도하세요.</string>
+    <string name="backup_invalid">이 파일은 불러올 수 없습니다. 이 앱에서 [내보내기]로 만든 백업 파일(20MB 이하)을 골라 주세요.</string>
+    <string name="backup_busy">실행 중에는 백업을 내보내거나 가져올 수 없습니다. 실행이 끝나면 다시 눌러 주세요.</string>
+    <string name="backup_preview">가져오기 미리보기</string>
+    <string name="backup_preview_details">새로 채울 카드 %1$d개 · 추적 %2$d개\n기간 %3$s\n\n이 폰에 없는 날짜의 카드와 실행 기록을 채우고, 추적·피드백·설정·프롬프트·내 기준은 이 파일 내용으로 바꿉니다. 이미 있는 날짜의 카드, 비용 기록과 예산은 이 폰 것을 그대로 둡니다. 필요하면 먼저 [내보내기]로 저장하세요.</string>
+    <string name="backup_no_period">기록 없음</string>
+    <string name="backup_period">%1$s ~ %2$s</string>
+    <string name="backup_import_confirm">바꾸기</string>
+    <string name="backup_alarm_pending">가져왔지만 매일 실행 예약을 다시 걸지 못했습니다. 이 화면 위쪽 [고급] 구역 아래의 [저장]을 한 번 눌러 주세요.</string>
+    <string name="backup_too_large">백업이 20MB를 넘어 저장하지 못했습니다. 오래된 기록을 줄인 뒤 다시 시도하세요.</string>
+    <string name="backup_recovery_pending">이전 가져오기를 되돌리지 못했습니다</string>
+    <string name="backup_recovery_unavailable">이전 가져오기를 되돌릴 자료가 없어 지금 상태로 계속합니다. 필요하면 백업을 다시 가져오세요.</string>
 </resources>

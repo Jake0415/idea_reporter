@@ -8,6 +8,7 @@ import collector.model.Feedback
 import collector.model.RunReport
 import collector.model.TrackedIdea
 import collector.pipeline.PipelineResult
+import collector.runtime.Backup
 import collector.runtime.CollectorPaths
 import collector.trend.TrendReport
 import kotlinx.coroutines.Dispatchers
@@ -21,12 +22,21 @@ import java.time.Instant
 internal const val LOCAL_REPO = "@phone"
 private val daily = Regex("out/[0-9]{4}-[0-9]{2}-[0-9]{2}\\.json")
 
-internal class RepositorySync(private val database: AppDatabase, private val paths: CollectorPaths) {
+internal class RepositorySync(
+    private val database: AppDatabase,
+    private val paths: CollectorPaths,
+    private val ready: () -> Boolean = { true }
+) {
     private val dao = database.dao()
     private val mutex = Mutex()
 
-    suspend fun refresh() = withContext(Dispatchers.IO) {
+    suspend fun refresh(requireComplete: Set<String> = emptySet()) = refresh(requireComplete, recovering = false)
+
+    suspend fun refreshAfterRecovery() = refresh(emptySet(), recovering = true)
+
+    private suspend fun refresh(requireComplete: Set<String>, recovering: Boolean) = withContext(Dispatchers.IO) {
         mutex.withLock {
+            if (!recovering && !ready()) return@withLock
             val existing = dao.hashes(LOCAL_REPO).associate { it.path to it.sha256 }
             val seen = mutableSetOf<String>()
             val updates = mutableListOf<Entry>()
@@ -38,7 +48,7 @@ internal class RepositorySync(private val database: AppDatabase, private val pat
                     val kind = kind(path) ?: continue
                     seen += path
                     try {
-                        require(file.length() <= 16L * 1024 * 1024)
+                        require(file.length() <= Backup.MAX_BYTES)
                         val bytes = file.readBytes()
                         val hash = bytes.sha256()
                         if (existing[path] != hash) updates += decode(Artifact(LOCAL_REPO, path, kind, hash, bytes.decodeToString()))
@@ -49,6 +59,7 @@ internal class RepositorySync(private val database: AppDatabase, private val pat
                     }
                 }
             }
+            check(invalid.none { it in requireComplete || "out/$it" in requireComplete })
             database.withTransaction {
                 for (path in (existing.keys - seen) + updates.map { it.artifact.path }) {
                     dao.deleteArtifact(LOCAL_REPO, path)

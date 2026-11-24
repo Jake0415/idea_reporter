@@ -154,6 +154,7 @@ internal suspend fun runScheduled(
     runDate: LocalDate? = null,
     requireDailyPublication: Boolean = false,
     beforeRun: suspend () -> Boolean = { true },
+    onLockAcquired: () -> Unit = {},
     configuredDeadline: () -> Int = { deadlineMinutes },
     onPreviousMailRetry: (MailSendResult) -> Unit = {},
     onMailRetryExpired: (Int) -> Unit = {}
@@ -165,6 +166,7 @@ internal suspend fun runScheduled(
     var exitCode = 1
     try {
         runLock.withLock(out) {
+            onLockAcquired()
             if (noMail) out.resolve("mail/scheduled.json").delete()
             if (!beforeRun()) {
                 exitCode = 0

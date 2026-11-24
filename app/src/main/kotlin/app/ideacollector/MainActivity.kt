@@ -18,6 +18,9 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collectLatest
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -34,6 +37,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         if (savedInstanceState == null) destination = routeFrom(intent)
         enableEdgeToEdge()
+        refreshWhenReady(application as CollectorApp)
         setContent {
             CollectorTheme {
                 CollectorScreens(application as CollectorApp, screens, destination) { destination = null }
@@ -47,17 +51,20 @@ class MainActivity : ComponentActivity() {
         destination = routeFrom(intent) ?: Route(Page.TODAY).takeIf { intent.getBooleanExtra("openToday", false) }
     }
 
-    override fun onStart() {
-        super.onStart()
-        val app = application as CollectorApp
+    private fun refreshWhenReady(app: CollectorApp) {
         lifecycleScope.launch {
-            runCatching { app.flushLocalChanges() }
-            runCatching { app.schedule.clearBatteryExemptionIfGranted() }
-            runCatching { app.schedule.releaseReservation() }
-            runCatching { app.schedule.finishScheduleUpdate() }
-            runCatching { app.schedule.register() }
-            runCatching { app.schedule.clearPublishedBatchNotices() }
-            runCatching { app.sync.refresh() }
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                app.recovery.collectLatest { recovery ->
+                    if (recovery != BackupRecovery.READY) return@collectLatest
+                    runCatching { app.flushLocalChanges() }
+                    runCatching { app.schedule.clearBatteryExemptionIfGranted() }
+                    runCatching { app.schedule.releaseReservation() }
+                    runCatching { app.schedule.finishScheduleUpdate() }
+                    runCatching { app.schedule.register() }
+                    runCatching { app.schedule.clearPublishedBatchNotices() }
+                    runCatching { app.sync.refresh() }
+                }
+            }
         }
     }
 }

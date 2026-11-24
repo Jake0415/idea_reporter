@@ -307,4 +307,5 @@ internal fun PhoneOperations(app: CollectorApp, settings: AppSettings, data: Scr
         }
     }
 
+    BackupSettings(app)
 }

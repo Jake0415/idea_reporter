@@ -157,9 +157,11 @@ internal fun AiKeys(app: CollectorApp, onReady: () -> Unit, onboarding: Boolean 
             val draft = value.trim()
             scope.launch {
                 try {
+                    app.requireBackupReady()
                     val secret = if (replace) draft else checkNotNull(app.secrets.get(key))
                     val models = app.modelsForKey(key, secret, firstPageOnly = true)
                     check(models.isNotEmpty())
+                    app.requireBackupReady()
                     if (replace) check(app.secrets.set(key, secret))
                     last4 = secret.takeLast(4)
                     checked = java.time.Instant.now().toString()
@@ -173,7 +175,7 @@ internal fun AiKeys(app: CollectorApp, onReady: () -> Unit, onboarding: Boolean 
                     throw e
                 } catch (e: Exception) {
                     failed = if (e is LlmAuthException) R.string.r3_key_error else R.string.r3_key_unchecked
-                    if (!replace && e is LlmAuthException) {
+                    if (!replace && e is LlmAuthException && app.recovery.value == BackupRecovery.READY) {
                         checked = java.time.Instant.now().toString()
                         checkFailed = true
                         prefs.edit().putString(key, checked).putBoolean("failed-$key", true).apply()
@@ -243,6 +245,7 @@ internal fun AiKeys(app: CollectorApp, onReady: () -> Unit, onboarding: Boolean 
                     busy = true
                     scope.launch {
                         try {
+                            app.requireBackupReady()
                             app.secrets.clear(key)
                             last4 = null
                             checked = null
@@ -274,6 +277,7 @@ internal fun GitHubKey(app: CollectorApp, onboarding: Boolean, operation: (suspe
         if (!onboarding) SecureTokenInput()
         Field(value, { value = it; touched = true }, R.string.token, singleLine = true, secret = true)
         Primary(R.string.save, value.isNotBlank()) { operation {
+            app.requireBackupReady()
             check(app.secrets.set("GITHUB_TOKEN", value.trim()))
             value = ""
             stored = true
@@ -281,6 +285,7 @@ internal fun GitHubKey(app: CollectorApp, onboarding: Boolean, operation: (suspe
         } }
     } else Secondary(R.string.r3_key_replace, alignStart = true) { editing = true }
     if (stored && (!onboarding || touched)) Secondary(R.string.r3_key_delete) { operation {
+        app.requireBackupReady()
         app.secrets.clear("GITHUB_TOKEN")
         stored = false
     } }
@@ -312,6 +317,7 @@ internal fun MailSettings(app: CollectorApp, operation: (suspend () -> Unit) -> 
     val valid = (configured || listOf(recipient, sender, password).all { it.isNotBlank() }) &&
         listOf(recipient, sender).all { it.isBlank() || android.util.Patterns.EMAIL_ADDRESS.matcher(it.trim()).matches() }
     suspend fun save() {
+        app.requireBackupReady()
         app.secrets.setAll(app.mailDraft(recipient, sender, password))
         recipient = ""
         sender = ""
@@ -336,6 +342,7 @@ internal fun MailSettings(app: CollectorApp, operation: (suspend () -> Unit) -> 
         val enteredSender = sender
         val enteredPassword = password
         app.appScope.launch {
+            if (app.recovery.value != BackupRecovery.READY) return@launch
             if (!app.operationRunning.compareAndSet(expect = false, update = true)) return@launch
             busy = true
             message = null
@@ -356,6 +363,7 @@ internal fun MailSettings(app: CollectorApp, operation: (suspend () -> Unit) -> 
     if (onboarding && next != null) WizardNext(!busy && valid && message == R.string.r3_mail_test_ok, saveAction, next)
     else Primary(R.string.save, !busy && valid, saveAction)
     val skipAction: () -> Unit = { if (!busy) operation {
+        app.requireBackupReady()
         app.mailEnabled = false
         enabled = false
         done()

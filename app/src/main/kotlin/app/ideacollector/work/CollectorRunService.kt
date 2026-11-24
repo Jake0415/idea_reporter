@@ -7,6 +7,9 @@ import android.content.Intent
 import android.os.IBinder
 import android.widget.Toast
 import androidx.core.content.ContextCompat
+import app.ideacollector.BackupRecovery
+import app.ideacollector.BackupRecoveryBlocked
+import app.ideacollector.RunAttemptLimitReached
 import app.ideacollector.CollectorApp
 import app.ideacollector.R
 import collector.runtime.RunLockedException
@@ -35,13 +38,22 @@ class CollectorRunService : Service() {
             if (!foreground) stopSelf(latestStartId)
             return START_NOT_STICKY
         }
-        runCatching { app.schedule.clearBatteryExemptionIfGranted() }
         RunNotifications.channel(this)
+        if (app.recovery.value != BackupRecovery.READY) {
+            if (promote(RunNotifications.notification(this, getString(R.string.backup_recovery_pending)).build())) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            }
+            stopSelf(latestStartId)
+            return START_NOT_STICKY
+        }
+        runCatching { app.schedule.clearBatteryExemptionIfGranted() }
         val firstRun = intent?.getBooleanExtra("firstRun", false) == true
         val themes = intent?.getStringArrayListExtra("themes")
         if (!app.operationRunning.compareAndSet(expect = false, update = true)) {
             intent?.getStringExtra("date")?.let(LocalDate::parse)?.let { date ->
-                app.appScope.launch { runCatching { app.schedule.holdReservation(date) } }
+                app.appScope.launch {
+                    if (app.recovery.value == BackupRecovery.READY) runCatching { app.schedule.holdReservation(date) }
+                }
             }
             if (themes != null) analysisOutcome.value = collector.runtime.AnalysisSummary(false, failure = getString(R.string.run_already_running))
             if (firstRun) dailyOutcome.value = DailyOutcome(false, R.string.run_already_running)
@@ -52,6 +64,14 @@ class CollectorRunService : Service() {
                 }
                 stopSelf(latestStartId)
             }
+            return START_NOT_STICKY
+        }
+        if (app.recovery.value != BackupRecovery.READY) {
+            app.operationRunning.value = false
+            if (promote(RunNotifications.notification(this, getString(R.string.backup_recovery_pending)).build())) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            }
+            stopSelf(latestStartId)
             return START_NOT_STICKY
         }
         running.value = true
@@ -106,7 +126,7 @@ class CollectorRunService : Service() {
                     val outcome = withContext(Dispatchers.IO) {
                         val mailAvailable = app.hasMailCredentials()
                         app.runtime().runAnalysis(themes, limit, mailEnabled = { mailAvailable && app.mailEnabled },
-                            budgetVersion = intent.getStringExtra("budgetVersion"))
+                            budgetVersion = intent.getStringExtra("budgetVersion"), onLockAcquired = app::requireRunReady)
                     }
                     successful = outcome.successful
                     analysisResult = outcome
@@ -116,13 +136,11 @@ class CollectorRunService : Service() {
                         else -> getString(R.string.r3_analysis_failure, outcome.failure ?: getString(R.string.run_failed))
                     }
                 } else {
-                    if (automatic && !resume && !app.schedule.beginAttempt(date)) {
-                        result = getString(R.string.run_attempt_limit)
-                        return@launch
-                    }
-                    chargedAttempt = automatic && !resume
-                    if (!automatic) app.schedule.clearCancellation(date)
-                    val summary = app.executeDaily(date, resume, automatic) { stage ->
+                    val summary = app.executeDaily(date, resume, automatic, onLockAcquired = {
+                        if (automatic && !resume && !app.schedule.beginAttempt(date)) throw RunAttemptLimitReached()
+                        chargedAttempt = automatic && !resume
+                        if (!automatic) app.schedule.clearCancellation(date)
+                    }) { stage ->
                         RunNotifications.stage(this@CollectorRunService, PROGRESS, stage, cancel)
                     }
                     if (summary == null) {
@@ -141,6 +159,10 @@ class CollectorRunService : Service() {
                     }
                 }
                 if (!successful && result == null) result = getString(R.string.run_failed)
+            } catch (_: BackupRecoveryBlocked) {
+                reason = R.string.backup_recovery_pending
+            } catch (_: RunAttemptLimitReached) {
+                result = getString(R.string.run_attempt_limit)
             } catch (_: RunLockedException) {
                 reason = R.string.run_already_running
                 if (chargedAttempt) app.schedule.refundAttempt(date)

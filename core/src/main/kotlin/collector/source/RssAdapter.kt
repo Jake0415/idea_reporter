@@ -109,7 +109,7 @@ class RssAdapter(private val http: OkHttpClient) : SourceAdapter {
         }
         val base = requestUrl.newBuilder().query(null).username("").password("").build()
         val privateValues = requestUrl.rssPrivateValues()
-        val privatePattern = privateValues.rssPrivatePattern()
+        val privatePattern = privateValues.filter { it.length > 2 }.rssPrivatePattern()
         fun redact(value: String) = privatePattern?.replace(value, "[redacted]") ?: value
         fun redactText(value: String?): String {
             val text = redact(plainText(value, Int.MAX_VALUE))
@@ -124,10 +124,7 @@ class RssAdapter(private val http: OkHttpClient) : SourceAdapter {
                 .firstOrNull { it.getAttribute("rel") in listOf("", "alternate") && it.getAttribute("href").isNotBlank() }
                 ?.getAttribute("href") else entry.text("link")
             val resolved = link?.let(base::resolve) ?: return@mapNotNull null
-            val query = resolved.encodedQuery?.split('&')?.filterIndexed { i, _ ->
-                resolved.queryParameterName(i) !in privateValues && resolved.queryParameterValue(i) !in privateValues
-            }?.takeIf { it.isNotEmpty() }?.joinToString("&")
-            val url = redact(resolved.newBuilder().username("").password("").encodedQuery(query).build().toString())
+            val url = resolved.redactRssUrl(privateValues).split("[redacted]").joinToString("[redacted]", transform = ::redact)
             val guid = entry.text(if (atom) "id" else "guid") ?: resolved.toString()
             val snippet = if (atom) entry.text("summary") ?: entry.text("content") else entry.text("description")
             val hash = MessageDigest.getInstance("SHA-256").digest(guid.toByteArray())
@@ -156,8 +153,47 @@ class RssAdapter(private val http: OkHttpClient) : SourceAdapter {
     }
 }
 
+internal val privateField = Regex("mail|smtp|address|token|secret|password|key|authorization|recipient|sender", RegexOption.IGNORE_CASE)
+private const val PRIVATE_RSS_QUERY_LENGTH = 6
+private val strayPercent = Regex("%(?![0-9a-fA-F]{2})")
+
+internal fun normalizePrivateText(content: String): String {
+    var result = content
+    while ('%' in result) {
+        val decoded = runCatching {
+            java.net.URLDecoder.decode(strayPercent.replace(result, "%25").replace("+", "%2B"), "UTF-8")
+        }.getOrDefault(result)
+        if (decoded == result) break
+        result = decoded
+    }
+    return java.text.Normalizer.normalize(result, java.text.Normalizer.Form.NFKC)
+}
+
+internal fun HttpUrl.hasPrivateRssQuery(index: Int): Boolean =
+    privateField.containsMatchIn(normalizePrivateText(queryParameterName(index))) ||
+        (queryParameterValue(index)?.length ?: 0) >= PRIVATE_RSS_QUERY_LENGTH
+
+internal fun HttpUrl.redactRssUrl(privateValues: List<String> = emptyList()): String {
+    val builder = newBuilder().username("").password("")
+    // 짧은 인증값이 링크 경로 조각이나 # 뒤로 돌아오는 경우도 가린다(일반 텍스트 치환은 길이 제한이 있어 못 잡는다).
+    pathSegments.forEachIndexed { index, segment ->
+        if (segment.isNotEmpty() && segment in privateValues) builder.setPathSegment(index, "[redacted]")
+    }
+    if (fragment?.let { it in privateValues } == true) builder.fragment("[redacted]")
+    val encoded = encodedQuery ?: return builder.build().toString()
+    val query = encoded.split('&').mapIndexed { index, parameter ->
+        val name = queryParameterName(index)
+        if (name in privateValues) null
+        else if (hasPrivateRssQuery(index) || queryParameterValue(index) in privateValues) {
+            parameter.substringBefore('=') + "=[redacted]"
+        } else parameter
+    }.filterNotNull()
+    return builder.encodedQuery(query.takeIf { it.isNotEmpty() }?.joinToString("&")).build().toString()
+}
+
 internal fun HttpUrl.rssPrivateValues(): List<String> =
-    (0 until querySize).mapNotNull(::queryParameterValue).filter { it.length >= 6 } +
+    (0 until querySize).filter(::hasPrivateRssQuery).mapNotNull(::queryParameterValue)
+        .filter { it.isNotEmpty() && it != "[redacted]" } +
         listOf(username, password).filter { it.isNotEmpty() }
 
 internal fun List<String>.rssPrivatePattern(): Regex? =

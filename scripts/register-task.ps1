@@ -11,7 +11,7 @@ if ($Unregister) {
     exit 0
 }
 
-Write-Warning "자동 실행은 GitHub Actions를 사용하세요. PC 작업을 등록하면 메일이 중복될 수 있습니다."
+Write-Warning "매일 실행은 폰에서 합니다. PC 작업을 등록하면 실행과 메일이 중복될 수 있습니다."
 $script = Join-Path $PSScriptRoot 'run-scheduled.ps1'
 $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 Write-Host "작업 등록 또는 갱신 · $taskName · 매일 07:00"

@@ -7,6 +7,19 @@
 - 비밀값은 기록하지 않는다.
 - 실제 workflow 실행·push는 하지 않는다.
 
+## 0. 상태 (2026-11-24)
+- 1번(Actions cron 제거, WorkflowTest)은 R2에서 이미 끝났다. 다시 고치지 않는다. `scripts/actions-setup.md` 첫머리 안내만 확인해서, 없으면 넣는다.
+- R3 커밋 b210de7 기준이다. 공통 실행 상태(`operationRunning`, `finishOperation`)와 실행 중 저장 대기열을 그대로 쓴다.
+- 계측 테스트와 캡처는 `emulator-5554`에서만 한다. 캡처는 `out/screens/R4/light|dark`에 저장한다.
+  - 대상: 백업 화면, 내보내기 완료, 가져오기 미리보기, 잘못된 파일 오류, 실행 중 막힘
+- Gradle을 돌릴 때는 `JAVA_HOME=C:\Program Files\Eclipse Adoptium\jdk-17.0.20.101-hotspot`을 직접 지정한다.
+- 백업 화면 위치: SC-11 맨 아래 "백업" 구역.
+  - 버튼: [내보내기], [가져오기]
+  - 안내: "키·앱 비밀번호·메일 주소는 들어가지 않습니다. 새 폰에서는 가져온 뒤 키와 메일을 다시 입력하세요."
+  - 문구는 strings.xml에 둔다.
+- 가져오기 중에는 공통 실행 상태를 잡는다. 끝나면 `finishOperation`으로 해제한다.
+- 가져오기 뒤에는 Room을 다시 반영하고 알람을 다시 등록한다.
+
 ## 1. GitHub Actions
 - `daily.yml`에서 `schedule`(cron)을 없앤다. `workflow_dispatch`는 남긴다.
 - 파일 머리 주석: "매일 실행은 폰이 한다. 이 workflow는 폰이 고장 났을 때 임시로 쓰는 수동 실행용."

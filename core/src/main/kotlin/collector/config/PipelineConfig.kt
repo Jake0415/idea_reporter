@@ -62,8 +62,11 @@ data class PipelineConfig(
         internal val LOCAL_PATH: String get() = CollectorPaths.workingDirectory().pipelineConfig.invariantSeparatorsPath
 
         fun load(file: File): PipelineConfig =
-            if (file.isFile) Json.decodeFromString(merge(defaultJson, Json.parseToJsonElement(file.readText()).jsonObject).toString())
+            if (file.isFile) parse(file.readText())
             else defaults
+
+        internal fun parse(text: String, format: Json = Json): PipelineConfig =
+            format.decodeFromString(merge(defaultJson, Json.parseToJsonElement(text).jsonObject).toString())
 
         private fun merge(base: JsonObject, local: JsonObject): JsonObject = JsonObject(base + local.mapValues { (key, value) ->
             val original = base[key]

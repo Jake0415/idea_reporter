@@ -53,12 +53,16 @@ data class AnalysisConfig(
     companion object {
         internal fun load(file: File, defaults: AnalysisConfig, report: (String) -> Unit = ::println): AnalysisConfig {
             if (!file.isFile) return defaults
-            val fields = Json.decodeFromString<JsonObject>(file.readText())
+            return parse(file.readText(), report)
+        }
+
+        internal fun parse(text: String, report: (String) -> Unit = {}, format: Json = Json): AnalysisConfig {
+            val fields = Json.decodeFromString<JsonObject>(text)
             val configFields = fields - setOf("requestBudgetUsd", "monthlyBudgetUsd")
             if (configFields.size != fields.size) {
                 report("분석 예산 설정 경고 · config/analysis.local.json의 예산 항목 무시 · budget.json 사용")
             }
-            return Json.decodeFromJsonElement(JsonObject(configFields))
+            return format.decodeFromJsonElement(JsonObject(configFields))
         }
     }
 }

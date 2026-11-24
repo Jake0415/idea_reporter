@@ -14,6 +14,9 @@ import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
 import androidx.work.*
+import app.ideacollector.BackupRecovery
+import app.ideacollector.BackupRecoveryBlocked
+import app.ideacollector.RunAttemptLimitReached
 import app.ideacollector.CollectorApp
 import app.ideacollector.R
 import app.ideacollector.github.contractJson
@@ -70,6 +73,7 @@ internal class RunScheduler(private val app: CollectorApp) {
     }
 
     suspend fun save(options: RunOptions) = withContext(Dispatchers.IO) {
+        app.requireBackupReady()
         scheduleUpdates.withLock {
             app.database.dao().saveSettings(app.settings().copy(runTimeSeconds = options.time.toSecondOfDay().toLong(),
                 wifiOnly = options.wifiOnly, chargingOnly = options.chargingOnly, batch = options.batch))
@@ -81,7 +85,7 @@ internal class RunScheduler(private val app: CollectorApp) {
     suspend fun deferScheduleUpdate() = scheduleUpdates.withLock { markScheduleUpdatePending() }
 
     private fun markScheduleUpdatePending() {
-        preferences.edit().putBoolean("schedule-update-pending", true).commit()
+        check(preferences.edit().putBoolean("schedule-update-pending", true).commit())
     }
 
     fun hasPendingUpdate() = preferences.getBoolean("schedule-update-pending", false)
@@ -362,6 +366,15 @@ internal class RunScheduler(private val app: CollectorApp) {
         return conditionsMet(options, wifi, charging)
     }
 
+    suspend fun recoverPendingBatches() = withContext(Dispatchers.IO) {
+        val runtime = app.runtime()
+        val dates = app.paths.outDir.resolve("batch").listFiles().orEmpty().mapNotNull { file ->
+            if (!file.isFile || !(file.name.endsWith("-classify.json") || file.name.endsWith("-generate.json"))) null
+            else runCatching { LocalDate.parse(file.name.take(10)) }.getOrNull()
+        }.distinct()
+        for (date in dates) if (runtime.hasBatchToResume(date)) recoverBatch(date)
+    }
+
     suspend fun recoverBatch(date: LocalDate) {
         if (recorded(date)) {
             RunNotifications.clearUnpublishedBatch(app, date)
@@ -416,6 +429,7 @@ class RunAlarmReceiver : BroadcastReceiver() {
         }
     }
     internal suspend fun handle(app: CollectorApp, intent: Intent) {
+        if (app.recovery.first { it != BackupRecovery.LOADING } != BackupRecovery.READY) return
         val date = if (intent.action == null) intent.getStringExtra("date")?.let(LocalDate::parse) else null
         try {
             if (date != null) app.schedule.dispatch(date)
@@ -433,14 +447,20 @@ abstract class AutomaticRunWorker(context: Context, params: WorkerParameters) : 
 
     protected suspend fun execute(date: LocalDate, resume: Boolean = false, deferrals: Int = 0,
         fromBackup: Boolean = false, manual: Boolean = false): Result {
+        if (app.recovery.first { it != BackupRecovery.LOADING } != BackupRecovery.READY) return Result.retry()
         val scheduler = app.schedule
         if (!(resume && manual) && !app.migrateFirstRun()) return Result.success()
         if (!app.operationRunning.compareAndSet(expect = false, update = true)) {
+            if (app.recovery.value != BackupRecovery.READY) return Result.retry()
             if (resume) return Result.retry()
             if (scheduler.enabled() && !scheduler.recorded(date) && !scheduler.cancelled(date)) {
                 scheduler.holdReservation(date)
             }
             return Result.success()
+        }
+        if (app.recovery.value != BackupRecovery.READY) {
+            app.operationRunning.value = false
+            return Result.retry()
         }
         CollectorRunService.running.value = true
         var started = false
@@ -494,13 +514,11 @@ abstract class AutomaticRunWorker(context: Context, params: WorkerParameters) : 
                 return batteryExemptionRequired()
             }
             currentCoroutineContext().ensureActive()
-            if (!resume && !scheduler.beginAttempt(date)) {
-                RunNotifications.result(app, R.string.run_attempt_limit)
-                return Result.failure()
-            }
-            chargedAttempt = !resume
-            started = true
-            val summary = app.executeDaily(date, resume, automatic = !manual, deferrals = deferrals) { stage ->
+            val summary = app.executeDaily(date, resume, automatic = !manual, deferrals = deferrals, onLockAcquired = {
+                if (!resume && !scheduler.beginAttempt(date)) throw RunAttemptLimitReached()
+                chargedAttempt = !resume
+                started = true
+            }) { stage ->
                 RunNotifications.stage(app, 33, stage, cancel)
             }
             if (summary == null || summary.skipped) Result.success()
@@ -517,6 +535,11 @@ abstract class AutomaticRunWorker(context: Context, params: WorkerParameters) : 
                 RunNotifications.result(app, R.string.run_failed)
                 Result.retry()
             }
+        } catch (_: BackupRecoveryBlocked) {
+            Result.retry()
+        } catch (_: RunAttemptLimitReached) {
+            RunNotifications.result(app, R.string.run_attempt_limit)
+            Result.failure()
         } catch (_: collector.runtime.RunLockedException) {
             if (chargedAttempt) scheduler.refundAttempt(date)
             Result.retry()
@@ -561,6 +584,7 @@ class CancelRunWorkerReceiver : BroadcastReceiver() {
 
 class BackupRunWorker(context: Context, params: WorkerParameters) : AutomaticRunWorker(context, params) {
     override suspend fun doWork(): Result {
+        if (app.recovery.first { it != BackupRecovery.LOADING } != BackupRecovery.READY) return Result.retry()
         val scheduler = app.schedule
         scheduler.clearBatteryExemptionIfGranted()
         scheduler.register()
@@ -583,6 +607,7 @@ class BackupRunWorker(context: Context, params: WorkerParameters) : AutomaticRun
 
 class DeferredRunWorker(context: Context, params: WorkerParameters) : AutomaticRunWorker(context, params) {
     override suspend fun doWork(): Result {
+        if (app.recovery.first { it != BackupRecovery.LOADING } != BackupRecovery.READY) return Result.retry()
         app.schedule.clearBatteryExemptionIfGranted()
         val date = inputData.getString("date")?.let(LocalDate::parse) ?: return Result.failure()
         if (app.schedule.cancelled(date)) return Result.success()

@@ -59,6 +59,27 @@ private val tabs = listOf(
 @Composable
 internal fun CollectorScreens(app: CollectorApp, viewModel: ScreensViewModel, destination: Route?,
     destinationHandled: () -> Unit) {
+    val recovery by app.recovery.collectAsState()
+    if (recovery != BackupRecovery.READY) {
+        Scaffold { padding ->
+            Column(Modifier.padding(padding).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (recovery == BackupRecovery.PENDING) {
+                    Notice(stringResource(R.string.backup_recovery_pending), warning = true)
+                    val running by app.operationRunning.collectAsState()
+                    Primary(R.string.r3_retry, enabled = !running) { app.retryBackupRecovery() }
+                } else Text(stringResource(R.string.loading))
+            }
+        }
+        return
+    }
+    val recoveryUnavailable by app.recoveryUnavailable.collectAsState()
+    if (recoveryUnavailable) {
+        AlertDialog(
+            onDismissRequest = app::dismissUnavailableRecovery,
+            text = { Text(stringResource(R.string.backup_recovery_unavailable)) },
+            confirmButton = { TextButton(onClick = app::dismissUnavailableRecovery) { Text(stringResource(android.R.string.ok)) } }
+        )
+    }
     val activity = LocalContext.current as Activity
     val dao = app.database.dao()
     var settings by remember { mutableStateOf<AppSettings?>(null) }

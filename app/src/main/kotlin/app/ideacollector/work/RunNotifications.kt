@@ -54,6 +54,13 @@ internal object RunNotifications {
 
     private const val CHANNEL = "collector-run"
     private const val RESULT = 32
+
+    fun backupRecovery(context: Context, pending: Boolean) {
+        if (pending) {
+            channel(context)
+            manager(context).notify(37, notification(context, context.getString(R.string.backup_recovery_pending)).build())
+        } else manager(context).cancel(37)
+    }
     private const val BATTERY_EXEMPTION = 34
 
     fun channel(context: Context) {

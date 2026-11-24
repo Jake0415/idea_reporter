@@ -14,7 +14,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.encodeToString
 import collector.data.InboxRequest
+import collector.runtime.Backup
 import collector.runtime.CollectorPaths
+import kotlinx.coroutines.launch
 import collector.runtime.CollectorRuntime
 import collector.runtime.BatchDeferredException
 import collector.runtime.ScheduledOptions
@@ -28,6 +30,11 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 
+internal class BackupRecoveryBlocked : RunLockedException()
+internal class RunAttemptLimitReached : RunLockedException()
+
+internal enum class BackupRecovery { LOADING, READY, PENDING }
+
 class CollectorApp : Application() {
     internal val database by lazy { Room.databaseBuilder(this, AppDatabase::class.java, "collector.db")
         .addMigrations(requestMetadataMigration, partialSyncMigration, snapshotSyncMigration, dailyDispatchMigration,
@@ -36,9 +43,16 @@ class CollectorApp : Application() {
     internal val paths by lazy {
         CollectorPaths(filesDir.resolve("collector/out"), filesDir.resolve("collector/config"), cacheDir.resolve("collector"))
     }
-    internal val sync by lazy { RepositorySync(database, paths) }
+    internal val sync by lazy { RepositorySync(database, paths) { recovery.value == BackupRecovery.READY } }
     internal val schedule by lazy { RunScheduler(this) }
     private val localChangesLock = Mutex()
+    internal val recovery = kotlinx.coroutines.flow.MutableStateFlow(BackupRecovery.LOADING)
+    internal val recoveryUnavailable = kotlinx.coroutines.flow.MutableStateFlow(false)
+    internal fun requireRunReady() {
+        if (recovery.value != BackupRecovery.READY) throw BackupRecoveryBlocked()
+    }
+    internal fun requireBackupReady() = check(recovery.value == BackupRecovery.READY)
+    internal val backupState = kotlinx.coroutines.flow.MutableStateFlow(BackupState())
     internal val appScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.Main.immediate)
     internal val operationRunning = kotlinx.coroutines.flow.MutableStateFlow(false)
     internal val pendingLocalChanges get() = database.dao().observePendingLocalChanges()
@@ -58,6 +72,10 @@ class CollectorApp : Application() {
     internal suspend fun hasVerifiedKey() = aiKeys.any { (key, _) -> keyVerified(key) && secrets.has(key) }
 
     private val mailKeys = listOf("MAIL_TO", "SMTP_USERNAME", "SMTP_PASSWORD")
+    private val sourceKeys = listOf("GITHUB_TOKEN", "PRODUCTHUNT_TOKEN", "REDDIT_CLIENT_ID", "REDDIT_CLIENT_SECRET")
+
+    internal suspend fun backupPrivateValues(): List<String> =
+        secrets.getAll(mailKeys + aiKeys.map { it.first } + sourceKeys + settings().tokenName).values.filterNotNull()
 
     internal suspend fun hasMailCredentials() = secrets.getAll(mailKeys).values.all { it != null }
 
@@ -81,8 +99,7 @@ class CollectorApp : Application() {
     internal suspend fun runtime(): CollectorRuntime = withContext(Dispatchers.IO) {
         runtimeOverride ?: run {
             val current = settings()
-            val values = secrets.getAll(mailKeys + listOf("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GITHUB_TOKEN",
-                "PRODUCTHUNT_TOKEN", "REDDIT_CLIENT_ID", "REDDIT_CLIENT_SECRET")).toMutableMap()
+            val values = secrets.getAll(mailKeys + aiKeys.map { it.first } + sourceKeys).toMutableMap()
             val batchCredentials = aiKeys.associate { (key, _) -> key to values[key] }
             aiKeys.forEach { (key, _) -> if (!keyVerified(key)) values.remove(key) }
             if (values["GITHUB_TOKEN"] == null && current.tokenName != "GITHUB_TOKEN") {
@@ -118,7 +135,7 @@ class CollectorApp : Application() {
     }
 
     internal suspend fun executeDaily(date: LocalDate, resume: Boolean, automatic: Boolean,
-        deferrals: Int = 0, onStage: (RunStage) -> Unit = {}): collector.runtime.ScheduledSummary? = withContext(Dispatchers.IO) {
+        deferrals: Int = 0, onLockAcquired: () -> Unit = {}, onStage: (RunStage) -> Unit = {}): collector.runtime.ScheduledSummary? = withContext(Dispatchers.IO) {
         val runtime = runtime()
         fun markFailure() {
             val paid = runCatching { runtime.dailyCost(date) > 0 }.getOrDefault(true)
@@ -131,6 +148,10 @@ class CollectorApp : Application() {
                 batchOverrideForRun = { resume || schedule.options().batch },
                 deadline = Duration.ofMinutes(60), onStage = onStage, deferBatch = deferrals < 6,
                 honorSchedule = automatic, runDate = date, beforeRun = { flushLocalChanges(it) },
+                onLockAcquired = {
+                    requireRunReady()
+                    onLockAcquired()
+                },
                 resumeBatch = resume, onUnpublishedBatch = { previous ->
                     schedule.recoverBatch(previous)
                 }, onMailRetriesExpired = { count -> RunNotifications.expiredMail(this@CollectorApp, count) })).also {
@@ -178,7 +199,7 @@ class CollectorApp : Application() {
         }
     }
 
-    internal suspend fun finishOperation() = withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) {
+    internal suspend fun finishOperation(releaseReservation: Boolean = true) = withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) {
         localChangesLock.withLock {
             try {
                 runCatching { flushLocalChangesLocked(null, deferScheduleUpdate = true) }
@@ -186,9 +207,11 @@ class CollectorApp : Application() {
                 operationRunning.value = false
             }
         }
-        runCatching { schedule.finishScheduleUpdate() }
-        runCatching { schedule.releaseReservation() }
-        runCatching { sync.refresh() }
+        if (recovery.value == BackupRecovery.READY) {
+            runCatching { schedule.finishScheduleUpdate() }
+            if (releaseReservation) runCatching { schedule.releaseReservation() }
+            runCatching { sync.refresh() }
+        }
         Unit
     }
 
@@ -199,8 +222,52 @@ class CollectorApp : Application() {
         getSharedPreferences("first-run", 0).edit().putString("date", date.toString()).apply()
     }
 
+    private fun recoveryFailed() {
+        runCatching { Backup.markRecoveryPending(paths) }
+        recovery.value = BackupRecovery.PENDING
+        runCatching { RunNotifications.backupRecovery(this, pending = true) }
+    }
+
+    internal fun checkBackupRollback() {
+        if (Backup.recoveryPending(paths)) recoveryFailed()
+        else if (Backup.recoveryUnavailable(paths)) recoveryUnavailable.value = true
+    }
+
+    internal fun retryBackupRecovery() {
+        if (operationRunning.value) return
+        if (recovery.compareAndSet(BackupRecovery.PENDING, BackupRecovery.LOADING)) recoverBackup()
+    }
+
+    private fun recoverBackup() {
+        appScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    if (Backup.recover(paths, deferCompletion = true, onUnavailable = { recoveryUnavailable.value = true })) {
+                        sync.refreshAfterRecovery()
+                        Backup.completeRecovery(paths)
+                    }
+                    cacheDir.listFiles().orEmpty().filter { it.name.startsWith("backup-transfer-") }.forEach { it.delete() }
+                }
+                runCatching { RunNotifications.backupRecovery(this@CollectorApp, pending = false) }
+                recovery.value = BackupRecovery.READY
+                runCatching { schedule.register() }
+                runCatching { schedule.recoverPendingBatches() }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                withContext(Dispatchers.IO) { recoveryFailed() }
+            }
+        }
+    }
+
+    internal fun dismissUnavailableRecovery() {
+        recoveryUnavailable.value = false
+        appScope.launch(Dispatchers.IO) { runCatching { Backup.acknowledgeUnavailableRecovery(paths) } }
+    }
+
     override fun onCreate() {
         super.onCreate()
+        recoverBackup()
         RunNotifications.restorePreviousFailures(this)
         val work = androidx.work.WorkManager.getInstance(this)
         listOf("periodic-sync", "manual-sync", "outbox").forEach { work.cancelUniqueWork(it) }
@@ -273,6 +340,7 @@ class CollectorApp : Application() {
 
     internal suspend fun resolveLocalChanges(ids: List<Long>, retry: Boolean) {
         localChangesLock.withLock {
+            requireBackupReady()
             val dao = database.dao()
             ids.forEach { if (retry) dao.retryLocalChange(it) else dao.removeLocalChange(it) }
         }
@@ -292,6 +360,7 @@ class CollectorApp : Application() {
 
     private suspend fun saveChange(change: PendingLocalChange) = withContext(Dispatchers.IO) {
         localChangesLock.withLock {
+            requireBackupReady()
             val dao = database.dao()
             if (operationRunning.value || dao.localChanges().isNotEmpty()) {
                 dao.enqueueLocalChange(change)
@@ -314,6 +383,7 @@ class CollectorApp : Application() {
     }
 
     private suspend fun flushLocalChangesLocked(editor: CollectorRuntime.LocalEditor?, deferScheduleUpdate: Boolean) {
+        if (recovery.value != BackupRecovery.READY) return
         val dao = database.dao()
         for (change in dao.localChanges()) {
             try {

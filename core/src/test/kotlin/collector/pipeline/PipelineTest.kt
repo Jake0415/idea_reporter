@@ -52,13 +52,13 @@ class PipelineTest {
     @Test
     fun rssDoesNotExposeFeedCredentialsInResultLinks() = runBlocking {
         MockWebServer().use { server ->
-            val feedUrl = server.url("/feed?token=fake-feed-token&lang=en").newBuilder()
+            val feedUrl = server.url("/feed?token=fake-feed-token&key=Zq9&secret=x&lang=en").newBuilder()
                 .username("fake-feed-user").password("fake-feed-password").build()
             val link = feedUrl.toString().replace("&", "&amp;") + "&amp;ref=public"
             val reflected = "/before-fake-feed-token?ref=pre%66ake-feed-token-post#fake-feed-password"
             server.enqueue(MockResponse().setBody("""<rss><channel>
-                <item><title>Useful fake-feed-token release</title><link>$reflected</link>
-                    <description>before-fake-feed-user-after</description><author>by fake-feed-password</author>
+                <item><title>Useful fake-feed-token Zq9 x release</title><link>$reflected</link>
+                    <description>before-fake-feed-user-after Zq9 x</description><author>by fake-feed-password</author>
                     <pubDate>$NOW</pubDate></item>
                 <item><title>crypto fake-feed-token</title><link>$link</link>
                     <pubDate>$NOW</pubDate></item>
@@ -67,8 +67,9 @@ class PipelineTest {
             val result = Pipeline(listOf(RssAdapter(OkHttpClient())), MemorySeen(), clock = { NOW })
                 .run(SourcesFile(listOf(config), excludeKeywords = listOf("crypto")))
 
-            assertEquals(server.url("/feed?lang=en&ref=public").toString(), result.dropped.single().item.url)
-            assertEquals("Useful [redacted] release", result.items.single().title)
+            assertEquals(server.url("/feed?token=[redacted]&key=[redacted]&secret=[redacted]&lang=en&ref=[redacted]").toString(), result.dropped.single().item.url)
+            assertEquals("Useful [redacted] [redacted] x release", result.items.single().title)
+            assertEquals("before-[redacted]-after [redacted] x", result.items.single().snippet)
             val json = collector.source.Http.json.encodeToString(PipelineResult.serializer(), result)
             for (secret in listOf("fake-feed-token", "%66ake-feed-token", "fake-feed-user", "fake-feed-password")) {
                 assertTrue(secret !in json)

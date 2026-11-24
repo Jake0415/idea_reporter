@@ -44,7 +44,8 @@ internal class AnalysisCommand(
     private val onEstimate: (AnalysisEstimate) -> Unit = {},
     private val approvedReservation: Double? = null,
     private val approvalBudgetVersion: String? = null,
-    private val onFailure: (String, Boolean) -> Unit = { _, _ -> }
+    private val onFailure: (String, Boolean) -> Unit = { _, _ -> },
+    private val onLockAcquired: () -> Unit = {}
 ) {
     private val reports = AnalysisReports(out.resolve("analysis"))
     private fun settings() = settingsOverride ?: BudgetSettings.load(out, print)
@@ -95,7 +96,10 @@ internal class AnalysisCommand(
                     "서로 다른 테마 ID를 1~3개 지정하세요."
                 }
                 out.mkdirs()
-                val execute: suspend () -> Boolean = { analyze(themes.sorted(), date, yes, force, budget, fit) }
+                val execute: suspend () -> Boolean = {
+                    onLockAcquired()
+                    analyze(themes.sorted(), date, yes, force, budget, fit)
+                }
                 return when {
                     !acquireLock -> execute()
                     runLock != null -> runLock.withLock(out, execute)

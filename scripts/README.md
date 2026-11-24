@@ -1,4 +1,4 @@
-자동 실행은 GitHub Actions에서만 합니다. 메일 중복 방지를 위해 PC 작업 스케줄러를 사용하지 않습니다.
+매일 실행은 폰. PC 명령(--scheduled 등)은 수동 확인용.
 
 [Actions 설정](actions-setup.md) · [PC에서 data 가져오기](data-pull.ps1)
 

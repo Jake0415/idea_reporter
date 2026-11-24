@@ -44,7 +44,7 @@ import java.time.Duration
 import java.time.LocalDate
 import java.util.Locale
 
-class RunLockedException : RuntimeException()
+open class RunLockedException : RuntimeException()
 class BatchDeferredException : CancellationException()
 
 interface RunLock {
@@ -82,6 +82,7 @@ data class ScheduledOptions(
     val onUnpublishedBatch: suspend (LocalDate) -> Unit = {},
     val onMailRetriesExpired: (Int) -> Unit = {},
     val deferMailDelivery: Boolean = false,
+    val onLockAcquired: () -> Unit = {},
     val mailEnabled: () -> Boolean = { mail }
 )
 
@@ -193,6 +194,7 @@ class CollectorRuntime(
             deadlineClock = deadlineClock, noMail = !options.mail, mailEnabled = options.mailEnabled, deferMailDelivery = options.deferMailDelivery, runLock = runLock, runDate = options.runDate,
             onMail = { options.onStage(RunStage.MAIL) }, propagateLocked = true,
             requireDailyPublication = options.runDate != null,
+            onLockAcquired = options.onLockAcquired,
             beforeRun = {
                 options.beforeRun(LocalEditor())
                 skipped = (options.resumeBatch && options.runDate?.let { !hasBatchToResume(it) } == true) ||
@@ -229,7 +231,8 @@ class CollectorRuntime(
         onEstimate: (AnalysisEstimate) -> Unit = {},
         approvedReservation: Double? = null,
         approvalBudgetVersion: String? = null,
-        onFailure: (String, Boolean) -> Unit = { _, _ -> }
+        onFailure: (String, Boolean) -> Unit = { _, _ -> },
+        onLockAcquired: () -> Unit = {}
     ) = AnalysisCommand(
         out, AnalysisConfig.load(paths.analysisConfig, PipelineConfig.defaults.analysis),
         PromptResolver(FilePromptStore(paths.promptsDir.toPath())), provider = {
@@ -245,7 +248,7 @@ class CollectorRuntime(
         }, clock = clock, print = print, sendMail = sendMail ?: { id ->
             if (delivery().send(MailKind.ANALYSIS, id) == MailSendResult.RECORD_FAILED) throw MailRecordFailure()
         }, beforePaidRun = beforePaidRun, runLock = runLock, onEstimate = onEstimate,
-        approvedReservation = approvedReservation, approvalBudgetVersion = approvalBudgetVersion, onFailure = onFailure
+        approvedReservation = approvedReservation, approvalBudgetVersion = approvalBudgetVersion, onFailure = onFailure, onLockAcquired = onLockAcquired
     )
 
     suspend fun estimateAnalysis(themeIds: List<String>): AnalysisEstimate {
@@ -256,14 +259,15 @@ class CollectorRuntime(
     }
 
     suspend fun runAnalysis(themeIds: List<String>, approvedMaxUsd: Double, mail: Boolean = true,
-        budgetVersion: String? = null, mailEnabled: () -> Boolean = { mail }): AnalysisSummary {
+        budgetVersion: String? = null, onLockAcquired: () -> Unit = {},
+        mailEnabled: () -> Boolean = { mail }): AnalysisSummary {
         var requote = false
         var failure: String? = null
         val successful = analysisCommand(print = {}, sendMail = { id ->
             if (mailEnabled() && delivery(mailEnabled).send(MailKind.ANALYSIS, id) == MailSendResult.RECORD_FAILED)
                 throw MailRecordFailure()
         },
-            approvedReservation = approvedMaxUsd, approvalBudgetVersion = budgetVersion,
+            approvedReservation = approvedMaxUsd, approvalBudgetVersion = budgetVersion, onLockAcquired = onLockAcquired,
             onFailure = { reason, stale -> requote = stale; failure = reason.takeIf(String::isNotBlank) }).run(
             (listOf("--analyze") + themeIds + "--yes").toTypedArray()
         )
