@@ -2,7 +2,6 @@ package app.ideacollector
 
 import app.ideacollector.data.RequestRow
 import app.ideacollector.data.Artifact
-import app.ideacollector.github.GitHubClient
 import app.ideacollector.github.contractJson
 import collector.model.IdeaCard
 import collector.model.TrackedIdea
@@ -13,8 +12,6 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
-import okhttp3.mockwebserver.MockResponse
-import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -93,23 +90,6 @@ class ScreenStateTest {
         val star = row("APPLIED").copy(createdAt = "2026-11-23T07:40:00Z")
         assertTrue(ScreenState(listOf(artifact), listOf(star, request)).starred(card))
         assertFalse(ScreenState(listOf(artifact), listOf(star, request.copy(status = "REJECTED"))).starred(card))
-    }
-
-    @Test fun dailyActionsUseDailyWorkflowOnMockServer() {
-        MockWebServer().use { server ->
-            val github = GitHubClient(base = server.url("/"))
-            server.enqueue(MockResponse().setBody("""{"workflow_runs":[{"status":"in_progress"}]}"""))
-            assertTrue(github.dailyActive("sample/test", "test-token", null))
-            assertTrue(server.takeRequest().path.orEmpty().contains("/daily.yml/runs"))
-            server.enqueue(MockResponse().setBody("""{"default_branch":"trunk"}"""))
-            server.enqueue(MockResponse().setResponseCode(204))
-            github.dispatchDaily("sample/test", "test-token")
-            assertEquals("/repos/sample/test", server.takeRequest().path)
-            val request = server.takeRequest()
-            assertEquals("POST", request.method)
-            assertEquals("/repos/sample/test/actions/workflows/daily.yml/dispatches", request.path)
-            assertEquals("""{"ref":"trunk"}""", request.body.readUtf8())
-        }
     }
 
     private fun row(status: String) =

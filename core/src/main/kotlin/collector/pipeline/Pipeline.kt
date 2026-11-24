@@ -75,6 +75,12 @@ class Pipeline(
         val startedAt = clock()
         val today = startedAt.atZone(zone).toLocalDate()
         val paid = full?.takeIf { paidStageSkipReason == null }
+        if (paid != null) {
+            val generation = paid.generationInput(today)
+            val collected = generation?.collection ?: paid.classificationInput(today)
+            if (collected != null) return paid.run(collected.base, collected.collected, collected.tracking,
+                collected.tracked, startedAt, today, generation, latestTracked = paid.storedTracked(), onStage = onStage)
+        }
         val tracked = paid?.tracked().orEmpty()
         val totalStart = System.nanoTime()
         val stages = mutableListOf<StageResult>()
@@ -141,7 +147,7 @@ class Pipeline(
             paidStagesSkipped = paidStageSkipReason != null
         )
         val base = PipelineResult(scored, dropped, report)
-        return paid?.takeUnless { it.collectOnly }?.run(base, collected, tracking, tracked, startedAt, today, onStage) ?: base
+        return paid?.takeUnless { it.collectOnly }?.run(base, collected, tracking, tracked, startedAt, today, onStage = onStage) ?: base
     }
 
     private data class Fetch(val source: SourceResult, val items: List<Item> = emptyList(), val warning: String? = null)

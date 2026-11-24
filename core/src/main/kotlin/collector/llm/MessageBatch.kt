@@ -29,7 +29,8 @@ internal data class BatchOutcome(
     val supplementRefs: List<SupplementRef> = emptyList()
 )
 
-internal data class GenerationBatchResume(val requestWithoutSupplement: LlmRequest, val supplementRefs: List<SupplementRef>)
+internal data class GenerationBatchResume(val requestWithoutSupplement: LlmRequest, val supplementRefs: List<SupplementRef>,
+                                          val saveInput: Boolean = false)
 
 internal const val CLASSIFICATION_BATCH_PENDING = "분류 Batch 대기 — 다음 실행에서 이어서"
 
@@ -51,7 +52,8 @@ private data class BatchCheckpoint(
     val quarantineReason: String? = null,
     val unsettledIds: Set<String>? = null,
     val supplementKeys: Set<String> = emptySet(),
-    val supplementRefs: List<SupplementRef> = emptyList()
+    val supplementRefs: List<SupplementRef> = emptyList(),
+    val generationInput: LlmRequest? = null
 )
 
 @Serializable
@@ -80,6 +82,7 @@ internal fun publicBatchCheckpoint(text: String): String {
         requests = checkpoint.requests.mapValues { (_, saved) -> saved.copy(request = null) },
         call = checkpoint.call.copy(error = null),
         supplementKeys = emptySet(),
+        generationInput = null,
         supplementRefs = checkpoint.supplementRefs.map { it.copy(note = "") }
     ))
 }
@@ -171,6 +174,15 @@ private fun File.indexedCheckpoint(): BatchCheckpoint? {
     return entry.checkpoint.takeIf { it.batchId == entry.batchId && savedResults(entry.batchId).isFile }
 }
 
+internal fun savedGenerationInput(out: File, date: String, withoutSupplement: (LlmRequest) -> LlmRequest): LlmRequest? {
+    val path = batchPath(out, date, "generate")
+    val saved = path.takeIf { it.isFile } ?: path.completed().takeIf { it.isFile } ?: return null
+    return runCatching {
+        val checkpoint = Json.decodeFromString<BatchCheckpoint>(saved.readText())
+        checkpoint.generationInput ?: checkpoint.requests.values.singleOrNull()?.request?.let(withoutSupplement)
+    }.getOrNull()
+}
+
 internal fun hasSavedBatch(out: File, date: String, stage: String): Boolean =
     batchPath(out, date, stage).let { it.isFile || it.completed().isFile || it.indexedCheckpoint() != null }
 
@@ -181,12 +193,34 @@ internal fun hasLocalBatchResults(path: File): Boolean =
             checkpoint.batchId?.let { path.savedResults(it).isFile } == true
     }.getOrDefault(false)
 
+internal fun hasSettledBatchResults(path: File): Boolean =
+    listOf(path, path.completed()).any { file ->
+        hasLocalBatchResults(file) && runCatching {
+            Json.decodeFromString<BatchCheckpoint>(file.readText()).settled
+        }.getOrDefault(false)
+    }
+
 internal fun isPendingBatch(path: File): Boolean =
     path.isFile && runCatching {
         val checkpoint = Json.decodeFromString<BatchCheckpoint>(path.readText())
         !checkpoint.rejected && (checkpoint.quarantineReason != null || checkpoint.resultsIncomplete ||
             checkpoint.batchId?.let { path.results(it).isFile } != true)
     }.getOrDefault(true)
+
+internal suspend fun batchInProgress(path: File, provider: BatchCapableProvider): Boolean {
+    if (!isPendingBatch(path)) return false
+    val checkpoint = runCatching { Json.decodeFromString<BatchCheckpoint>(path.readText()) }.getOrNull()
+        ?: return false
+    val id = checkpoint.batchId ?: return false
+    if (checkpoint.quarantineReason != null || checkpoint.resultsIncomplete) return false
+    return try {
+        !provider.retrieveBatch(id).ended
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        false // Normal recovery handles provider errors and missing batches.
+    }
+}
 
 internal suspend fun runMessageBatch(
     provider: BatchCapableProvider?, guard: CostGuard, call: LlmCall?, path: File,
@@ -197,7 +231,8 @@ internal suspend fun runMessageBatch(
     recoveryRemainingMillis: () -> Long = { Long.MAX_VALUE },
     recovering: Boolean = false,
     retrySettlement: Boolean = true,
-    stateHook: () -> Boolean = { true }
+    stateHook: () -> Boolean = { true },
+    deferBatch: Boolean = false
 ): BatchOutcome {
     val started = System.nanoTime()
     val completed = path.completed()
@@ -340,7 +375,8 @@ internal suspend fun runMessageBatch(
                         requests[index], itemKeys.getOrNull(index).orEmpty())
             }.toMap()
             val intent = BatchCheckpoint(requests = saved, submittedAt = Instant.now().toString(), call = call,
-                runId = runId, supplementRefs = generationResume?.supplementRefs.orEmpty())
+                runId = runId, supplementRefs = generationResume?.supplementRefs.orEmpty(),
+                generationInput = generationResume?.takeIf { it.saveInput }?.requestWithoutSupplement)
             val params = try {
                 provider.prepareBatch(saved.keys.zip(requests).toMap())
             } catch (e: Exception) {
@@ -384,6 +420,7 @@ internal suspend fun runMessageBatch(
                 return pending("Batch 제출 확인 필요", intent)
             }
             if (!stateHook()) issues += "Batch ID checkpoint publication failed: " + path.name
+            if (deferBatch && !checkNotNull(state).ended) throw collector.runtime.BatchDeferredException()
             submitted
         }
     }
@@ -501,6 +538,7 @@ internal suspend fun runMessageBatch(
         } else {
             val api = provider ?: return pending("Batch 공급자 연결 필요", checkpoint)
             if (state == null) state = bounded { lookup { api.retrieveBatch(id) } }
+            if (deferBatch && !state.ended) throw collector.runtime.BatchDeferredException()
             suspend fun waitUntilEnded(pollSeconds: Int) {
                 while (state?.ended != true) {
                     delay(pollSeconds * 1000L)
@@ -800,6 +838,10 @@ internal fun cleanBatchFiles(directory: File, recentTopicDays: Int, now: Instant
             }) continue
         if (result.delete()) result.resolveSibling(result.name.removeSuffix(".results.jsonl") + ".index-entry.json").delete()
     }
+    files.filter { it.name.matches(Regex("""\d{4}-\d{2}-\d{2}-(classify|generate)\.input""")) &&
+        it.name.take(10) < reuseCutoff &&
+        !hasSavedBatch(directory.parentFile, it.name.take(10), it.nameWithoutExtension.substring(11))
+    }.forEach { it.delete() }
     files.filter { it.extension == "reuse" && it.name.take(10) < reuseCutoff }.forEach { it.delete() }
     val quarantineCutoff = now.minus(Duration.ofDays(30)).toEpochMilli()
     val index = directory.resolve("index.json")

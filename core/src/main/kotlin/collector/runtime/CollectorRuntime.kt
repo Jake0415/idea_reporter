@@ -12,6 +12,7 @@ import collector.config.PipelineConfig
 import collector.config.SourcesFile
 import collector.llm.*
 import collector.model.RunReport
+import collector.model.DropReason
 import collector.pipeline.FullPipeline
 import collector.pipeline.Pipeline
 import collector.pipeline.PipelineResult
@@ -44,6 +45,7 @@ import java.time.LocalDate
 import java.util.Locale
 
 class RunLockedException : RuntimeException()
+class BatchDeferredException : CancellationException()
 
 interface RunLock {
     suspend fun <T> withLock(out: File, block: suspend () -> T): T
@@ -62,14 +64,23 @@ data class DailyOptions(
     val batchOverride: Boolean? = null,
     val deadline: Duration? = null,
     val onStage: (RunStage) -> Unit = {},
-    val sources: SourcesFile? = null
+    val sources: SourcesFile? = null,
+    val deferBatch: Boolean = false
 )
 
 data class ScheduledOptions(
     val mail: Boolean = true,
     val batchOverride: Boolean? = null,
     val deadline: Duration? = null,
-    val onStage: (RunStage) -> Unit = {}
+    val onStage: (RunStage) -> Unit = {},
+    val deferBatch: Boolean = false,
+    val honorSchedule: Boolean = true,
+    val runDate: LocalDate? = null,
+    val beforeRun: suspend (CollectorRuntime.LocalEditor) -> Unit = {},
+    val batchOverrideForRun: (suspend () -> Boolean)? = null,
+    val resumeBatch: Boolean = false,
+    val onUnpublishedBatch: suspend (LocalDate) -> Unit = {},
+    val onMailRetriesExpired: (Int) -> Unit = {}
 )
 
 data class DailySummary(
@@ -79,7 +90,15 @@ data class DailySummary(
     val failedSources: Int
 )
 
-data class ScheduledSummary(val exitCode: Int, val daily: DailySummary?, val skipped: Boolean = false)
+private const val BATCH_CONTINUATION_PENDING = "Batch continuation pending"
+
+enum class ScheduledMailStatus { SENT, PENDING, FAILED }
+
+data class ScheduledSummary(
+    val exitCode: Int, val daily: DailySummary?, val skipped: Boolean = false,
+    val mailStatus: ScheduledMailStatus? = null, val mailFailureReason: String? = null,
+    val previousMailRetries: Map<MailSendResult, Int> = emptyMap(), val expiredMailRetries: Int = 0
+)
 data class TrendSummary(val date: LocalDate, val subject: String)
 data class AnalysisEstimate(val estimatedUsd: Double?, val reservationUsd: Double?, val canReserve: Boolean)
 data class AnalysisSummary(val successful: Boolean)
@@ -131,19 +150,32 @@ class CollectorRuntime(
     internal suspend fun runScheduled(
         options: ScheduledOptions, sources: SourcesFile?, startedAt: Instant, deadlineClock: Clock
     ): ScheduledSummary {
-        if (readJson<collector.data.ScheduleSettings>(out.resolve("settings/schedule.json"))?.enabled == false) {
-            if (!options.mail) locked { out.resolve("mail/scheduled.json").delete() }
-            return ScheduledSummary(0, null, skipped = true)
-        }
+        var skipped = false
         var summary: DailySummary? = null
+        val previousMailRetries = mutableMapOf<MailSendResult, Int>()
+        var expiredMailRetries = 0
+        val scheduledMailer = if (options.mail) createMailer() else null
         val status = collector.dev.runScheduled(
             out, secrets, clock, daily = { start, log ->
                 var result: PipelineResult? = null
                 var published = false
                 try {
                     published = executeDaily(emptyArray(), start, print = {}, summary = { result = it },
-                        deadlineClock = deadlineClock, options = DailyOptions(batchOverride = options.batchOverride,
-                            deadline = options.deadline, onStage = options.onStage, sources = sources))
+                        deadlineClock = deadlineClock, options = DailyOptions(batchOverride = options.batchOverrideForRun?.invoke() ?: options.batchOverride,
+                            deadline = options.deadline, onStage = options.onStage, sources = sources, deferBatch = options.deferBatch),
+                        runDate = options.runDate,
+                        onUnpublishedBatch = options.onUnpublishedBatch,
+                        beforePublish = { day ->
+                            if (options.runDate != null && options.mail) {
+                                try {
+                                    queuePublicationMail(out, MailKind.DAILY, day, clock)
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (e: Exception) {
+                                    log("일일 메일 대기 기록 실패 · ${safeFailure(e)}")
+                                }
+                            }
+                        })
                     published
                 } finally {
                     val daily = summarize(result, published)
@@ -152,12 +184,32 @@ class CollectorRuntime(
                         String.format(Locale.ROOT, "추정 USD %.6f", daily.costUsd) +
                         " · 실패 출처 ${daily.failedSources}개")
                 }
-            }, mailer = if (options.mail) createMailer() else null, startedAt = startedAt,
-            deadlineMinutes = options.deadline?.toMinutes()?.toInt() ?: pipelineConfig().deadlineMinutes,
-            deadlineClock = deadlineClock, noMail = !options.mail, runLock = runLock,
-            onMail = { options.onStage(RunStage.MAIL) }, propagateLocked = true
+            }, mailer = scheduledMailer, startedAt = startedAt,
+            deadlineClock = deadlineClock, noMail = !options.mail, runLock = runLock, runDate = options.runDate,
+            onMail = { options.onStage(RunStage.MAIL) }, propagateLocked = true,
+            requireDailyPublication = options.runDate != null,
+            beforeRun = {
+                options.beforeRun(LocalEditor())
+                skipped = (options.resumeBatch && options.runDate?.let { !hasBatchToResume(it) } == true) ||
+                    (options.honorSchedule &&
+                        readJson<collector.data.ScheduleSettings>(out.resolve("settings/schedule.json"))?.enabled == false)
+                !skipped
+            },
+            configuredDeadline = { options.deadline?.toMinutes()?.toInt() ?: pipelineConfig().deadlineMinutes },
+            onPreviousMailRetry = { result -> previousMailRetries.merge(result, 1, Int::plus) },
+            onMailRetryExpired = { count ->
+                expiredMailRetries += count
+                options.onMailRetriesExpired(count)
+            }
         )
-        return ScheduledSummary(status, summary)
+        val mailStatus = if (options.mail && options.runDate != null && summary?.published == true) {
+            if (scheduledMailer == null) ScheduledMailStatus.FAILED else scheduledMailStatus(options.runDate)
+        } else null
+        val mailFailureReason = if (mailStatus == ScheduledMailStatus.FAILED) {
+            if (scheduledMailer == null) "메일 설정 없음"
+            else mailFailureReason(requireNotNull(options.runDate))
+        } else null
+        return ScheduledSummary(status, summary, skipped, mailStatus, mailFailureReason, previousMailRetries, expiredMailRetries)
     }
 
     private fun summarize(result: PipelineResult?, published: Boolean) = DailySummary(
@@ -226,6 +278,126 @@ class CollectorRuntime(
         updated
     }
 
+    fun hasPendingBatch(date: LocalDate): Boolean = batchPaths(date).any(::isPendingBatch)
+
+    fun hasTerminalDailyRecord(date: LocalDate): Boolean {
+        if (out.resolve("$date.json").isFile) return true
+        return listOf("runs", "runs/failed").any { directory ->
+            out.resolve(directory).listFiles().orEmpty().any { file ->
+                file.isFile && file.name.startsWith("$date-") && file.extension == "json" &&
+                    (directory == "runs/failed" || runCatching {
+                        val issues = readJson<PipelineResult>(file)?.report?.issues.orEmpty()
+                        issues.none { it in setOf(BATCH_CONTINUATION_PENDING, CLASSIFICATION_BATCH_PENDING, "Batch 결과 대기") }
+                    }.getOrDefault(true))
+            }
+        }
+    }
+
+    fun hasBatchToResume(date: LocalDate): Boolean =
+        !out.resolve("$date.json").isFile &&
+            (hasPendingBatch(date) || batchPaths(date).any(::hasSettledBatchResults))
+
+    fun scheduledMailStatus(date: LocalDate): ScheduledMailStatus {
+        val daily = publicationMailStatus(date, MailKind.DAILY)
+        val trend = MailKind.TREND.takeIf {
+            date.dayOfWeek == java.time.DayOfWeek.SUNDAY && it.file(out, date.toString(), "json").isFile
+        }?.let { publicationMailStatus(date, it) }
+        return when {
+            ScheduledMailStatus.FAILED in listOf(daily, trend) -> ScheduledMailStatus.FAILED
+            ScheduledMailStatus.PENDING in listOf(daily, trend) -> ScheduledMailStatus.PENDING
+            else -> ScheduledMailStatus.SENT
+        }
+    }
+
+    private fun mailFailureReason(date: LocalDate): String =
+        runCatching { MailDelivery(out, null, clock = clock).failureReason(date.toString()) }
+            .getOrDefault("메일 기록 읽기 실패")
+
+    private fun publicationMailStatus(date: LocalDate, kind: MailKind): ScheduledMailStatus =
+        runCatching { MailDelivery(out, null, clock = clock).status(kind, date.toString()) }
+            .getOrDefault(ScheduledMailStatus.FAILED)
+
+    fun dailyCost(date: LocalDate): Double = collector.dev.FileCostLedger(out.resolve("cost-ledger")).total(date)
+
+    suspend fun applyLocalChanges(changes: List<collector.data.InboxRequest>) = locked {
+        LocalEditor().applyChanges(changes)
+    }
+
+    suspend fun saveLocalConfig(name: String, json: String) = locked {
+        LocalEditor().saveConfig(name, json)
+    }
+
+    inner class LocalEditor internal constructor() {
+        fun applyChanges(changes: List<collector.data.InboxRequest>) {
+            require(changes.all {
+                it !is collector.data.InboxRequest.Analysis && it.schemaVersion == collector.data.DataBranch.VERSION &&
+                    collector.data.requestIdPattern.matches(it.requestId)
+            })
+            val editor = collector.data.InboxProcessor(out, paths.promptsDir, clock, paths.pipelineConfig)
+            changes.forEach { editor.apply(it, Instant.parse(it.createdAt)) }
+        }
+
+        fun saveConfig(name: String, json: String) {
+            val target = when (name) {
+                "pipeline.local.json" -> paths.pipelineConfig
+                "sources.local.json" -> paths.sourcesConfig
+                "analysis.local.json" -> paths.analysisConfig
+                else -> throw IllegalArgumentException()
+            }
+            val candidate = File.createTempFile("config-", ".tmp", paths.configDir.apply { mkdirs() })
+            try {
+                candidate.writeText(json)
+                when (target) {
+                    paths.pipelineConfig -> PipelineConfig.load(candidate)
+                    paths.sourcesConfig -> ConfigLoader.load(candidate)
+                    paths.analysisConfig -> AnalysisConfig.load(candidate, PipelineConfig.defaults.analysis, report = {})
+                }
+                target.writeAtomically(json)
+            } finally {
+                candidate.delete()
+            }
+        }
+    }
+
+    private fun batchPaths(date: LocalDate) = listOf("classify", "generate").map {
+        out.resolve("batch/$date-$it.json")
+    }
+
+    private suspend fun <T> withBatchProvider(block: suspend (BatchCapableProvider?) -> T): T {
+        val providers = dailyProviders?.invoke() ?: listOfNotNull(secrets.get("ANTHROPIC_API_KEY")?.let {
+            providerFactory(ProviderId.ANTHROPIC, it)
+        })
+        return try {
+            block(providers.firstOrNull { it.id == ProviderId.ANTHROPIC } as? BatchCapableProvider)
+        } finally {
+            providers.filterIsInstance<AutoCloseable>().forEach { it.close() }
+        }
+    }
+
+    suspend fun batchInProgress(date: LocalDate): Boolean =
+        kotlinx.coroutines.withTimeoutOrNull(60_000) {
+            withBatchProvider { provider ->
+                provider != null && batchPaths(date).any { collector.llm.batchInProgress(it, provider) }
+            }
+        } ?: true
+
+    suspend fun maintainPendingBatch(date: LocalDate) = locked {
+        val config = pipelineConfig()
+        val history = FileHistorySearch(out, config.historyDays)
+        val guard = CostGuard(config.dailyBudgetUsd, clock = clock, ledger = costLedger(out, history))
+        withBatchProvider { provider ->
+            batchPaths(date).filter(::isPendingBatch).forEach { path ->
+                kotlinx.coroutines.withTimeoutOrNull(60_000) {
+                    runMessageBatch(provider, guard, null, path, config.batch, emptyList(), emptyList(), null,
+                        emptyList(), { 60_000 }, pollRemainingMillis = { 5_000 },
+                        recoveryRemainingMillis = { 5_000 }, recovering = true, stateHook = batchCheckpointHook)
+                }
+            }
+        }
+    }
+
+    suspend fun <T> withRunLock(block: suspend () -> T): T = locked(block)
+
     private suspend fun <T> locked(block: suspend () -> T): T {
         out.mkdirs()
         return runLock.withLock(out, block)
@@ -237,7 +409,10 @@ class CollectorRuntime(
         print: (String) -> Unit = ::println,
         summary: (PipelineResult) -> Unit = {},
         deadlineClock: Clock = clock,
-        options: DailyOptions
+        options: DailyOptions,
+        runDate: LocalDate? = null,
+        beforePublish: (LocalDate) -> Unit = {},
+        onUnpublishedBatch: suspend (LocalDate) -> Unit = {}
     ): Boolean {
         val defaults = pipelineConfig().let { config ->
             val enabled = options.batchOverride
@@ -275,7 +450,7 @@ class CollectorRuntime(
         val history = FileHistorySearch(out, defaults.historyDays)
         val ledger = if (noLlm) null else costLedger(out, history)
         val startedAt = runStartedAt ?: clock.instant()
-        val today = startedAt.atZone(clock.zone).toLocalDate()
+        val today = runDate ?: startedAt.atZone(clock.zone).toLocalDate()
         val runClockStart = clock.instant()
         val generationCheckpoint = batchPath(out, today.toString(), "generate")
         val pendingBatches = out.resolve("batch").listFiles().orEmpty().any {
@@ -297,7 +472,9 @@ class CollectorRuntime(
             }
         }
         val initialSkip = if (pendingBatches && !batchDisabled) null else budgetSkipReason()
-        val costs = CostGuard(config.dailyBudgetUsd, clock = clock, ledger = ledger, allowsReservation = monthlyBudget::allows)
+        val budgetClock = if (runDate == null) clock else Clock.fixed(startedAt.atZone(clock.zone).with(today).toInstant(), clock.zone)
+        val costs = CostGuard(config.dailyBudgetUsd, clock = budgetClock, ledger = ledger,
+            allowsReservation = { day, amount -> monthlyBudget.allows(day, amount) })
         val http = Http.client()
         val providers = mutableListOf<LlmProvider>()
         try {
@@ -313,7 +490,7 @@ class CollectorRuntime(
                 mapOf("classify" to defaults.models.classify, "generate" to defaults.models.generate, "track" to defaults.models.classify)
             } else emptyMap()
             val router = LlmRouter(providers, costs, models, defaults.models.fallback, preflightBudget = true,
-                batchCheckpointHook = batchCheckpointHook, batchEnabled = !batchDisabled)
+                batchCheckpointHook = batchCheckpointHook, batchEnabled = !batchDisabled, deferBatch = options.deferBatch)
             router.startRun(startedAt, options.deadline?.toMinutes()?.toInt() ?: config.deadlineMinutes, deadlineClock.instant())
             val recoveryIssues = if (!noLlm && (!batchDisabled || pendingBatches)) {
                 if (pendingBatches) {
@@ -324,16 +501,27 @@ class CollectorRuntime(
                     it.name == "$today-classify.json" || it.name == "$today-generate.json"
                 }
             } else emptyList()
+            if (runDate != null) {
+                out.resolve("batch").listFiles().orEmpty().asSequence()
+                    .filter { it.name.endsWith("-classify.json") || it.name.endsWith("-generate.json") ||
+                        it.name.endsWith("-classify.done") || it.name.endsWith("-generate.done") }
+                    .mapNotNull { runCatching { LocalDate.parse(it.name.take(10)) }.getOrNull() }
+                    .filter { it != today }.distinct()
+                    .filter { !out.resolve("$it.json").isFile && batchPaths(it).any(::hasSettledBatchResults) }
+                    .toList().forEach { onUnpublishedBatch(it) }
+            }
             val skipReason = budgetSkipReason()
             val tracked = JsonFileTrackedStore(out.resolve("tracked.json"))
             val seen = JsonFileSeenStore(out.resolve("seen.json"))
             val reddit = RedditAdapter(http, secrets)
             val full = FullPipeline(config, profiles, prompts, router, costs, http, history, tracked,
-                collectOnly = noLlm, reddit = reddit, out = out)
+                collectOnly = noLlm, reddit = reddit, out = out, snapshotBatchInputs = runDate != null)
             val adapters = sourceAdapters ?: listOf(HackerNewsAdapter(http), GitHubAdapter(http, secrets), HuggingFaceAdapter(http),
                 GitHubIssuesAdapter(http, secrets, repositoryCache = paths.cacheDir.resolve("github-repos.json"),
                     debugDirectory = paths.debugDir), reddit, ProductHuntAdapter(http, secrets), RssAdapter(http))
-            val pipeline = Pipeline(adapters, seen, clock = { startedAt }, zone = clock.zone,
+            val pipeline = Pipeline(adapters, seen, clock = {
+                startedAt.atZone(clock.zone).with(today).toInstant()
+            }, zone = clock.zone,
                 onStage = {
                     when (it) {
                         "collect" -> options.onStage(RunStage.COLLECT)
@@ -361,7 +549,7 @@ class CollectorRuntime(
                 throw e
             } catch (e: Exception) {
                 if (!noLlm) {
-                    val day = startedAt.atZone(clock.zone).toLocalDate()
+                    val day = today
                     val report = RunReport(day.toString(), startedAt.toString(), emptyList(), emptyList(),
                         emptyMap(), java.time.Duration.between(startedAt, clock.instant()).toMillis(),
                         llmCalls = costs.drainCalls(), issues = recoveryIssues + safeFailure(e))
@@ -377,6 +565,11 @@ class CollectorRuntime(
             }
             summary(result)
             val day = LocalDate.parse(result.report.runDate)
+            if (runDate != null && !pendingBatches && result.report.sources.isNotEmpty() &&
+                result.report.sources.all { it.error != null } && result.report.costUsd == 0.0) {
+                archiveFailedRun(out, result)
+                return false
+            }
             if (skipReason != null) {
                 val archived = archiveFile(out, result.report)
                 archived.writeAtomically(outputJson.encodeToString(result))
@@ -390,13 +583,24 @@ class CollectorRuntime(
                 return false
             }
             if (CLASSIFICATION_BATCH_PENDING in result.report.issues || isPendingBatch(generationCheckpoint)) {
-                archiveFile(out, result.report).writeAtomically(outputJson.encodeToString(result))
+                val pendingResult = if (runDate != null) result.copy(report = result.report.copy(
+                    issues = result.report.issues + BATCH_CONTINUATION_PENDING)) else result
+                archiveFile(out, result.report).writeAtomically(outputJson.encodeToString(pendingResult))
                 router.markAppliedBatchesConsumed()
                 result.report.issues.forEach { print("· $it") }
+                if (options.deferBatch) throw BatchDeferredException()
+                return false
+            }
+            // 앱 실행: 예산 상한·호출 실패로 분류를 끝내지 못해 카드가 0장이면 "후보 없음"과 구분해 게시하지 않는다.
+            val classificationIncomplete = result.metrics.profiles.values.sumOf { it.classified } == 0 &&
+                result.report.dropCounts.keys.any { it == DropReason.BUDGET_EXCEEDED || it == DropReason.CLASSIFY_FAILED }
+            if (runDate != null && result.cards.isEmpty() && (classificationIncomplete || resumingBatch &&
+                (hasSettledBatchResults(generationCheckpoint) || result.metrics.profiles.values.any { it.selected > 0 }))) {
+                archiveFailedRun(out, result)
                 return false
             }
             val renderer = HtmlRenderer(IdeaGenerator(defaults, prompts, router).categories)
-            val rendered = publishOrArchiveFailure(out, history, renderer, result, keepUnseen)
+            val rendered = publishOrArchiveFailure(out, history, renderer, result, keepUnseen, beforePublish)
             router.markAppliedBatchesConsumed()
             if (router.remainingMillis() == 0L) {
                 result = result.copy(report = result.report.copy(issues = result.report.issues + "Publication exceeded the execution deadline"))

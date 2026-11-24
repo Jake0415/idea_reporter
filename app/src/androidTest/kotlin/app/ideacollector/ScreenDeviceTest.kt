@@ -17,8 +17,6 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import app.ideacollector.data.AppSettings
 import app.ideacollector.data.Artifact
-import app.ideacollector.data.RepositorySync
-import app.ideacollector.github.GitHubClient
 import app.ideacollector.github.contractJson
 
 @RunWith(AndroidJUnit4::class)
@@ -44,7 +42,7 @@ class ScreenDeviceTest {
         node(R.string.archive).performClick()
         node(R.string.search).assertIsDisplayed()
         node(R.string.settings).performClick()
-        node(R.string.connect).assertIsDisplayed()
+        node(R.string.run_keys).assertIsDisplayed()
     }
 
     @Test fun starEnqueuesTrackAndFeedback() = screen {
@@ -59,7 +57,6 @@ class ScreenDeviceTest {
         assertTrue(sent.any { it.payload() is collector.data.InboxRequest.Reaction && it.reaction == "STAR" })
         assertEquals(1L, java.time.Duration.between(java.time.Instant.parse(sent[0].createdAt),
             java.time.Instant.parse(sent[1].createdAt)).toMillis())
-        assertTrue(sent[0].path < sent[1].path)
         compose.onAllNodesWithText(app.getString(R.string.pending)).assertCountEquals(2)
     }
 
@@ -154,7 +151,7 @@ class ScreenDeviceTest {
         val draft = collector.data.InboxRequest.PromptSet(1, requestId(), java.time.Instant.now().toString(),
             "track", "보낸 초안", "old")
         runBlocking {
-            app.sync.enqueue(SAMPLE_REPO, draft)
+            app.sync.enqueueSample(SAMPLE_REPO, listOf(draft))
             app.database.dao().complete(SAMPLE_REPO, draft.requestId, "REJECTED", "Prompt baseHash does not match")
         }
         screen {
@@ -171,132 +168,6 @@ class ScreenDeviceTest {
             field.performTextReplacement("a".repeat(20_001))
             node(R.string.save).assertIsNotEnabled()
             node(R.string.prompt_too_long).performScrollTo().assertIsDisplayed()
-        }
-    }
-
-    @Test fun captureReviewScreens() {
-        org.junit.Assume.assumeTrue(InstrumentationRegistry.getArguments().getString("p16Capture") == "true")
-        val oldNight = shell("cmd uimode night").substringAfterLast(':').trim()
-        val oldFont = shell("settings get system font_scale").trim()
-        val dao = app.database.dao()
-        val onboarding = app.getSharedPreferences("onboarding", android.content.Context.MODE_PRIVATE)
-        val previousShown = onboarding.getBoolean("shown", false)
-        val directory = java.io.File(app.cacheDir, "P16-r1").apply { mkdirs() }
-        fun saveCapture(name: String, screenshot: android.graphics.Bitmap) {
-            java.io.File(directory, "$name.png").outputStream().use {
-                check(screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it))
-            }
-            screenshot.recycle()
-        }
-        fun capture(name: String) {
-            compose.waitForIdle()
-            saveCapture(name, checkNotNull(instrumentation.uiAutomation.takeScreenshot()))
-        }
-        fun back() = compose.onNodeWithContentDescription(app.getString(R.string.back)).performClick()
-        try {
-            for ((mode, night) in listOf("light" to "no", "dark" to "yes")) {
-                shell("cmd uimode night $night")
-                runBlocking { seedSample(app) }
-                screen {
-                    capture("SC-01-connected-$mode")
-                    compose.onAllNodesWithText("로컬 회의록 도우미").onLast().performScrollTo().performClick()
-                    capture("SC-02-$mode")
-                    back()
-                    node(R.string.archive).performClick()
-                    capture("SC-03-$mode")
-                    node(R.string.track).performClick()
-                    capture("SC-13-$mode")
-                    compose.onNodeWithText("로컬 회의록 도우미").performClick()
-                    capture("SC-14-$mode")
-                    node(R.string.settings).performClick()
-                    capture("SC-06-$mode")
-                    node(R.string.runs).performScrollTo().performClick()
-                    capture("SC-10-$mode")
-                    back()
-                    node(R.string.prompts).performScrollTo().performClick()
-                    capture("SC-15-$mode")
-                    compose.onNodeWithText("관심 아이디어 추적").performScrollTo().performClick()
-                    capture("SC-16-$mode")
-                }
-                runBlocking {
-                    val at = java.time.Instant.now().toString()
-                    val version = collector.data.DataBranch.VERSION
-                    val card = "sample-card-1"
-                    val track = "sample-track-1"
-                    val requests = listOf(
-                        collector.data.InboxRequest.TrackStart(version, requestId(), at, card) to "PENDING",
-                        collector.data.InboxRequest.TrackKeywords(version, requestId(), at, track, listOf("자동화")) to "SENT",
-                        collector.data.InboxRequest.Reaction(version, requestId(), at, card, collector.model.Feedback.Kind.STAR, "test") to "APPLIED",
-                        collector.data.InboxRequest.TrackStop(version, requestId(), at, track) to "REJECTED"
-                    )
-                    app.sync.enqueue(SAMPLE_REPO, requests.map { it.first })
-                    requests.forEach { (request, status) ->
-                        dao.complete(SAMPLE_REPO, request.requestId, status,
-                            app.getString(R.string.reason_invalid).takeIf { status == "REJECTED" })
-                    }
-                }
-                screen("card/sample-card-1") {
-                    node(R.string.pending).performScrollTo().assertIsDisplayed()
-                    node(R.string.sent).assertIsDisplayed()
-                    node(R.string.applied).assertIsDisplayed()
-                    compose.onNodeWithText(app.getString(R.string.rejected), substring = true).assertIsDisplayed()
-                    capture("request-status-$mode")
-                }
-                shell("settings put system font_scale 2.0")
-                screen { capture("SC-01-font-200-$mode") }
-                shell(if (oldFont == "null") "settings delete system font_scale" else "settings put system font_scale $oldFont")
-                runBlocking { dao.saveSettings(AppSettings()) }
-                onboarding.edit().putBoolean("shown", true).commit()
-                screen { capture("SC-01-empty-$mode") }
-                okhttp3.mockwebserver.MockWebServer().use { server ->
-                    val prior = app.syncOverride
-                    app.syncOverride = RepositorySync(app.database, GitHubClient(base = server.url("/")))
-                    try {
-                        val sha = "a".repeat(40)
-                        server.enqueue(okhttp3.mockwebserver.MockResponse().setBody("""{"object":{"type":"commit","sha":"$sha"}}"""))
-                        server.enqueue(okhttp3.mockwebserver.MockResponse().setBodyDelay(2, java.util.concurrent.TimeUnit.SECONDS).setBody(
-                            contractJson.encodeToString(
-                                collector.data.DataManifest(updatedAt = java.time.Instant.now().toString(),
-                                    latestDaily = null, latestTrend = null, files = emptyList())
-                            )
-                        ))
-                        screen { scenario ->
-                            compose.onNodeWithText("저장소를 연결하면 매일 아침 카드가 여기 나옵니다 · 연결하기").performClick()
-                            compose.onNodeWithText("1 연결").assertIsDisplayed()
-                            // Render the empty test form before entering the fixture token. The window stays secure.
-                            scenario.onActivity { activity ->
-                                val flag = android.view.WindowManager.LayoutParams.FLAG_SECURE
-                                assertTrue(activity.window.attributes.flags and flag != 0)
-                                val view = activity.window.decorView
-                                val screenshot = android.graphics.Bitmap.createBitmap(view.width, view.height,
-                                    android.graphics.Bitmap.Config.ARGB_8888)
-                                view.draw(android.graphics.Canvas(screenshot))
-                                saveCapture("SC-00-step-1-$mode", screenshot)
-                            }
-                            node(R.string.repo).performTextInput("sample/capture")
-                            node(R.string.token).performTextInput("emulator-fixture-token")
-                            node(R.string.verify).performClick()
-                            node(R.string.repo).assertIsNotEnabled()
-                            node(R.string.token).assertIsNotEnabled()
-                            compose.waitUntil(5_000) { compose.onAllNodesWithText("2 알림 허용").fetchSemanticsNodes().isNotEmpty() }
-                            capture("SC-00-step-2-$mode")
-                            compose.onNodeWithText("다음").performClick()
-                            capture("SC-00-step-3-$mode")
-                        }
-                    } finally {
-                        runBlocking {
-                            val configured = app.settings()
-                            dao.saveSettings(AppSettings())
-                            if (configured.repository == "sample/capture") app.secrets.clear(configured.tokenName)
-                        }
-                        app.syncOverride = prior
-                    }
-                }
-            }
-        } finally {
-            onboarding.edit().putBoolean("shown", previousShown).commit()
-            shell("cmd uimode night ${oldNight.takeIf { it in setOf("yes", "no", "auto", "custom") } ?: "auto"}")
-            shell(if (oldFont == "null") "settings delete system font_scale" else "settings put system font_scale $oldFont")
         }
     }
 

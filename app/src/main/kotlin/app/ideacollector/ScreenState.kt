@@ -60,6 +60,7 @@ internal class ScreenState(artifacts: List<Artifact>, val requests: List<Request
     fun payload(row: RequestRow) = payloads[row.requestId]
     val daily = artifacts.filter { it.kind == "daily" }.sortedByDescending { it.path }.map { it.decode<PipelineResult>() }
     val cards = daily.flatMap { it.cards }.distinctBy { it.id }
+    val latestTrend = artifacts.filter { it.kind == "trend" }.maxByOrNull { it.path }?.decode<collector.trend.TrendReport>()
     val tracks = artifacts.firstOrNull { it.kind == "tracking" }?.decode<List<TrackedIdea>>().orEmpty()
     val updates = daily.flatMap { it.trackingUpdates }.distinctBy { it.id }
     val runs = artifacts.filter { it.kind == "run" }.map {
@@ -129,6 +130,10 @@ internal class ScreenState(artifacts: List<Artifact>, val requests: List<Request
 
     fun undoableDismissal(card: IdeaCard): RequestRow? = if (dismissed(card)) {
         cardRequests(card.id).firstOrNull { it.reaction == "NOT_INTERESTED" && it.status in visibleStatuses }
+            ?: feedback[card.id]?.at?.let {
+                RequestRow(app.ideacollector.data.LOCAL_REPO, "", "", "", it.toString(), "APPLIED",
+                    cardId = card.id, reaction = "NOT_INTERESTED")
+            }
     } else null
 
     fun filtered(starOnly: Boolean, hide: Boolean, category: String?, matches: Set<String>?): List<IdeaCard> =

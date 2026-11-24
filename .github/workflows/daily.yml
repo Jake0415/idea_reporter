@@ -1,7 +1,6 @@
+# 매일 실행은 폰이 한다. 이 workflow는 폰이 고장 났을 때 임시로 쓰는 수동 실행용.
 name: Daily collector
 on:
-  schedule:
-    - cron: '0 22 * * *' # 07:00 KST. GitHub may delay scheduled jobs.
   workflow_dispatch:
 permissions: {}
 concurrency:

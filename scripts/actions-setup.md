@@ -1,5 +1,7 @@
 ﻿# GitHub Actions 설정
 
+매일 실행은 폰이 한다. 이 workflow는 폰이 고장 났을 때 임시로 쓰는 수동 실행용.
+
 1. 저장소 Settings → Secrets and variables → Actions에서 다음 Repository secrets를 등록합니다.
    - `ANTHROPIC_API_KEY`
    - `OPENAI_API_KEY`

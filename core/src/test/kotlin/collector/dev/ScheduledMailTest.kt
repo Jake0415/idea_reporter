@@ -161,6 +161,28 @@ class ScheduledMailTest {
         assertEquals(3, sent.size)
     }
 
+    @Test fun `expired Sunday continuation defers both mail reports for the next run`() = runTest {
+        val start = Instant.parse("2026-11-22T16:00:00Z")
+        val clock = Clock.fixed(start, zone)
+        val sunday = java.time.LocalDate.parse("2026-11-22")
+        var sent = 0
+        val status = runScheduled(out, secrets, clock, daily = { _, _ ->
+            report("", sunday.toString(), "daily")
+            true
+        }, trend = {
+            assertEquals(sunday, it)
+            report("trend", it.toString(), "trend")
+        }, mailer = Mailer { sent++ }, deadlineMinutes = 1,
+            deadlineClock = Clock.offset(clock, java.time.Duration.ofMinutes(1)), runDate = sunday)
+        assertEquals(0, status)
+        assertEquals(0, sent)
+        val journal = out.resolve("mail/sent.json").readText()
+        assertContains(journal, "\"kind\": \"daily\"")
+        assertContains(journal, "\"kind\": \"trend\"")
+        runScheduled(out, secrets, clock, daily = { _, _ -> false }, mailer = Mailer { sent++ })
+        assertEquals(2, sent)
+    }
+
     @Test fun `deadline issue is recorded after sending mail`() = runTest {
         val start = Instant.parse("2026-11-19T22:00:00Z")
         val clock = Clock.fixed(start, zone)

@@ -128,12 +128,18 @@ internal fun sendScheduledPublication(out: File, secrets: SecretProvider, clock:
     if (recordFailed) throw MailRecordFailure()
 }
 
+internal fun queuePublicationMail(out: File, kind: MailKind, day: LocalDate, clock: Clock) {
+    MailDelivery(out, null, clock = clock).defer(kind, day.toString(), collector.mail.PUBLICATION_PENDING)
+}
+
+private class MailDeadlineReached : RuntimeException("Mail delivery exceeded the execution deadline")
+
 internal suspend fun runScheduled(
     out: File,
     secrets: SecretProvider,
     clock: Clock,
     daily: suspend (Instant, (String) -> Unit) -> Boolean,
-    trend: (LocalDate) -> Unit = { publishTrend(out, it) },
+    trend: ((LocalDate) -> Unit)? = null,
     mailer: Mailer? = SmtpMailer.from(secrets),
     startedAt: Instant = clock.instant(),
     deadlineMinutes: Int = collector.config.PipelineConfig.defaults.deadlineMinutes,
@@ -141,9 +147,15 @@ internal suspend fun runScheduled(
     noMail: Boolean = false,
     runLock: RunLock = FileRunLock,
     onMail: () -> Unit = {},
-    propagateLocked: Boolean = false
+    propagateLocked: Boolean = false,
+    runDate: LocalDate? = null,
+    requireDailyPublication: Boolean = false,
+    beforeRun: suspend () -> Boolean = { true },
+    configuredDeadline: () -> Int = { deadlineMinutes },
+    onPreviousMailRetry: (MailSendResult) -> Unit = {},
+    onMailRetryExpired: (Int) -> Unit = {}
 ): Int {
-    val day = startedAt.atZone(clock.zone).toLocalDate()
+    val day = runDate ?: startedAt.atZone(clock.zone).toLocalDate()
     val key = day.toString()
     val sunday = day.dayOfWeek == DayOfWeek.SUNDAY
     out.mkdirs()
@@ -151,6 +163,12 @@ internal suspend fun runScheduled(
     try {
         runLock.withLock(out) {
             if (noMail) out.resolve("mail/scheduled.json").delete()
+            if (!beforeRun()) {
+                exitCode = 0
+                return@withLock
+            }
+            val limit = configuredDeadline()
+            val journal = MailDelivery(out, null, clock = clock)
             val context = kotlin.coroutines.coroutineContext
             var mailStarted = false
             val logDir = out.resolve("logs")
@@ -169,8 +187,14 @@ internal suspend fun runScheduled(
                 issues += message
                 log(message)
             }
+            fun ensureTimeToSend() {
+                context.ensureActive()
+                if (runDate != null && deadlineClock.instant() >= startedAt.plusSeconds(limit * 60L)) {
+                    throw MailDeadlineReached()
+                }
+            }
             fun checkDeadline(stage: String) {
-                if (deadlineClock.instant() >= startedAt.plusSeconds(deadlineMinutes * 60L)) {
+                if (deadlineClock.instant() >= startedAt.plusSeconds(limit * 60L)) {
                     val message = "$stage exceeded the execution deadline"
                     issue(message)
                     recordMailIssue(out, MailKind.DAILY, key, message, ::log)
@@ -201,7 +225,20 @@ internal suspend fun runScheduled(
             val classifyPath = batchPath(out, key, "classify")
             var dailyPublished = false
             val dailyOk = stage("일일 파이프라인") { dailyPublished = daily(startedAt, ::log) }
-            val trendPublished = sunday && stage("트렌드") { trend(day) }
+            val trendPublished = sunday && stage("트렌드") {
+                if (trend != null) trend(day)
+                else publishTrend(out, day, beforeReplace = { file ->
+                    if (runDate != null && !noMail && file.name == "$day.json") {
+                        try {
+                            queuePublicationMail(out, MailKind.TREND, day, clock)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            issue("트렌드 메일 대기 기록 실패 · ${safeFailure(e)}")
+                        }
+                    }
+                })
+            }
             if (sunday) checkDeadline("Trend publication")
             val classificationPending = isPendingBatch(classifyPath)
             if (noMail) {
@@ -211,7 +248,6 @@ internal suspend fun runScheduled(
                 }
                 out.resolve("mail/scheduled.json").writeAtomically(outputJson.encodeToString(
                     ScheduledPublication(startedAt.toString(), key, published)))
-                val journal = MailDelivery(out, null, clock = clock, print = ::log)
                 published.forEach { label -> journal.defer(MailKind.entries.single { it.label == label }, key, "메일 발송 대기") }
             }
             val mail = MailDelivery(out, mailer, (mailer as? SmtpMailer)?.recipientCount ?: 0, clock, print = { message ->
@@ -225,16 +261,20 @@ internal suspend fun runScheduled(
                     onMail()
                     mailStarted = true
                 }
-                context.ensureActive()
-            })
+                ensureTimeToSend()
+            }, beforeTransport = { if (runDate != null) ensureTimeToSend() })
             var recordFailed = false
             var retried = emptySet<Pair<MailKind, String>>()
             var missingRetryReport = false
             if (!noMail) stage("메일 재시도", completion = { if (missingRetryReport) "보고서 없음" else "완료" }) {
+                ensureTimeToSend()
                 var retryFailed = false
                 retried = mail.retry(eligible = { kind, id ->
                     kind != MailKind.DAILY || (if (id == key) !classificationPending else !isPendingBatch(batchPath(out, id, "classify")))
-                }) { kind, id, result ->
+                }, onExpired = if (runDate != null) onMailRetryExpired else null) { kind, id, result ->
+                    if (runDate != null && kind in setOf(MailKind.DAILY, MailKind.TREND) && id != null && id != key) {
+                        onPreviousMailRetry(result)
+                    }
                     when (result) {
                         MailSendResult.MISSING_REPORT -> missingRetryReport = true
                         MailSendResult.FAILED, MailSendResult.UNKNOWN, MailSendResult.RECORD_FAILED -> {
@@ -256,7 +296,17 @@ internal suspend fun runScheduled(
                     val published = if (kind == MailKind.DAILY) dailyPublished && !classificationPending else trendPublished
                     if (!published || (kind to key) in retried) continue
                     stage("${kind.label} 메일 처리") {
-                        when (mail.send(kind, key)) {
+                        if (runDate != null && deadlineClock.instant() >= startedAt.plusSeconds(limit * 60L)) {
+                            mail.defer(kind, key, "메일 발송 대기")
+                            ensureTimeToSend()
+                        }
+                        val result = try {
+                            mail.send(kind, key)
+                        } catch (e: MailDeadlineReached) {
+                            mail.defer(kind, key, "메일 발송 대기")
+                            throw e
+                        }
+                        when (result) {
                             MailSendResult.SENT, MailSendResult.SKIPPED_DUPLICATE -> Unit
                             MailSendResult.RECORD_FAILED -> {
                                 recordFailed = true
@@ -278,7 +328,7 @@ internal suspend fun runScheduled(
                         .writeAtomically(outputJson.encodeToString(record))
                 }
             }
-            exitCode = if (dailyOk && !recordFailed) 0 else 1
+            exitCode = if (dailyOk && !recordFailed && (!requireDailyPublication || dailyPublished)) 0 else 1
             log("예약 실행 종료 · $exitCode")
         }
     } catch (e: CancellationException) {

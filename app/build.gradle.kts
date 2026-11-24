@@ -16,7 +16,9 @@ android {
         targetSdk = 37
         versionCode = 1
         versionName = "0.1"
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner = if (providers.gradleProperty("phoneRunMinify").isPresent) {
+            "app.ideacollector.ShrunkSdkInstrumentation"
+        } else "androidx.test.runner.AndroidJUnitRunner"
     }
     buildFeatures {
         compose = true
@@ -27,24 +29,30 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     buildTypes {
+        debug {
+            if (providers.gradleProperty("phoneRunDeviceTest").isPresent) applicationIdSuffix = ".r2fixr1test"
+            if (providers.gradleProperty("phoneRunMinify").isPresent) {
+                isDebuggable = false
+                isMinifyEnabled = true
+                proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"),
+                    "proguard-rules.pro", "src/androidTest/r8-target-rules.pro")
+            }
+        }
         release {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
     testOptions.unitTests.isIncludeAndroidResources = true
+    sourceSets.getByName("androidTest").assets.srcDir("schemas")
+    packaging.resources.excludes += setOf("META-INF/DEPENDENCIES", "META-INF/NOTICE.md", "META-INF/LICENSE.md")
 }
 
 kotlin { jvmToolchain(17) }
 ksp { arg("room.schemaLocation", file("schemas").path) }
 
 dependencies {
-    implementation(project(":core")) {
-        exclude(group = "com.anthropic", module = "anthropic-java")
-        exclude(group = "com.openai", module = "openai-java")
-        exclude(group = "jakarta.mail", module = "jakarta.mail-api")
-        exclude(group = "org.eclipse.angus", module = "angus-mail")
-    }
+    implementation(project(":core"))
     implementation(libs.serialization.json)
     implementation(libs.coroutines.core)
     implementation(libs.okhttp)
@@ -58,10 +66,11 @@ dependencies {
     implementation(libs.compose.material3)
     testImplementation(libs.junit4)
     testImplementation(libs.robolectric)
-    testImplementation(libs.okhttp.mockwebserver)
+    androidTestImplementation("jakarta.mail:jakarta.mail-api:2.1.5")
     androidTestImplementation(libs.androidx.test.junit)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.work.testing)
+    androidTestImplementation("androidx.room:room-testing:${libs.versions.room.get()}")
     androidTestImplementation(libs.okhttp.mockwebserver)
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")

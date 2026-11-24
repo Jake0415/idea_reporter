@@ -22,10 +22,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import app.ideacollector.data.AppSettings
 import app.ideacollector.data.RequestRow
-import app.ideacollector.github.validRepository
+import app.ideacollector.data.LOCAL_REPO
+import app.ideacollector.work.CollectorRunService
 import collector.data.InboxRequest
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
 
@@ -64,7 +64,7 @@ internal fun CollectorScreens(app: CollectorApp, viewModel: ScreensViewModel, de
         Scaffold { Text(stringResource(R.string.loading), Modifier.padding(it).padding(16.dp)) }
         return
     }
-    val repo = current.repository
+    val repo = if (current.repository == SAMPLE_REPO) SAMPLE_REPO else LOCAL_REPO
     val sample = repo == SAMPLE_REPO
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var stack by rememberSaveable(stateSaver = routeStackSaver) { mutableStateOf(emptyList<Route>()) }
@@ -72,13 +72,6 @@ internal fun CollectorScreens(app: CollectorApp, viewModel: ScreensViewModel, de
     val route = stack.lastOrNull() ?: Route(tabs[tab].page)
     fun go(next: Route) { stack = stack + next }
     fun back() { stack = stack.dropLast(1) }
-    LaunchedEffect(Unit) {
-        val preferences = app.getSharedPreferences("onboarding", android.content.Context.MODE_PRIVATE)
-        if (!preferences.getBoolean("shown", false)) {
-            preferences.edit().putBoolean("shown", true).apply()
-            if (repo.isEmpty() && stack.isEmpty()) go(Route(Page.CONNECT))
-        }
-    }
     BackHandler(stack.isNotEmpty() && route.page != Page.PROMPT_EDIT) { back() }
     LaunchedEffect(destination, leaveEditor, route.page) {
         if (destination != null && (route.page != Page.PROMPT_EDIT || leaveEditor != null)) {
@@ -94,14 +87,10 @@ internal fun CollectorScreens(app: CollectorApp, viewModel: ScreensViewModel, de
     var readError by remember(repo) { mutableStateOf(false) }
     val syncFlow = remember(repo) { dao.observeState(repo) }
     val syncState by syncFlow.collectAsState(null)
-    val dispatch by remember(repo) { dao.observeDispatch(repo) }.collectAsState(null)
     val scope = rememberCoroutineScope()
     var error by remember(repo) { mutableStateOf<Int?>(null) }
     var syncing by remember(repo) { mutableStateOf(false) }
-    val running = dispatch?.active == true
-    var actionsKnown by remember(repo) { mutableStateOf(false) }
-    var acting by remember(repo) { mutableStateOf(false) }
-    var tokenAvailable by remember(repo) { mutableStateOf(false) }
+    val running by CollectorRunService.running.collectAsState()
     var confirmRun by remember { mutableStateOf(false) }
     var reload by remember { mutableIntStateOf(0) }
 
@@ -116,44 +105,24 @@ internal fun CollectorScreens(app: CollectorApp, viewModel: ScreensViewModel, de
         }
     }
     suspend fun sync() {
-        if (!validRepository(repo) || syncing) return
+        if (sample || syncing) return
         syncing = true
         try {
-            val news = app.sync.sync(repo, app.secrets.get(current.tokenName))
-            if (current.notifications) app.notifications.publish(news)
-            app.schedule.outbox()
+            app.sync.refresh()
             reload++
-        } catch (e: CancellationException) { throw e }
-        catch (e: Exception) { app.sync.recordSyncFailure(repo, (e as? app.ideacollector.github.GitHubFailure)?.status == 401) }
-        finally { syncing = false }
-    }
-    LaunchedEffect(repo, current.tokenName, route.page) {
-        if (route.page != Page.TODAY || !validRepository(repo)) return@LaunchedEffect
-        while (true) {
-            val token = app.secrets.get(current.tokenName)
-            tokenAvailable = token != null
-            if (token != null) {
-                try {
-                    val previouslyActive = dao.dispatch(repo)?.active == true
-                    val active = app.sync.dailyActive(repo, token)
-                    if (previouslyActive && !active) sync()
-                    actionsKnown = true
-                } catch (e: CancellationException) { throw e }
-                catch (_: Exception) { actionsKnown = false }
-            } else actionsKnown = false
-            delay(15_000)
-        }
+        } finally { syncing = false }
     }
     val enqueue: suspend (List<InboxRequest>) -> Unit = { requests ->
-        if (sample) app.sync.enqueue(repo, requests)
+        if (sample) app.sync.enqueueSample(repo, requests)
         else app.submit(requests)
     }
     val send: (List<InboxRequest>) -> Unit = { requests -> operation { enqueue(requests) } }
     val retry: (RequestRow) -> Unit = { row -> state?.payload(row)?.let { send(listOf(it.renew())) } }
     val undo: (RequestRow) -> Unit = { row ->
         operation {
-            check(app.sync.undoFeedback(repo, row.requestId))
-            if (!sample) app.schedule.outbox()
+            if (sample) check(dao.cancelPendingFeedback(repo, row.requestId) == 1)
+            else enqueue(listOf(InboxRequest.FeedbackUndo(collector.data.DataBranch.VERSION, requestId(),
+                java.time.Instant.now().toString(), checkNotNull(row.cardId), row.createdAt)))
         }
     }
     val open: (Page, String) -> Unit = { page, id -> go(Route(page, id)) }
@@ -176,10 +145,10 @@ internal fun CollectorScreens(app: CollectorApp, viewModel: ScreensViewModel, de
                 }
                 if (route.page == Page.TODAY) IconButton(
                     onClick = { confirmRun = true },
-                    enabled = actionsKnown && !running && !acting,
+                    enabled = !sample && !running,
                     modifier = Modifier.size(48.dp)
                 ) {
-                    if (running || acting) CircularProgressIndicator(Modifier.size(20.dp)
+                    if (running) CircularProgressIndicator(Modifier.size(20.dp)
                         .clearAndSetSemantics { contentDescription = runLabel }, strokeWidth = 2.dp)
                     else Text("↻", modifier = Modifier.clearAndSetSemantics { contentDescription = runLabel })
                 }
@@ -218,34 +187,22 @@ internal fun CollectorScreens(app: CollectorApp, viewModel: ScreensViewModel, de
                     error?.let { Notice(stringResource(it), warning = true) }
                     val data = state
                     when {
-                        route.page == Page.CONNECT -> Connection(app, current, ::operation) {
+                        route.page == Page.CONNECT -> Connection(app, ::operation) {
                             tab = 0
                             stack = emptyList()
                         }
-                        route.page == Page.TODAY && repo.isEmpty() -> Nav(R.string.connect_today_empty) { go(Route(Page.CONNECT)) }
                         readError -> Notice(stringResource(R.string.error), warning = true)
                         data == null -> Text(stringResource(R.string.loading))
                         else -> when (route.page) {
                             Page.TODAY -> {
                                 TodayContent(data, syncState, open, send, retry, undo, { tab = 1 }, running) {
                                     SyncStatusNotice(syncState?.status, { go(Route(Page.OPERATE)) }) { operation { sync() } }
-                                    if (!tokenAvailable && validRepository(repo)) Nav(R.string.run_token_needed) { go(Route(Page.OPERATE)) }
-                                    else if (!actionsKnown && !running && validRepository(repo)) Small(R.string.actions_error)
                                 }
                                 if (confirmRun) AlertDialog(onDismissRequest = { confirmRun = false },
                                     title = { Text(stringResource(R.string.confirm_run)) },
                                     confirmButton = { Primary(R.string.run_now) {
                                         confirmRun = false
-                                        acting = true
-                                        operation {
-                                            try {
-                                                val token = checkNotNull(app.secrets.get(current.tokenName))
-                                                app.sync.dispatchDaily(repo, token)
-                                            } catch (e: Exception) {
-                                                actionsKnown = false
-                                                throw e
-                                            } finally { acting = false }
-                                        }
+                                        operation { check(CollectorRunService.startDaily(app)) }
                                     } }, dismissButton = { Secondary(R.string.cancel) { confirmRun = false } })
                             }
                             Page.TRACK -> Tracks(data, open, send, retry)
@@ -253,14 +210,8 @@ internal fun CollectorScreens(app: CollectorApp, viewModel: ScreensViewModel, de
                             Page.CARD -> CardDetail(data, route.id, open, send, retry, undo)
                             Page.TRACK_DETAIL -> TrackDetail(data, route.id, open, send, retry)
                             Page.SETTINGS -> {
-                                ListRow(stringResource(R.string.connect),
-                                    if (repo.isEmpty()) stringResource(R.string.repository_disconnected) else repo) { go(Route(Page.CONNECT)) }
-                                Primary(R.string.sync, validRepository(repo) && !syncing) { operation { sync() } }
-                                if (repo.isEmpty()) Nav(R.string.sync_connect_needed) { go(Route(Page.CONNECT)) }
-                                syncState?.let {
-                                    if (it.syncedAt.isNotBlank()) Small(R.string.synced, runTime(it.syncedAt))
-                                    SyncStatusNotice(it.status, { go(Route(Page.OPERATE)) }) { operation { sync() } }
-                                }
+                                ListRow(stringResource(R.string.run_keys)) { go(Route(Page.CONNECT)) }
+                                Primary(R.string.local_refresh, !sample && !syncing) { operation { sync() } }
                                 listOf(Page.OPERATE, Page.PROMPTS, Page.SOURCES, Page.CRITERIA, Page.RUNS, Page.ABOUT).forEach {
                                     HorizontalDivider()
                                     ListRow(stringResource(it.title)) { go(Route(it)) }

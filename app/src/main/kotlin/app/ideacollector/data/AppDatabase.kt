@@ -1,5 +1,6 @@
 package app.ideacollector.data
 
+import androidx.room.ColumnInfo
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Entity
@@ -40,17 +41,26 @@ data class SyncState(@PrimaryKey val repository: String, val manifestSha: String
 @Entity(tableName = "app_settings")
 data class AppSettings(@PrimaryKey val id: Int = 0, val repository: String = "", val syncHours: Long = 24,
     val notifications: Boolean = true,
-    @androidx.room.ColumnInfo(defaultValue = "'GITHUB_TOKEN'") val tokenName: String = app.ideacollector.secret.GITHUB_TOKEN)
+    @androidx.room.ColumnInfo(defaultValue = "'GITHUB_TOKEN'") val tokenName: String = app.ideacollector.secret.GITHUB_TOKEN,
+    @androidx.room.ColumnInfo(defaultValue = "25200") val runTimeSeconds: Long = 25200,
+    @androidx.room.ColumnInfo(defaultValue = "0") val wifiOnly: Boolean = false,
+    @androidx.room.ColumnInfo(defaultValue = "0") val chargingOnly: Boolean = false,
+    @androidx.room.ColumnInfo(defaultValue = "0") val batch: Boolean = false)
 
-@Entity(tableName = "daily_dispatch")
-data class DailyDispatch(@PrimaryKey val repository: String, val dispatchedAt: String,
-    @androidx.room.ColumnInfo(defaultValue = "0") val active: Boolean = false)
+@Entity(tableName = "pending_local_changes")
+data class PendingLocalChange(@PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val configName: String? = null, val json: String, @ColumnInfo(defaultValue = "0") val failed: Boolean = false)
 
 @Dao
 interface AppDao {
-    @Query("SELECT * FROM daily_dispatch WHERE repository = :repo") suspend fun dispatch(repo: String): DailyDispatch?
-    @Query("SELECT * FROM daily_dispatch WHERE repository = :repo") fun observeDispatch(repo: String): Flow<DailyDispatch?>
-    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun saveDispatch(dispatch: DailyDispatch)
+    @Insert suspend fun enqueueLocalChange(change: PendingLocalChange)
+    @Query("SELECT * FROM pending_local_changes WHERE failed = 0 ORDER BY id") suspend fun localChanges(): List<PendingLocalChange>
+    @Query("UPDATE pending_local_changes SET failed = 1 WHERE id = :id") suspend fun failLocalChange(id: Long)
+    @Query("SELECT * FROM pending_local_changes WHERE failed = 1 ORDER BY id")
+    fun observeFailedLocalChanges(): Flow<List<PendingLocalChange>>
+    @Query("DELETE FROM pending_local_changes WHERE id = :id") suspend fun removeLocalChange(id: Long)
+    @Query("SELECT EXISTS(SELECT 1 FROM pending_local_changes WHERE failed = 0)") fun observePendingLocalChanges(): Flow<Boolean>
+
     @Query("SELECT * FROM app_settings WHERE id = 0") fun observeSettings(): Flow<AppSettings?>
     @Query("SELECT * FROM artifacts WHERE repository = :repo") fun observeArtifacts(repo: String): Flow<List<Artifact>>
     @Query("SELECT * FROM requests WHERE repository = :repo ORDER BY rowid DESC")
@@ -88,25 +98,8 @@ interface AppDao {
     suspend fun search(repo: String, query: String): List<CardRow>
 
     @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertRequest(request: RequestRow)
-    @Query("SELECT * FROM requests WHERE repository = :repo AND requestId = :id")
-    suspend fun request(repo: String, id: String): RequestRow?
-    @Query("SELECT * FROM requests WHERE repository = :repo AND status IN ('PENDING','DISPATCHING','SENT') ORDER BY rowid")
-    suspend fun sendCandidates(repo: String): List<RequestRow>
-    @Query("SELECT EXISTS(SELECT 1 FROM requests WHERE repository = :repo AND (status IN ('PENDING', 'DISPATCHING')))")
-    suspend fun hasOutbox(repo: String): Boolean
-    @androidx.room.Update suspend fun saveRequest(row: RequestRow)
-    @Query("UPDATE requests SET status = 'PENDING', reason = NULL, attempts = 0, nextAttemptAt = NULL WHERE status = 'NEEDS_AUTH'")
-    suspend fun restoreAuth()
-    @Query("SELECT COUNT(*) FROM requests WHERE repository = :repo AND status = 'NEEDS_AUTH'")
-    fun authCount(repo: String): Flow<Int>
-    @Query("UPDATE requests SET status = 'CANCELLED', reason = '저장소 변경' WHERE repository != :repo AND (status IN ('PENDING','NEEDS_AUTH','DISPATCHING') OR (status = 'SENT' AND dispatchedAt IS NOT NULL))")
-    suspend fun cancelOtherRepositories(repo: String): Int
     @Query("SELECT * FROM requests WHERE repository = :repo AND status = 'PENDING' ORDER BY rowid")
     suspend fun pending(repo: String): List<RequestRow>
-    @Query("SELECT * FROM requests WHERE repository = :repo AND cardId = :card AND status IN ('PENDING','NEEDS_AUTH','DISPATCHING','SENT','APPLIED') ORDER BY rowid DESC")
-    fun reactions(repo: String, card: String): Flow<List<RequestRow>>
-    @Query("UPDATE requests SET uploaded = 1 WHERE repository = :repo AND requestId = :id")
-    suspend fun uploaded(repo: String, id: String)
     @Query("UPDATE requests SET status = :status, reason = :reason WHERE repository = :repo AND requestId = :id")
     suspend fun complete(repo: String, id: String, status: String, reason: String?)
 }
@@ -151,8 +144,34 @@ internal val connectionStateMigration = object : androidx.room.migration.Migrati
     }
 }
 
+internal val phoneRunMigration = object : androidx.room.migration.Migration(6, 7) {
+    override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        db.execSQL("DROP TABLE daily_dispatch")
+        db.execSQL("CREATE TABLE pending_local_changes (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, configName TEXT, json TEXT NOT NULL)")
+        db.execSQL("""
+            INSERT INTO pending_local_changes (configName, json)
+            SELECT NULL, '[' || json || ']' FROM requests
+            WHERE status = 'PENDING' AND uploaded = 0 AND reaction IS NOT NULL AND repository NOT IN ('@phone', '@sample')
+            ORDER BY rowid
+        """.trimIndent())
+        for (table in listOf("artifacts", "cards", "card_search", "requests", "sync_state")) {
+            db.execSQL("DELETE FROM $table WHERE repository NOT IN ('@phone', '@sample')")
+        }
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN runTimeSeconds INTEGER NOT NULL DEFAULT 25200")
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN wifiOnly INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN chargingOnly INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN batch INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
+internal val localChangeFailureMigration = object : androidx.room.migration.Migration(7, 8) {
+    override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE pending_local_changes ADD COLUMN failed INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
 @Database(entities = [Artifact::class, CardRow::class, CardSearch::class, RequestRow::class,
-    SyncState::class, AppSettings::class, DailyDispatch::class], version = 6, exportSchema = true)
+    SyncState::class, AppSettings::class, PendingLocalChange::class], version = 8, exportSchema = true)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun dao(): AppDao
 }

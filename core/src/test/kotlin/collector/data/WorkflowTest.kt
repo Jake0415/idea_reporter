@@ -29,6 +29,7 @@ class WorkflowTest {
             }
             val triggers = (workflow["on"] ?: workflow[true]) as Map<*, *>
             assertTrue(triggers.keys.none { it in setOf("pull_request", "pull_request_target") })
+            if (name == "daily") assertEquals(setOf("workflow_dispatch"), triggers.keys)
             if (name == "analyze") {
                 val dispatch = triggers["workflow_dispatch"] as Map<*, *>
                 assertEquals(setOf("requestId"), (dispatch["inputs"] as Map<*, *>).keys)

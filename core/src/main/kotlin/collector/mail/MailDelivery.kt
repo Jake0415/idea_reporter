@@ -39,6 +39,9 @@ enum class MailKind(val directory: String) {
 }
 
 /** All operations on a delivery journal run under Main's existing run lock. */
+internal const val PUBLICATION_PENDING = "보고서 게시 및 메일 발송 대기"
+private const val LEGACY_PUBLICATION_PENDING = "일일 보고서 게시 및 메일 발송 대기"
+
 internal class MailDelivery(
     private val out: File,
     private val mailer: Mailer?,
@@ -47,7 +50,8 @@ internal class MailDelivery(
     private val print: (String) -> Unit = ::println,
     private val onIssue: (MailKind?, String?, String) -> Unit = { _, _, _ -> },
     private val publish: ((Attempt?) -> Boolean)? = null,
-    private val beforeSend: () -> Unit = {}
+    private val beforeSend: () -> Unit = {},
+    private val beforeTransport: () -> Unit = {}
 ) {
     @Serializable
     internal data class Attempt(
@@ -70,6 +74,30 @@ internal class MailDelivery(
         save(updated)
         pending.forEach { issue(MailKind.entries.first { kind -> kind.label == it.kind }, it.key, reason) }
         return updated
+    }
+
+    private fun readHistory(): List<Attempt> =
+        if (journal.exists()) outputJson.decodeFromString<List<Attempt>>(journal.readText()) else emptyList()
+
+    fun failureReason(key: String): String {
+        val issues = readHistory().filter { it.key == key }.groupBy { it.kind }.values
+            .map { it.last().issue }
+        return when {
+            "SMTP 발송 실패" in issues -> "SMTP 발송 실패"
+            UNKNOWN_DELIVERY_NOTICE in issues -> "발송 여부 확인 불가"
+            "메일 보고서 없음" in issues -> "메일 보고서 없음"
+            else -> "메일 기록 확인 필요"
+        }
+    }
+
+    fun status(kind: MailKind, key: String): collector.runtime.ScheduledMailStatus {
+        val entries = readHistory().filter { it.kind == kind.label && it.key == key }
+        return when {
+            entries.any { it.result == "sent" } -> collector.runtime.ScheduledMailStatus.SENT
+            entries.lastOrNull()?.issue in setOf(PUBLICATION_PENDING, LEGACY_PUBLICATION_PENDING, "메일 발송 대기") &&
+                entries.lastOrNull()?.result == "failed" -> collector.runtime.ScheduledMailStatus.PENDING
+            else -> collector.runtime.ScheduledMailStatus.FAILED
+        }
     }
 
     fun defer(kind: MailKind, key: String, reason: String = "메일 단계 시작 시간 부족") {
@@ -139,6 +167,14 @@ internal class MailDelivery(
             issue(kind, key, reason)
             return MailSendResult.RECORD_FAILED
         }
+        try {
+            beforeTransport()
+        } catch (e: Exception) {
+            if (saveOutcome(history, attempt.copy(result = "failed", issue = "메일 발송 대기"), kind)) {
+                publishOutcome(kind, key)
+            }
+            throw e
+        }
         val result = try {
             transport.send(message)
             MailSendResult.SENT
@@ -184,20 +220,34 @@ internal class MailDelivery(
     }
 
     fun retry(eligible: (MailKind, String) -> Boolean = { _, _ -> true },
+              onExpired: ((Int) -> Unit)? = null,
               onResult: (MailKind?, String?, MailSendResult) -> Unit = { _, _, _ -> }): Set<Pair<MailKind, String>> {
         val targets = try {
             val history = attempts()
-            if (mailer == null) return emptySet()
+            if (mailer == null && onExpired == null) return emptySet()
+            val expired = mutableListOf<Attempt>()
             val today = LocalDate.now(clock)
-            history.groupBy { it.kind to it.key }.values.mapNotNull { entries ->
+            val eligibleTargets = history.groupBy { it.kind to it.key }.values.mapNotNull { entries ->
                 if (entries.last().result != "failed" || entries.any { it.result == "sent" || it.result == "unknown" }) return@mapNotNull null
                 val firstFailure = entries.first { it.result == "failed" }
                 val date = Instant.parse(firstFailure.firstFailureAt ?: firstFailure.at).atZone(clock.zone).toLocalDate()
-                if (date !in today.minusDays(3)..today) return@mapNotNull null
+                if (onExpired == null && date !in today.minusDays(3)..today) return@mapNotNull null
                 val kind = MailKind.entries.first { it.label == firstFailure.kind }
                 kind.validateKey(firstFailure.key)
-                if (eligible(kind, firstFailure.key)) kind to firstFailure.key else null
+                if (entries.last().issue in setOf(PUBLICATION_PENDING, LEGACY_PUBLICATION_PENDING) &&
+                    !kind.file(out, firstFailure.key, "json").isFile) return@mapNotNull null
+                if (date < today.minusDays(3) && onExpired != null) {
+                    expired += entries.last().copy(at = clock.instant().toString(), result = "expired", issue = "메일 재시도 기간 만료")
+                }
+                if (mailer != null && date in today.minusDays(3)..today && eligible(kind, firstFailure.key)) {
+                    kind to firstFailure.key
+                } else null
             }.toSet()
+            if (expired.isNotEmpty()) {
+                save(history + expired)
+                onExpired?.invoke(expired.size)
+            }
+            eligibleTargets
         } catch (e: Exception) {
         if (e is CancellationException) throw e
             issue(null, null, "메일 재시도 기록 읽기 또는 복구 실패")

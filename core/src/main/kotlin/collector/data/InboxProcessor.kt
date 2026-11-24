@@ -96,7 +96,7 @@ internal class InboxProcessor(
         check(failures == 0) { "$failures inbox entries could not be recorded or removed" }
     }
 
-    private fun apply(request: InboxRequest, at: Instant) {
+    fun apply(request: InboxRequest, at: Instant) {
         when (request) {
             is InboxRequest.Reaction -> {
                 require(request.cardId.isNotBlank() && request.reason.isNotBlank() && (request.memo?.length ?: 0) <= 500)

@@ -5,6 +5,8 @@ package app.ideacollector
 import android.app.Activity
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -18,12 +20,12 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
-import app.ideacollector.data.AppSettings
 import app.ideacollector.data.RequestRow
 import app.ideacollector.github.contractJson
 import app.ideacollector.github.sha256
-import app.ideacollector.github.validRepository
 import app.ideacollector.work.requestNotifications
+import app.ideacollector.work.RunOptions
+import app.ideacollector.work.CollectorRunService
 import collector.budget.BudgetSettings
 import collector.data.DataBranch.VERSION
 import collector.data.InboxRequest
@@ -67,83 +69,29 @@ internal fun Field(value: String, update: (String) -> Unit, label: Int, singleLi
     }
 }
 
-@Composable internal fun Connection(app: CollectorApp, settings: AppSettings, operation: (suspend () -> Unit) -> Unit,
-    completed: () -> Unit) {
+@Composable internal fun Connection(app: CollectorApp, operation: (suspend () -> Unit) -> Unit,
+    done: () -> Unit) {
+    SecureTokenInput()
     val activity = LocalContext.current as Activity
-    var step by rememberSaveable { mutableIntStateOf(1) }
-    var repo by rememberSaveable { mutableStateOf(settings.repository.takeIf(::validRepository).orEmpty()) }
-    var token by remember { mutableStateOf("") }
-    var verifiedRepo by rememberSaveable { mutableStateOf("") }
-    var hasToken by remember { mutableStateOf(false) }
-    var busy by remember { mutableStateOf(false) }
-    var syncError by rememberSaveable { mutableStateOf<String?>(null) }
-    LaunchedEffect(settings.tokenName) { hasToken = app.secrets.has(settings.tokenName) }
-    Text(stringResource(when (step) {
-        1 -> R.string.connection_step
-        2 -> R.string.notification_step
-        else -> R.string.first_sync_step
-    }),
-        style = MaterialTheme.typography.titleLarge)
-    when (step) {
-        1 -> {
-            SecureTokenInput()
-            Field(repo, { repo = it }, R.string.repo, singleLine = true, enabled = !busy)
-            Field(token, { token = it }, R.string.token, singleLine = true, secret = true, enabled = !busy)
-            Small(R.string.token_help)
-            val valid = validRepository(repo.trim()) && (token.isNotBlank() || (hasToken && settings.repository == repo.trim()))
-            Primary(R.string.verify, valid && !busy) {
-                val target = repo.trim()
-                val enteredToken = token
-                busy = true
-                operation {
-                    try {
-                        val value = enteredToken.trim().ifEmpty { checkNotNull(app.secrets.get(settings.tokenName)) }
-                        app.sync.verify(target, value)
-                        if (target == repo.trim() && enteredToken == token) {
-                            app.saveConnection(target, value.takeIf { enteredToken.isNotBlank() })
-                            verifiedRepo = target
-                            token = ""
-                            step = 2
-                        }
-                    } finally { busy = false }
-                }
-            }
-            if (!valid || busy) Small(if (busy) R.string.verify_in_progress else R.string.verify_fields_required)
-        }
-        2 -> {
-            Notice(stringResource(R.string.verified))
-            Secondary(R.string.notify) { requestNotifications(activity, 16) }
-            TextButton(onClick = { step = 3 }) { Text(stringResource(R.string.next_step)) }
-        }
-        3 -> {
-            syncError?.let { Notice(it, warning = true) }
-            if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-            Primary(if (syncError == null) R.string.first_sync else R.string.retry, !busy) {
-                busy = true
-                syncError = null
-                operation {
-                    try {
-                        val news = app.sync.sync(verifiedRepo, app.secrets.get(app.settings().tokenName))
-                        val status = app.database.dao().state(verifiedRepo)
-                        if (status?.status == "OK") {
-                            if (settings.notifications) app.notifications.publish(news)
-                            app.schedule.periodic(settings.syncHours)
-                            app.schedule.outbox()
-                            completed()
-                        } else syncError = status?.issue ?: activity.getString(
-                            if (status?.status == "APP_UPDATE_REQUIRED") R.string.update_required else R.string.sync_error)
-                    } catch (e: kotlinx.coroutines.CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        syncError = e.message ?: activity.getString(R.string.sync_error)
-                    } finally { busy = false }
-                }
+    val labels = listOf(
+        "ANTHROPIC_API_KEY" to R.string.key_anthropic, "OPENAI_API_KEY" to R.string.key_openai,
+        "GITHUB_TOKEN" to R.string.token, "SMTP_USERNAME" to R.string.key_smtp_username,
+        "SMTP_PASSWORD" to R.string.key_smtp_password, "MAIL_TO" to R.string.key_mail_to)
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        labels.forEach { (name, label) ->
+            var value by remember { mutableStateOf("") }
+            Field(value, { value = it }, label, singleLine = true, secret = true)
+            Primary(R.string.save, value.isNotBlank()) {
+                operation { check(app.secrets.set(name, value.trim())); value = "" }
             }
         }
+        Secondary(R.string.run_notifications) { requestNotifications(activity, 52) }
+        Secondary(R.string.back) { done() }
     }
 }
 
-@Composable internal fun Operations(app: CollectorApp, settings: AppSettings, data: ScreenState,
+@Composable internal fun Operations(app: CollectorApp, settings: app.ideacollector.data.AppSettings, data: ScreenState,
     send: (List<InboxRequest>) -> Unit, retry: (RequestRow) -> Unit, operation: (suspend () -> Unit) -> Unit,
     settingsReadError: Boolean) {
     val schedule = runCatching { data.file("settings/schedule.json")?.let { contractJson.decodeFromString<ScheduleSettings>(it) } }
@@ -161,15 +109,8 @@ internal fun Field(value: String, update: (String) -> Unit, label: Int, singleLi
         ?: (savedBudget ?: BudgetSettings()).dailyCardUsd.toString()
     var enabledDraft by rememberSaveable { mutableStateOf<Boolean?>(null) }
     var budgetDraft by rememberSaveable { mutableStateOf<String?>(null) }
-    var hoursDraft by rememberSaveable { mutableStateOf<String?>(null) }
     val enabled = enabledDraft ?: currentEnabled
     val budget = budgetDraft ?: currentBudget
-    val hours = hoursDraft ?: settings.syncHours.toString()
-    var last4 by remember { mutableStateOf<String?>(null) }
-    var token by remember { mutableStateOf("") }
-    var delete by remember { mutableStateOf(false) }
-    var replacing by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(settings.tokenName) { last4 = app.secrets.last4(settings.tokenName) }
     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(stringResource(R.string.daily_enabled), Modifier.weight(1f))
         Switch(enabled, { enabledDraft = it.takeUnless { value -> value == currentEnabled } },
@@ -179,7 +120,7 @@ internal fun Field(value: String, update: (String) -> Unit, label: Int, singleLi
     val amount = budget.toBigDecimalOrNull()
     val valid = amount != null && amount.signum() >= 0 && amount.stripTrailingZeros().scale() <= 2 && amount.toDouble().isFinite()
     val budgetChanged = amount?.compareTo(currentBudget.toBigDecimal()) != 0
-    val saveEnabled = !readError && validRepository(settings.repository) && valid && (enabled != currentEnabled || budgetChanged)
+    val saveEnabled = !readError && valid && (enabled != currentEnabled || budgetChanged)
     Primary(R.string.save, saveEnabled) {
         send(listOf(InboxRequest.SettingsSet(VERSION, requestId(), Instant.now().toString(),
             budget = if (budgetChanged) JsonObject(mapOf("dailyCardUsd" to JsonPrimitive(amount))) else null,
@@ -192,57 +133,61 @@ internal fun Field(value: String, update: (String) -> Unit, label: Int, singleLi
     })
     RequestChips(requests, retry)
     HorizontalDivider()
-    Field(hours, { hoursDraft = it.takeUnless { value -> value == settings.syncHours.toString() } }, R.string.sync_hours, true)
-    val interval = hours.toLongOrNull()
-    val intervalValid = interval != null && interval in 1..168
-    val canSaveInterval = intervalValid && interval != settings.syncHours && validRepository(settings.repository)
-    Primary(R.string.save, canSaveInterval) {
-        operation { app.saveSettings(settings.copy(syncHours = checkNotNull(interval))) }
+    val savedTime = java.time.LocalTime.ofSecondOfDay(settings.runTimeSeconds)
+    var time by rememberSaveable(savedTime) { mutableStateOf(savedTime.toString()) }
+    Field(time, { time = it }, R.string.run_time_setting, true)
+    var wifi by rememberSaveable(settings.wifiOnly) { mutableStateOf(settings.wifiOnly) }
+    var charging by rememberSaveable(settings.chargingOnly) { mutableStateOf(settings.chargingOnly) }
+    var batch by rememberSaveable(settings.batch) { mutableStateOf(settings.batch) }
+    RunOption(R.string.run_wifi, wifi) { wifi = it }
+    RunOption(R.string.run_charging, charging) { charging = it }
+    RunOption(R.string.run_batch, batch) { batch = it }
+    val parsed = runCatching { java.time.LocalTime.parse(time) }.getOrNull()
+    val changed = parsed != savedTime || wifi != settings.wifiOnly || charging != settings.chargingOnly || batch != settings.batch
+    Primary(R.string.save, parsed != null && changed) {
+        operation { app.schedule.save(RunOptions(checkNotNull(parsed), wifi, charging, batch)) }
     }
-    if (!canSaveInterval) Small(when {
-        !validRepository(settings.repository) -> R.string.interval_connect_needed
-        !intervalValid -> R.string.interval_invalid
-        else -> R.string.interval_save_hint
-    })
+    data.latestTrend?.takeIf { it.themes.isNotEmpty() }?.let { AnalysisControls(app, it, operation) }
+}
+
+@Composable private fun AnalysisControls(app: CollectorApp, report: collector.trend.TrendReport,
+    operation: (suspend () -> Unit) -> Unit) {
+    var selected by remember(report.date) { mutableStateOf(emptyList<String>()) }
+    var estimate by remember(selected) { mutableStateOf<collector.runtime.AnalysisEstimate?>(null) }
+    val running by CollectorRunService.running.collectAsState()
     HorizontalDivider()
-    last4?.let { Small(R.string.token_last, it) }
-    if (validRepository(settings.repository)) Secondary(R.string.token_replace) { replacing = true }
-    if (replacing) {
-        SecureTokenInput()
-        var busy by remember { mutableStateOf(false) }
-        AlertDialog(onDismissRequest = { if (!busy) { token = ""; replacing = false } },
-            properties = androidx.compose.ui.window.DialogProperties(
-                securePolicy = androidx.compose.ui.window.SecureFlagPolicy.SecureOn),
-            title = { Text(stringResource(R.string.token_replace)) },
-            text = { Field(token, { token = it }, R.string.token, singleLine = true, secret = true, enabled = !busy) },
-            confirmButton = {
-                Primary(R.string.token_replace, token.isNotBlank() && !busy) {
-                    val value = token.trim()
-                    busy = true
-                    operation {
-                        try {
-                            app.sync.verify(settings.repository, value)
-                            app.saveConnection(settings.repository, value)
-                            last4 = value.takeLast(4)
-                            token = ""
-                            replacing = false
-                        } finally { busy = false }
-                    }
-                }
-            }, dismissButton = {
-                if (!busy) Secondary(R.string.cancel) { token = ""; replacing = false }
-            })
+    Text(stringResource(R.string.analysis_title), style = MaterialTheme.typography.titleMedium)
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        report.themes.filter { it.id.isNotBlank() }.forEach { theme ->
+            val included = theme.id in selected
+            FilterChip(included, {
+                selected = if (included) selected - theme.id else selected + theme.id
+            }, label = { Text(theme.name) }, enabled = included || selected.size < 3)
         }
-    if (last4 != null) Secondary(R.string.token_delete) { delete = true }
-    if (delete) AlertDialog(onDismissRequest = { delete = false },
-        title = { Text(stringResource(R.string.delete_token_title)) },
-        confirmButton = { Primary(R.string.token_delete) {
-            delete = false
-            operation { app.secrets.clear(settings.tokenName); last4 = null }
-        } }, dismissButton = { Secondary(R.string.cancel) { delete = false } })
-    Text(stringResource(R.string.secrets))
-    if (validRepository(settings.repository)) {
-        Link("https://github.com/${settings.repository}/blob/main/scripts/actions-setup.md", stringResource(R.string.setup_doc))
+    }
+    Primary(R.string.analysis_estimate, selected.isNotEmpty()) {
+        val themes = selected
+        if (themes.isNotEmpty()) operation {
+            val answer = app.estimateAnalysis(themes)
+            if (selected == themes) estimate = answer
+        }
+    }
+    estimate?.let { answer ->
+        val limit = answer.reservationUsd
+        if (answer.canReserve && limit != null) {
+            Small(R.string.analysis_estimate_result, java.math.BigDecimal.valueOf(answer.estimatedUsd ?: limit).toPlainString(),
+                java.math.BigDecimal.valueOf(limit).toPlainString())
+            Primary(R.string.analysis_approve, !running) {
+                operation { app.startAnalysis(selected, limit) }
+            }
+        } else Notice(stringResource(R.string.analysis_unavailable), warning = true)
+    }
+}
+
+@Composable private fun RunOption(label: Int, enabled: Boolean, change: (Boolean) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(stringResource(label), Modifier.weight(1f))
+        Switch(enabled, change, modifier = Modifier.heightIn(min = 48.dp))
     }
 }
 

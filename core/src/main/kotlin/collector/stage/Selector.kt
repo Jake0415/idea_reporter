@@ -3,6 +3,7 @@ package collector.stage
 import collector.config.PipelineConfig
 import collector.model.*
 
+@kotlinx.serialization.Serializable
 data class SelectionResult(
     val kept: List<Signal>, val dropped: List<DroppedItem>, val groups: Map<String, List<Signal>>,
     val thresholdPassedByProfile: Map<String, Int> = emptyMap()

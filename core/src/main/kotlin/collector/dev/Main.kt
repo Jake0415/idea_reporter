@@ -419,9 +419,10 @@ internal fun archiveFailedRun(out: File, result: PipelineResult): File =
     }
 
 internal fun publishOrArchiveFailure(
-    out: File, history: FileHistorySearch, renderer: HtmlRenderer, result: PipelineResult, keepUnseen: Boolean
+    out: File, history: FileHistorySearch, renderer: HtmlRenderer, result: PipelineResult, keepUnseen: Boolean,
+    beforePublish: (LocalDate) -> Unit = {}
 ): HtmlRenderer.Rendered? = try {
-    publishRun(out, history, renderer, result, keepUnseen)
+    publishRun(out, history, renderer, result, keepUnseen, beforePublish)
 } catch (e: Exception) {
     if (e is kotlinx.coroutines.CancellationException) throw e
     val failed = result.copy(report = result.report.copy(issues = result.report.issues + safeFailure(e)))
@@ -435,7 +436,8 @@ internal fun publishOrArchiveFailure(
 }
 
 internal fun publishRun(
-    out: File, history: FileHistorySearch, renderer: HtmlRenderer, result: PipelineResult, keepUnseen: Boolean = false
+    out: File, history: FileHistorySearch, renderer: HtmlRenderer, result: PipelineResult, keepUnseen: Boolean = false,
+    beforePublish: (LocalDate) -> Unit = {}
 ): HtmlRenderer.Rendered? {
     val day = LocalDate.parse(result.report.runDate)
     val current = out.resolve("$day.json")
@@ -473,6 +475,7 @@ internal fun publishRun(
     try {
         for ((file, content) in files) {
             val previous = if (file.isFile) file.readText() else null
+            if (file == current) beforePublish(day)
             file.writeAtomically(content)
             replaced += file to previous
         }

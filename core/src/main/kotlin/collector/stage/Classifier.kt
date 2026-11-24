@@ -14,6 +14,7 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
 
+@kotlinx.serialization.Serializable
 data class ClassificationResult(
     val signals: List<Signal>, val dropped: List<DroppedItem>, val scoreClampWarnings: Int = 0,
     val issues: List<String> = emptyList(), val batchWaitMillis: Long = 0, val batchPending: Boolean = false

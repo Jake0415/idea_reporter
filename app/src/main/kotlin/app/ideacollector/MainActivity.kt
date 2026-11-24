@@ -2,7 +2,6 @@ package app.ideacollector
 
 import android.content.Intent
 import android.os.Bundle
-import app.ideacollector.github.validRepository
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -52,17 +51,22 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         val app = application as CollectorApp
         lifecycleScope.launch {
-            val settings = app.settings()
-            if (validRepository(settings.repository)) {
-                app.schedule.periodic(settings.syncHours)
-                app.schedule.sync()
-                app.recoverOutbox()
-            }
+            runCatching { app.flushLocalChanges() }
+            runCatching { app.schedule.clearBatteryExemptionIfGranted() }
+            runCatching { app.schedule.releaseReservation() }
+            runCatching { app.schedule.finishScheduleUpdate() }
+            runCatching { app.schedule.register() }
+            runCatching { app.schedule.clearPublishedBatchNotices() }
+            runCatching { app.sync.refresh() }
         }
     }
 }
 
 internal fun routeFrom(intent: Intent): Route? {
+    when (intent.getStringExtra("runDestination")) {
+        "today" -> return Route(Page.TODAY)
+        "runs" -> return Route(Page.RUNS)
+    }
     val uri = intent.data ?: return null
     if (uri.scheme != "ideacollector" || uri.pathSegments.size != 1) return null
     val id = uri.pathSegments.single()

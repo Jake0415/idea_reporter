@@ -48,7 +48,8 @@ class LlmRouter(
     private val stageTimeoutMillis: Map<String, Long> = emptyMap(),
     private val preflightBudget: Boolean = false,
     private val batchCheckpointHook: () -> Boolean = { true },
-    private val batchEnabled: Boolean = true
+    private val batchEnabled: Boolean = true,
+    private val deferBatch: Boolean = false
 ) {
     private val providers = providers.associateBy { it.id }
 
@@ -98,7 +99,7 @@ class LlmRouter(
             val outcome = try {
                 runMessageBatch(providers[ProviderId.ANTHROPIC] as? BatchCapableProvider, costGuard, null,
                     path, config, emptyList(), emptyList(), null, emptyList(), ::remainingMillis,
-                    pollRemainingMillis = ::pollRemainingMillis,
+                    pollRemainingMillis = { if (deferBatch) minOf(pollRemainingMillis(), 1) else pollRemainingMillis() },
                     recoveryRemainingMillis = { minOf(remainingMillis(), recoveryLeft()) }, recovering = true, stateHook = batchCheckpointHook)
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
@@ -127,7 +128,7 @@ class LlmRouter(
         if (hasSavedBatch(out, runDate, stage)) {
             val provider = providers[ProviderId.ANTHROPIC] as? BatchCapableProvider
             val outcome = runMessageBatch(provider, costGuard, null, path, config, requests, emptyList(),
-                generationResume, itemKeys, ::remainingMillis, retrySettlement = recovered == null, stateHook = batchCheckpointHook)
+                generationResume, itemKeys, ::remainingMillis, retrySettlement = recovered == null, stateHook = batchCheckpointHook, deferBatch = deferBatch)
             if (!outcome.pending && path.isFile && !isPendingBatch(path)) appliedBatches += path
             return if (recovered == null) outcome else outcome.copy(
                 issues = (recovered.issues + outcome.issues).distinct(), waitMillis = recovered.waitMillis + outcome.waitMillis)
@@ -144,7 +145,7 @@ class LlmRouter(
             promptVersions = promptVersions, batch = true, priceUnverified = !price.priceVerified)
         val routed = requests.map { it.copy(model = model.model) }
         val outcome = runMessageBatch(provider, costGuard, call, path, config, routed,
-            routed.map { projectedTokens(it, model) * price.batchMultiplier }, generationResume, itemKeys, ::remainingMillis, stateHook = batchCheckpointHook)
+            routed.map { projectedTokens(it, model) * price.batchMultiplier }, generationResume, itemKeys, ::remainingMillis, stateHook = batchCheckpointHook, deferBatch = deferBatch)
         if (!outcome.pending && path.isFile && !isPendingBatch(path)) appliedBatches += path
         return outcome
     }

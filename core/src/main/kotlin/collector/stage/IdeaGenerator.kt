@@ -16,7 +16,8 @@ import java.util.UUID
 @Serializable data class Category(val id: String, val name: String)
 @Serializable private data class Categories(val categories: List<Category>)
 
-data class GeneratedCards(val cards: List<IdeaCard>, val failure: String? = null, val issues: List<String> = emptyList())
+data class GeneratedCards(val cards: List<IdeaCard>, val failure: String? = null, val issues: List<String> = emptyList(),
+                          val reusedPaidBatch: Boolean = false)
 
 class IdeaGenerator(
     private val config: PipelineConfig, private val prompts: PromptResolver, private val router: LlmRouter
@@ -33,7 +34,8 @@ class IdeaGenerator(
     suspend fun generate(today: String, signals: List<Signal>, history: Map<String, List<HistoryHit>>,
                          feedback: List<String>, recentCards: List<String>,
                          merged: Map<String, List<Signal>> = emptyMap(),
-                         retryAfterTruncation: Boolean = false, out: File? = null, batchAllowed: Boolean = true): GeneratedCards {
+                         retryAfterTruncation: Boolean = false, out: File? = null, batchAllowed: Boolean = true,
+                         snapshotBatchInputs: Boolean = false): GeneratedCards {
         val mergedEvidence = signals.associate { (item) ->
             item.key to merged[item.key].orEmpty().filter { it.item.url in item.mergedUrls }
         }
@@ -45,6 +47,12 @@ class IdeaGenerator(
         val criteria = prompts.resolve("criteria")
         val issues = mutableListOf<String>()
         val resumingBatch = batchAllowed && out != null && hasSavedBatch(out, today, "generate")
+        val savedInput = if (snapshotBatchInputs && resumingBatch) savedGenerationInput(out, today) { request ->
+            val user = Json.parseToJsonElement(request.user).jsonObject
+            request.copy(user = JsonObject(user - setOf("보충 자료", "보충 자료 지시")).toString(),
+                jsonSchema = outputSchema(false))
+        } else null
+        var reusedPaidBatch = false
         var verifiedRefs = emptyMap<String, SupplementRef>()
         fun user(compact: Boolean, includeSupplement: Boolean = true) = buildJsonObject {
             put("today", today)
@@ -110,22 +118,24 @@ class IdeaGenerator(
             }
         }
         suspend fun request(compact: Boolean, limit: Int, useBatch: Boolean = false): Response<Output> {
-            val request = LlmRequest("", ideas.text, user(compact).toString(), outputSchema(verifiedRefs.isNotEmpty()), "generate", limit, Effort.LOW)
+            val request = savedInput ?: LlmRequest("", ideas.text, user(compact).toString(),
+                outputSchema(verifiedRefs.isNotEmpty()), "generate", limit, Effort.LOW)
             val batch = if (useBatch && out != null && (config.batch.generate || resumingBatch)) {
                 router.batch("generate", today, out, config.batch, listOf(request),
                     mapOf(ideas.promptId to ideas.version, criteria.promptId to criteria.version),
-                    GenerationBatchResume(request.copy(user = user(compact, includeSupplement = false).toString(),
-                        jsonSchema = outputSchema(false)), verifiedRefs.values.toList()))
+                    GenerationBatchResume(savedInput ?: request.copy(user = user(compact, includeSupplement = false).toString(),
+                        jsonSchema = outputSchema(false)), verifiedRefs.values.toList(), snapshotBatchInputs))
             } else null
             issues += batch?.issues.orEmpty()
             if (batch?.pending == true) return Response.Failed("Batch 결과 대기")
             if (resumingBatch && batch != null) verifiedRefs = verified(batch.supplementRefs)
-            val current = request.copy(user = user(compact).toString(), jsonSchema = outputSchema(verifiedRefs.isNotEmpty()))
+            reusedPaidBatch = snapshotBatchInputs && resumingBatch && batch?.responses?.get(0)?.isSuccess == true
+            val current = savedInput ?: request.copy(user = user(compact).toString(), jsonSchema = outputSchema(verifiedRefs.isNotEmpty()))
             return structuredCall(router, "generate", listOf(ideas, criteria), current,
                 initial = batch?.responses?.get(0))
         }
         val first = request(compact = false, limit = if (retryAfterTruncation) tokens * 3 / 2 else tokens, useBatch = batchAllowed)
-        val response = if (first is Response.Failed && first.reason == "비용 상한") request(compact = true, limit = tokens) else first
+        val response = if (first is Response.Failed && first.reason == "비용 상한" && !reusedPaidBatch) request(compact = true, limit = tokens) else first
         return when (response) {
             is Response.Ok -> GeneratedCards(response.value.cards.map { card ->
                 val refs = card.supplementRefs.mapNotNull { ref ->
@@ -136,8 +146,8 @@ class IdeaGenerator(
                 val removed = card.supplementRefs.size - refs.size
                 if (removed > 0) issues += "보충 근거 링크 ${removed}건 제거"
                 card.copy(id = UUID.randomUUID().toString(), runDate = today, badges = emptyList(), supplementRefs = refs)
-            }, if (response.value.cards.isEmpty()) "작성 모델이 근거 조건을 충족한 아이디어를 찾지 못했습니다." else null, issues)
-            is Response.Failed -> GeneratedCards(emptyList(), response.reason, issues)
+            }, if (response.value.cards.isEmpty()) "작성 모델이 근거 조건을 충족한 아이디어를 찾지 못했습니다." else null, issues, reusedPaidBatch)
+            is Response.Failed -> GeneratedCards(emptyList(), response.reason, issues, reusedPaidBatch)
         }
     }
 

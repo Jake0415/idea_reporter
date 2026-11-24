@@ -1,6 +1,13 @@
 package collector.pipeline
 
 import collector.config.GitHubConfig
+import collector.dev.writeAtomically
+import collector.llm.batchPath
+import collector.llm.hasSavedBatch
+import collector.llm.isPendingBatch
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import collector.config.PipelineConfig
 import collector.config.SourceConfig
 import collector.llm.CostGuard
@@ -28,12 +35,45 @@ class FullPipeline(
     private val history: RunHistory, private val trackedStore: TrackedStore,
     val collectOnly: Boolean = false,
     private val reddit: RedditAdapter? = null,
-    private val out: File? = null
+    private val out: File? = null,
+    private val snapshotBatchInputs: Boolean = false
 ) {
     private val classifier = Classifier(config, profiles, prompts, router)
     private val selector = Selector(config)
     private val generator = IdeaGenerator(config, prompts, router)
     private val updater = TrackingUpdater(prompts, router)
+
+    @Serializable
+    internal data class BatchCollectionInput(
+        val base: PipelineResult, val collected: List<Item>, val tracking: List<Item>, val tracked: List<TrackedIdea>
+    )
+
+    @Serializable
+    internal data class GenerationInput(
+        val collection: BatchCollectionInput,
+        val classified: ClassificationResult, val selected: SelectionResult, val enriched: SelectionResult,
+        val cache: Map<String, TrackClassification>, val matches: Map<String, List<HistoryHit>>,
+        val feedback: List<String>, val recentCards: List<String>
+    )
+
+    private fun batchInputFile(date: String, stage: String): File? = out?.takeIf { snapshotBatchInputs }?.let {
+        batchPath(it, date, stage).resolveSibling("$date-$stage.input")
+    }
+
+    internal fun generationInput(date: LocalDate): GenerationInput? {
+        if (out == null || !hasSavedBatch(out, date.toString(), "generate")) return null
+        return batchInputFile(date.toString(), "generate")?.takeIf { it.isFile }
+            ?.let { Json.decodeFromString<GenerationInput>(it.readText()) }
+    }
+
+    internal fun classificationInput(date: LocalDate): BatchCollectionInput? {
+        if (out == null || !hasSavedBatch(out, date.toString(), "classify")) return null
+        return batchInputFile(date.toString(), "classify")?.takeIf { it.isFile }
+            ?.let { Json.decodeFromString<BatchCollectionInput>(it.readText()) }
+    }
+
+    /** 저장된 추적 목록 그대로(★ 피드백으로 새 추적을 만들지 않음). Batch 이어받기에서 현재 상태를 지킬 때 쓴다. */
+    internal fun storedTracked(): List<TrackedIdea> = if (collectOnly) emptyList() else trackedStore.load()
 
     internal fun tracked(): List<TrackedIdea> {
         if (collectOnly) return emptyList()
@@ -83,7 +123,10 @@ class FullPipeline(
     }
 
     internal suspend fun run(base: PipelineResult, collected: List<Item>, tracking: List<Item>, tracked: List<TrackedIdea>,
-                             now: Instant, today: LocalDate, onStage: (String) -> Unit): PipelineResult {
+                             now: Instant, today: LocalDate, saved: GenerationInput? = null,
+                             latestTracked: List<TrackedIdea>? = null, onStage: (String) -> Unit): PipelineResult {
+        // latestTracked: Batch 이어받기에서 스냅샷 이후 사용자가 바꾼 추적 상태(★·중지·키워드)를 지키기 위한 현재 목록.
+        // 분류·생성은 제출 당시 스냅샷(tracked)을 그대로 써서 요청 지문을 맞추고, 추적 단계와 저장은 현재 목록을 쓴다.
         val comments = CommentFetcher(http, config.commentsPerItem, reddit)
         val started = System.nanoTime()
         val date = today.toString()
@@ -124,9 +167,9 @@ class FullPipeline(
         val trackingKeys = tracking.mapTo(hashSetOf()) { it.key }
         val retentionCutoff = today.minusDays(30).toString()
         val reuseCutoff = today.minusDays(14).toString()
-        val cache = history.trackClassified().filterValues { it.date >= retentionCutoff }.mapValues { (_, cached) ->
+        val cache = (saved?.cache ?: history.trackClassified().filterValues { it.date >= retentionCutoff }.mapValues { (_, cached) ->
             cached.copy(classification = cached.classification.copy(trackedIdeaIds = emptyList()))
-        }.toMutableMap()
+        }).toMutableMap()
         val reused = input.filter { it.key in trackingKeys && it.key !in cardKeys }.mapNotNull { item ->
             val cached = cache[item.key]?.takeIf { it.date in reuseCutoff..date } ?: return@mapNotNull null
             val profile = cached.classification.profile
@@ -135,12 +178,17 @@ class FullPipeline(
         }.toMap()
 
         val classified = stage("classify", input.size, { it: ClassificationResult -> it.signals.count { s -> s.classification.profile != "none" } }) {
+            if (saved != null) return@stage saved.classified
             val newInputs = input.filter { it.key !in reused }
             val recent = priorTopics.filter { it.runDate >= today.minusDays(config.recentTopicDays.toLong()).toString() }
             val pending = input.filter { it.key in reused }.groupBy { item ->
                 active.filter { it.id !in reused.getValue(item.key).relevance }
             }.filterKeys { it.isNotEmpty() }
             val contexts = comments.contexts(newInputs + pending.values.flatten())
+            if (config.batch.classify && newInputs.isNotEmpty() && out != null && !hasSavedBatch(out, date, "classify")) {
+                batchInputFile(date, "classify")?.writeAtomically(
+                    Json.encodeToString(BatchCollectionInput(base, collected, tracking, tracked)))
+            }
             val result = classifier.classify(newInputs, recent, active, contexts, date, out)
             if (result.batchPending) return@stage result
             for (signal in result.signals) {
@@ -172,13 +220,14 @@ class FullPipeline(
         }
         issues += classified.issues
         val cardSignals = classified.signals.filter { it.item.key in cardKeys && it.classification.profile != "none" }
-        val selected = stage("select", cardSignals.size, { it: SelectionResult -> it.kept.size }) { selector.select(cardSignals) }
+        val selected = stage("select", cardSignals.size, { it: SelectionResult -> it.kept.size }) { saved?.selected ?: selector.select(cardSignals) }
         if (classified.batchPending) {
             return base.copy(report = base.report.copy(stages = stages, issues = issues.distinct(),
                 llmCalls = costs.drainCalls(), classificationBatchWaitMillis = classified.batchWaitMillis,
                 totalMillis = base.report.totalMillis + (System.nanoTime() - started) / 1_000_000))
         }
         val enrichedSelection = stage("enrich", selected.kept.size, { it: SelectionResult -> it.kept.size }) {
+            if (saved != null) return@stage saved.enriched
             val kept = Enricher(http, profiles, comments).enrich(selected.kept, selected.groups)
             val groups = kept.associate { representative ->
                 val key = representative.item.key
@@ -190,21 +239,33 @@ class FullPipeline(
         }
         val enriched = enrichedSelection.kept
         val allCards = priorRuns.flatMap { it.cards }.associateBy { it.id }
-        val matches = enriched.associate { it.item.key to history.search(it, today) }
-        val feedback = history.feedback().asSequence().distinctBy { it.cardId }.mapNotNull { entry ->
+        val matches = saved?.matches ?: enriched.associate { it.item.key to history.search(it, today) }
+        val feedback = saved?.feedback ?: history.feedback().asSequence().distinctBy { it.cardId }.mapNotNull { entry ->
             val card = allCards[entry.cardId] ?: history.cardRun(entry.cardId)?.cards
                 ?.firstOrNull { it.id == entry.cardId } ?: return@mapNotNull null
             listOfNotNull(card.title, card.category, if (entry.kind == Feedback.Kind.STAR) "★" else "관심 없음",
                 entry.reason, entry.memo).joinToString(" · ")
         }.take(config.feedbackExamples).toList()
-        val recentCards = priorRuns.filter { it.report.runDate >= today.minusDays(config.recentCardDays.toLong()).toString() }
+        val recentCards = saved?.recentCards ?: priorRuns.filter { it.report.runDate >= today.minusDays(config.recentCardDays.toLong()).toString() }
             .flatMap { it.cards }.map { it.title }
+        val inputFile = batchInputFile(date, "generate")
+        if (saved == null && config.batch.generate && inputFile != null && enriched.isNotEmpty() &&
+            out != null && !hasSavedBatch(out, date, "generate")) {
+            inputFile.writeAtomically(Json.encodeToString(GenerationInput(BatchCollectionInput(base, collected, tracking, tracked),
+                classified, selected, enrichedSelection, cache, matches, feedback, recentCards)))
+        }
         suspend fun generate(retryAfterTruncation: Boolean = false, batchAllowed: Boolean = true) =
             stage("generate", enriched.size, { it: GeneratedCards -> it.cards.size }) {
                 generator.generate(date, enriched, matches, feedback, recentCards, enrichedSelection.groups,
-                    retryAfterTruncation, out, batchAllowed).also { issues += it.issues }
+                    retryAfterTruncation, out, batchAllowed, snapshotBatchInputs).also { issues += it.issues }
             }
         var generated = generate()
+        // 생성 Batch가 아직 대기 중이면(결과 조회 실패 포함) 추적 비용을 쓰기 전에 이어받기로 넘긴다.
+        if (out != null && isPendingBatch(batchPath(out, date, "generate"))) {
+            return base.copy(report = base.report.copy(stages = stages, issues = (issues + generated.issues).distinct(),
+                llmCalls = costs.drainCalls(), classificationBatchWaitMillis = classified.batchWaitMillis,
+                totalMillis = base.report.totalMillis + (System.nanoTime() - started) / 1_000_000))
+        }
         val topics = cardSignals.groupBy { it.classification.topicKey }.map { (key, rows) ->
             TopicHistory(key, rows.first().classification.topicLabel, date, rows.map { it.item.key })
         }
@@ -227,7 +288,7 @@ class FullPipeline(
             }
         }
         var cards = validate(generated.cards)
-        if (generated.failure in setOf("JSON 응답 오류", TRUNCATED_RESPONSE) || generated.cards.isNotEmpty() && cards.isEmpty()) {
+        if (!generated.reusedPaidBatch && (generated.failure in setOf("JSON 응답 오류", TRUNCATED_RESPONSE) || generated.cards.isNotEmpty() && cards.isEmpty())) {
             firstAttemptIssues += validationIssues.map { "1차 시도: $it" }
             validationIssues.clear()
             cardRejections.clear()
@@ -245,8 +306,13 @@ class FullPipeline(
             .associate { LocalDate.parse(it.report.runDate) to it.classified } + (today to signals)
         val trackedAfter = mutableListOf<TrackedIdea>()
         val updates = stage("track", active.size, { it: List<TrackingUpdate> -> it.size }) {
-            tracked.mapNotNull { idea ->
+            (latestTracked ?: tracked).mapNotNull { idea ->
                 if (idea.status == TrackedIdea.Status.STOPPED) {
+                    trackedAfter += idea
+                    return@mapNotNull null
+                }
+                // 이전 날짜 이어받기: 더 늦은 날짜 실행이 이미 갱신한 추적은 건드리지 않는다.
+                if (latestTracked != null && idea.lastUpdateAt?.isAfter(now) == true) {
                     trackedAfter += idea
                     return@mapNotNull null
                 }
@@ -289,7 +355,11 @@ class FullPipeline(
             cards = cards, trackingUpdates = updates, topics = topics,
             metrics = RunMetrics(collected.distinctBy { it.key }.map { MetricSnapshot(it.key, it.rawScore, now) },
                 profileMetrics, classified.scoreClampWarnings, cardRejections),
-            tracked = trackedAfter, trackClassified = cache, trackingOnlyKeys = input.map { it.key }.toSet() - cardKeys,
+            tracked = trackedAfter,
+            trackClassified = if (latestTracked == null) cache else history.trackClassified().let { current ->
+                current + cache.filter { (key, value) -> current[key]?.let { it.date <= value.date } ?: true }
+            },
+            trackingOnlyKeys = input.map { it.key }.toSet() - cardKeys,
             report = base.report.copy(stages = stages, llmCalls = costs.drainCalls(), cardCount = cards.size,
                 trackingUpdateCount = updates.size, dropCounts = dropped.groupingBy { it.reason }.eachCount(),
                 issues = issues.distinct() + firstAttemptIssues + validationIssues,
