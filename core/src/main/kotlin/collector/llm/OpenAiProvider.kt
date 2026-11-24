@@ -46,7 +46,7 @@ class OpenAiProvider(
         }
 
         val response = client.chat().completions().create(params.build()).await()
-        val usage = response.usage().orElseThrow()
+        val usage = response.usage().get()
         val input = usage.promptTokens().toInt()
         val output = usage.completionTokens().toInt()
         val cached = usage.promptTokensDetails().orElse(null)?.cachedTokens()?.orElse(0)?.toInt() ?: 0

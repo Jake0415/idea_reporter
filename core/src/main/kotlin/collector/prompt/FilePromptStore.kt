@@ -17,7 +17,10 @@ class FilePromptStore internal constructor(
     private val directory: Path,
     private val replace: (Path, Path) -> Unit
 ) : PromptStore {
-    constructor(directory: Path = Path.of("config/prompts")) : this(directory, { source, target ->
+    private fun readUtf8(path: Path): String =
+        Charsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(Files.readAllBytes(path))).toString()
+
+    constructor(directory: Path) : this(directory, { source, target ->
         Files.move(source, target, ATOMIC_MOVE, REPLACE_EXISTING)
     })
 
@@ -33,7 +36,7 @@ class FilePromptStore internal constructor(
     override fun get(id: String): PromptOverride? {
         val path = promptPath(id)
         if (!Files.exists(path)) return null
-        val text = Files.readString(path)
+        val text = readUtf8(path)
         // Equal bodies have the same hash, including comments and whitespace.
         val match = history(id).firstOrNull { it.text == text }
         return PromptOverride(id, text, match?.version?.toString() ?: "unknown", match?.baseHash.orEmpty(), match?.savedAt)
@@ -66,7 +69,7 @@ class FilePromptStore internal constructor(
         val path = historyPath(id)
         if (!Files.exists(path)) return emptyList()
         try {
-            return Json.decodeFromString(Files.readString(path))
+            return Json.decodeFromString(readUtf8(path))
         } catch (_: SerializationException) {
             // Malformed JSON or an invalid revision.
         } catch (_: DateTimeException) {
@@ -91,7 +94,7 @@ class FilePromptStore internal constructor(
     private fun write(path: Path, text: String) {
         val temp = Files.createTempFile(directory, "prompt-", ".tmp")
         try {
-            Files.writeString(temp, text)
+            Files.write(temp, text.toByteArray())
             replace(temp, path)
         } finally {
             Files.deleteIfExists(temp)

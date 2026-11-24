@@ -1,20 +1,14 @@
 package collector.dev
 
-import collector.analysis.AnalysisCommand
-import collector.analysis.AnalysisConfig
-import collector.backfill.Backfill
+import collector.runtime.*
 import collector.budget.BudgetSettings
-import collector.budget.MonthlyBudget
-import collector.config.ConfigLoader
 import collector.config.DuplicateRssFeedNameException
-import collector.config.PipelineConfig
 import collector.config.SourcesFile
 import collector.data.AnalysisMode
 import collector.data.DataSync
 import collector.data.DataBranch
 import collector.data.InboxRequest
 import collector.data.InboxResult
-import collector.data.ScheduleSettings
 import collector.data.files
 import collector.data.inboxJson
 import collector.data.mergeMailJournals
@@ -27,30 +21,12 @@ import collector.mail.MailDelivery
 import collector.mail.MailKind
 import collector.mail.MailSendResult
 import collector.mail.Mailer
-import collector.mail.SmtpMailer
 import collector.model.DropReason
 import collector.model.Item
 import collector.model.RunReport
-import collector.pipeline.FullPipeline
-import collector.pipeline.Pipeline
 import collector.pipeline.PipelineResult
-import collector.port.SecretProvider
-import collector.profile.ProfileLoader
-import collector.prompt.FilePromptStore
-import collector.prompt.PromptResolver
 import collector.report.HtmlRenderer
-import collector.source.GitHubAdapter
-import collector.source.GitHubIssuesAdapter
-import collector.source.HackerNewsAdapter
-import collector.source.HuggingFaceAdapter
-import collector.source.ProductHuntAdapter
-import collector.source.RedditAdapter
-import collector.source.RssAdapter
-import collector.source.Http
 import collector.source.SourceAdapter
-import collector.stage.Classifier
-import collector.stage.IdeaGenerator
-import collector.trend.publishTrend
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.encodeToString
 import java.io.File
@@ -65,10 +41,14 @@ import java.time.Clock
 import java.time.Duration
 import java.time.LocalDate
 import java.util.concurrent.TimeUnit
-import java.util.Locale
 import kotlin.system.exitProcess
 
 fun main(args: Array<String>) {
+    val logs = java.util.logging.LogManager.getLogManager()
+    logs.reset()
+    logs.getLogger("").addHandler(java.util.logging.ConsoleHandler().apply {
+        level = java.util.logging.Level.WARNING
+    })
     val startedAt = System.getenv("COLLECTOR_JOB_STARTED_AT")?.let(Instant::parse) ?: Instant.now()
     System.setOut(PrintStream(FileOutputStream(FileDescriptor.out), true, "UTF-8"))
     try {
@@ -92,14 +72,22 @@ fun main(args: Array<String>) {
 
 internal suspend fun runMain(
     args: Array<String>,
-    out: File = File("out"),
+    out: File = CollectorPaths.workingDirectory().outDir,
     dailySources: Pair<SourcesFile, List<SourceAdapter>>? = null,
     scheduledClock: Clock = Clock.systemDefaultZone(),
     scheduledMailer: (() -> Mailer?)? = null,
     processStartedAt: Instant? = null,
     dailyProviders: (() -> List<LlmProvider>)? = null
 ) {
-    val promptsDir = File("config/prompts")
+    val workingPaths = CollectorPaths.workingDirectory()
+    val paths = CollectorPaths(out, workingPaths.configDir, envFile = workingPaths.envFile)
+    val promptsDir = paths.promptsDir
+    val secrets by lazy { DotEnv.secretProvider(DotEnv.load(paths.envFile)) }
+    val runtime by lazy {
+        CollectorRuntime(paths, collector.port.SecretProvider { secrets.get(it) }, scheduledClock, dailySources?.second, dailyProviders, scheduledMailer,
+            batchCheckpointHook = ::publishBatchCheckpoint)
+    }
+    val deadlineClock = if (processStartedAt == null) scheduledClock else Clock.systemUTC()
     when (args.firstOrNull()) {
         "--data-merge-mail" -> {
             require(args.size == 4)
@@ -117,7 +105,7 @@ internal suspend fun runMain(
             require(!mailOnly || !stateOnly)
             val branch = File(args[1])
             require(branch.isDirectory)
-            val sync = DataSync(out, promptsDir)
+            val sync = DataSync(out, promptsDir, pipelineConfig = paths.pipelineConfig)
             out.mkdirs()
             val update: suspend () -> Unit = {
                 when (args[0]) {
@@ -135,22 +123,12 @@ internal suspend fun runMain(
             return
         }
         "--set-budget" -> {
-            out.mkdirs()
-            withRunLock(out) {
-                val updated = BudgetSettings.update(out, args.drop(1))
-                if ("analysisRequestUsd" in updated || "analysisMonthlyUsd" in updated) {
-                    MonthlyBudget(out, BudgetSettings.load(out)).analysisBlockReason(LocalDate.now())
-                }
-                updated.forEach { (key, value) -> println("$key=$value") }
-            }
+            runtime.setBudget(args.drop(1)).forEach { (key, value) -> println("$key=$value") }
             return
         }
         "--budget-status" -> {
             require(args.size == 1)
-            out.mkdirs()
-            withRunLock(out) {
-                MonthlyBudget(out, BudgetSettings.load(out)).status(LocalDate.now()).forEach(::println)
-            }
+            runtime.budgetStatus().forEach(::println)
             return
         }
     }
@@ -164,17 +142,12 @@ internal suspend fun runMain(
             )
             else -> throw IllegalArgumentException("지원하지 않는 트렌드 옵션입니다.")
         }
-        out.mkdirs()
-        withRunLock(out) {
-            println(publishTrend(out, date))
-        }
+        println(runtime.publishTrend(date).subject)
         return
     }
-    val secrets = DotEnv.secretProvider(DotEnv.load(File(".env")))
     when (args.firstOrNull()) {
         "--mail", "--mail-test" -> {
-            out.mkdirs()
-            withRunLock(out) { runMailCommand(args, out, secrets) }
+            runtime.runMailCommand(args)
             return
         }
         "--mail-scheduled" -> {
@@ -205,23 +178,15 @@ internal suspend fun runMain(
         "--scheduled" -> {
             val noMail = args.contentEquals(arrayOf("--scheduled", "--no-mail"))
             require(args.size == 1 || noMail)
-            if (noMail) out.resolve("mail/scheduled.json").delete()
-            if (readJson<ScheduleSettings>(out.resolve("settings/schedule.json"))?.enabled == false) return
-            val status = runScheduled(out, secrets, scheduledClock, daily = { startedAt, log ->
-                var result: PipelineResult? = null
-                try {
-                    runDaily(emptyArray(), out, secrets, dailySources, dailyProviders, startedAt,
-                        print = {}, summary = { result = it }, deadlineClock = if (processStartedAt == null) scheduledClock else Clock.systemUTC())
-                } finally {
-                    log("일일 요약 · 카드 ${result?.cards?.size ?: 0}개 · " +
-                        String.format(Locale.ROOT, "추정 USD %.6f", result?.report?.costUsd ?: 0.0) +
-                        " · 실패 출처 ${result?.report?.failedSources?.size ?: 0}개")
-                }
-            }, mailer = if (noMail) null else if (scheduledMailer == null) SmtpMailer.from(secrets) else scheduledMailer(),
-                startedAt = processStartedAt ?: scheduledClock.instant(),
-                deadlineMinutes = deadlineMinutes(PipelineConfig.load()),
-                deadlineClock = if (processStartedAt == null) scheduledClock else Clock.systemUTC(),
-                noMail = noMail)
+            val status = try {
+                runtime.runScheduled(
+                    ScheduledOptions(mail = !noMail, deadline = cliDeadline()),
+                    dailySources?.first, processStartedAt ?: scheduledClock.instant(), deadlineClock
+                ).exitCode
+            } catch (e: RunLockedException) {
+                println("예약 실행 실패 · ${safeFailure(e)}")
+                1
+            }
             if (status != 0) throw ScheduledDailyFailure()
             return
         }
@@ -230,26 +195,17 @@ internal suspend fun runMain(
         if (!llmSmoke(secrets)) exitProcess(1)
         return
     }
-    val defaults = PipelineConfig.defaults
     if (args.firstOrNull() in setOf("--analyze", "--analysis-detail", "--analysis-list", "--data-analyze", "--data-analysis-queue")) {
-        val local = File("config/analysis.local.json")
-        val config = AnalysisConfig.load(local, defaults.analysis)
-        val prompts = PromptResolver(FilePromptStore(promptsDir.toPath()))
         val dispatch = args.first() == "--data-analyze"
         val dailyQueue = args.first() == "--data-analysis-queue"
         val output = mutableListOf<String>()
         var mailReportId: String? = null
         var beforePaidRun: () -> Unit = {}
-        val command = AnalysisCommand(out, config, prompts, provider = {
-            OpenAiProvider(secrets.get("OPENAI_API_KEY")?.takeIf { it.isNotBlank() }
-                ?: throw LlmKeyMissingException(ProviderId.OPENAI))
-        }, print = if (dispatch || dailyQueue) { line -> output.add(line) } else ::println, sendMail = { id ->
-            if (dispatch) mailReportId = id
-            else {
-                val delivery = mailDelivery(out, secrets)
-                if (delivery.send(MailKind.ANALYSIS, id) == MailSendResult.RECORD_FAILED) throw MailRecordFailure()
-            }
-        }, beforePaidRun = { beforePaidRun() })
+        val command = runtime.analysisCommand(
+            print = if (dispatch || dailyQueue) { line -> output.add(line) } else ::println,
+            sendMail = if (dispatch) { id -> mailReportId = id } else null,
+            beforePaidRun = { beforePaidRun() }
+        )
         if (dispatch || dailyQueue) {
             require(args.size == 1)
             out.mkdirs()
@@ -320,7 +276,9 @@ internal suspend fun runMain(
                                     output = output.toList(), code = "analysis_complete", mailReportId = mailReportId)
                             }
                         }
-                    } catch (_: Exception) {
+                    } catch (e: Exception) {
+                        // A cancelled run must not be recorded as a failed request (the queue entry stays for the next run).
+                        if (e is kotlinx.coroutines.CancellationException) throw e
                         val interrupted = readJson<InboxResult>(resultFile(out, key))?.status == "running"
                         InboxResult(requestId = key, ok = false,
                             reason = if (interrupted) "확인 필요 — 새 requestId로 다시 요청" else "Analysis could not complete",
@@ -343,11 +301,11 @@ internal suspend fun runMain(
         return
     }
     if (args.firstOrNull() == "--backfill") {
-        runBackfill(args, secrets, PipelineConfig.load(), out, processStartedAt ?: Instant.now())
+        runtime.runBackfill(args, processStartedAt ?: Instant.now())
         return
     }
-    out.mkdirs()
-    withRunLock(out) { runDaily(args, out, secrets, dailySources, dailyProviders, processStartedAt ?: Instant.now()) }
+    runtime.runDaily(args, DailyOptions(deadline = cliDeadline(), sources = dailySources?.first),
+        processStartedAt ?: Instant.now(), Clock.systemUTC())
 }
 
 private fun workflowRequestId() = requireNotNull(System.getenv("REQUEST_ID")).also {
@@ -377,8 +335,11 @@ internal fun runPublicationCommand(timeout: Duration, vararg command: String): B
             process.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS) && process.exitValue() == 0
         } finally {
             if (process.isAlive) {
-                process.descendants().use { descendants -> descendants.forEach { it.destroyForcibly() } }
-                process.destroyForcibly()
+                try {
+                    destroyPublicationDescendants(process)
+                } finally {
+                    process.destroyForcibly()
+                }
             }
         }
     } catch (_: java.io.IOException) {
@@ -386,10 +347,23 @@ internal fun runPublicationCommand(timeout: Duration, vararg command: String): B
     }
 }
 
+private fun destroyPublicationDescendants(process: Process) {
+    // The desktop JVM exposes the process tree through APIs absent from Android.
+    val descendants = try {
+        Process::class.java.getMethod("descendants")
+    } catch (_: NoSuchMethodException) {
+        return
+    }
+    val destroy = Class.forName("java.lang.ProcessHandle").getMethod("destroyForcibly")
+    (descendants.invoke(process) as java.util.stream.Stream<*>).use { children ->
+        children.forEach { destroy.invoke(it) }
+    }
+}
+
 private fun workflowMailPublisher(out: File, prompts: File): (MailDelivery.Attempt?) -> Boolean = { attempt ->
     val published = workflowPublish("publish-mail", "mail")
     if (!published && attempt == null) {
-        runCatching { DataSync(out, prompts).mailArtifact(out.resolve("mail/public-journal.json")) }
+        runCatching { DataSync(out, prompts, pipelineConfig = CollectorPaths.workingDirectory().pipelineConfig).mailArtifact(out.resolve("mail/public-journal.json")) }
     }
     published && (attempt == null ||
         readJson<List<MailDelivery.Attempt>>(File("../data/out/mail/sent.json")).orEmpty().any {
@@ -397,178 +371,8 @@ private fun workflowMailPublisher(out: File, prompts: File): (MailDelivery.Attem
         })
 }
 
-private fun deadlineMinutes(config: PipelineConfig): Int =
-    if (System.getenv("COLLECTOR_JOB_STARTED_AT") != null) 150 - 20 else config.deadlineMinutes
-
-private suspend fun runDaily(
-    args: Array<String>,
-    out: File,
-    secrets: SecretProvider,
-    dailySources: Pair<SourcesFile, List<SourceAdapter>>?,
-    dailyProviders: (() -> List<LlmProvider>)?,
-    runStartedAt: Instant? = null,
-    print: (String) -> Unit = ::println,
-    summary: (PipelineResult) -> Unit = {},
-    deadlineClock: Clock = Clock.systemUTC()
-): Boolean {
-    val defaults = PipelineConfig.load()
-    var budgetOverride: Double? = null
-    var keepUnseen = false
-    var noLlm = false
-    var index = 0
-    while (index < args.size) {
-        when (args[index++]) {
-            "--keep-unseen" -> keepUnseen = true
-            "--no-llm" -> noLlm = true
-            "--budget" -> budgetOverride = requireNotNull(args.getOrNull(index++)?.toDoubleOrNull())
-            else -> throw IllegalArgumentException("지원하지 않는 실행 옵션입니다.")
-        }
-    }
-    budgetOverride?.let { require(it.isFinite() && it >= 0.0) }
-    val settings = BudgetSettings.load(out, print)
-    val config = defaults.copy(dailyBudgetUsd = budgetOverride ?: settings.dailyCardUsd)
-    val monthlyBudget = MonthlyBudget(out, settings)
-    val sources = dailySources?.first ?: ConfigLoader.load(File("config/sources.local.json"))
-    val profiles = ProfileLoader.loadDefaults()
-    val routingIssues = ProfileLoader.validateRouting(sources, profiles)
-    if (routingIssues.isNotEmpty()) {
-        print("출처 설정 오류:\n- " + routingIssues.joinToString("\n- "))
-        throw InvalidSourceRoutingException()
-    }
-    val prompts = PromptResolver(FilePromptStore(File("config/prompts").toPath()))
-    for (id in profiles.ids) {
-        prompts.resolve("profile.$id.match")
-        prompts.resolve("profile.$id.analysis")
-    }
-    val history = FileHistorySearch(out, defaults.historyDays)
-    val ledger = if (noLlm) null else costLedger(out, history)
-    val startedAt = runStartedAt ?: Instant.now()
-    val today = LocalDate.ofInstant(startedAt, java.time.ZoneId.systemDefault())
-    val runClockStart = Instant.now()
-    val generationCheckpoint = batchPath(out, today.toString(), "generate")
-    val pendingBatches = out.resolve("batch").listFiles().orEmpty().any {
-        it.isFile && it.extension == "json" && it.name != "index.json"
-    } || out.resolve("batch/quarantine").listFiles().orEmpty().any { it.name.endsWith(".unsettled.json") }
-    val resumingBatch = hasSavedBatch(out, today.toString(), "classify") || hasSavedBatch(out, today.toString(), "generate")
-    fun budgetSkipReason(): String? {
-        if (noLlm || resumingBatch) return null
-        return try {
-            monthlyBudget.dailySkipReason(today, config.dailyBudgetUsd)
-        } catch (_: IllegalArgumentException) {
-            "Cost ledger could not be read"
-        } catch (_: java.io.IOException) {
-            "Cost ledger could not be read"
-        }
-    }
-    val initialSkip = if (pendingBatches) null else budgetSkipReason()
-    val costs = CostGuard(config.dailyBudgetUsd, ledger = ledger, allowsReservation = monthlyBudget::allows)
-    val http = Http.client()
-    val providers = mutableListOf<LlmProvider>()
-    try {
-        if (!noLlm && (initialSkip == null || pendingBatches)) {
-            if (dailyProviders != null) {
-                providers += dailyProviders()
-            } else {
-                secrets.get("ANTHROPIC_API_KEY")?.let { providers += AnthropicProvider(it) }
-                secrets.get("OPENAI_API_KEY")?.let { providers += OpenAiProvider(it) }
-            }
-        }
-        val models = if (providers.any { it.id == ProviderId.ANTHROPIC } || providers.isEmpty()) {
-            mapOf("classify" to defaults.models.classify, "generate" to defaults.models.generate, "track" to defaults.models.classify)
-        } else emptyMap()
-        val router = LlmRouter(providers, costs, models, defaults.models.fallback, preflightBudget = true)
-        router.startRun(startedAt, deadlineMinutes(config), deadlineClock.instant())
-        val recoveryIssues = if (noLlm) emptyList() else router.recoverBatches(out, config.batch, config.recentTopicDays) {
-            it.name == "$today-classify.json" || it.name == "$today-generate.json"
-        }
-        val skipReason = budgetSkipReason()
-        val tracked = JsonFileTrackedStore(out.resolve("tracked.json"))
-        val seen = JsonFileSeenStore(out.resolve("seen.json"))
-        val reddit = RedditAdapter(http, secrets)
-        val full = FullPipeline(config, profiles, prompts, router, costs, http, history, tracked,
-            collectOnly = noLlm, reddit = reddit, out = out)
-        val adapters = dailySources?.second ?: listOf(HackerNewsAdapter(http), GitHubAdapter(http, secrets), HuggingFaceAdapter(http),
-            GitHubIssuesAdapter(http, secrets), reddit, ProductHuntAdapter(http, secrets), RssAdapter(http))
-        val pipeline = Pipeline(adapters, seen, clock = { startedAt },
-            onStage = { print("· 단계 \u00b7 ${HtmlRenderer.stageName(it)}") }, full = full,
-            paidStageSkipReason = skipReason)
-        var result = try {
-            val finished = kotlinx.coroutines.withTimeoutOrNull(router.remainingMillis()) { pipeline.run(sources) }
-            if (finished == null) {
-                val report = RunReport(today.toString(), startedAt.toString(), emptyList(), emptyList(), emptyMap(),
-                    java.time.Duration.between(runClockStart, Instant.now()).toMillis(), llmCalls = costs.drainCalls(),
-                    issues = recoveryIssues + "실행 마감")
-                val expired = PipelineResult(emptyList(), emptyList(), report)
-                summary(expired)
-                archiveFile(out, report).writeAtomically(outputJson.encodeToString(expired))
-                print("실행 마감 · 다음 실행에서 이어서")
-                return false
-            }
-            finished.copy(report = finished.report.copy(
-                issues = (recoveryIssues + finished.report.issues).distinct(),
-                llmCalls = finished.report.llmCalls + costs.drainCalls()))
-        } catch (e: Exception) {
-            if (!noLlm) {
-                val day = LocalDate.ofInstant(startedAt, java.time.ZoneId.systemDefault())
-                val report = RunReport(day.toString(), startedAt.toString(), emptyList(), emptyList(),
-                    emptyMap(), java.time.Duration.between(startedAt, Instant.now()).toMillis(),
-                    llmCalls = costs.drainCalls(), issues = recoveryIssues + safeFailure(e))
-                val failed = PipelineResult(emptyList(), emptyList(), report)
-                summary(failed)
-                val archived = archiveFailedRun(out, failed)
-                print("실패 실행 보관 · out/runs/failed/${archived.name}")
-                if (history.runs(day.plusDays(1), 1).firstOrNull()?.cards?.isNotEmpty() == true) {
-                    print("기존 카드 결과 유지 · out/$day.json")
-                }
-            }
-            throw e
-        }
-        summary(result)
-        val day = LocalDate.parse(result.report.runDate)
-        if (skipReason != null) {
-            val archived = archiveFile(out, result.report)
-            archived.writeAtomically(outputJson.encodeToString(result))
-            print("$skipReason · ${archived.path}")
-            return false
-        }
-        if (noLlm) {
-            out.resolve("$day-collect.json").writeAtomically(outputJson.encodeToString(result))
-            if (!keepUnseen) seen.markSeen(result.items, day)
-            print("수집·정제 ${result.items.size}건 · out/$day-collect.json")
-            return false
-        }
-        if (CLASSIFICATION_BATCH_PENDING in result.report.issues || isPendingBatch(generationCheckpoint)) {
-            archiveFile(out, result.report).writeAtomically(outputJson.encodeToString(result))
-            router.markAppliedBatchesConsumed()
-            result.report.issues.forEach { print("· $it") }
-            return false
-        }
-        val renderer = HtmlRenderer(IdeaGenerator(defaults, prompts, router).categories)
-        val rendered = publishOrArchiveFailure(out, history, renderer, result, keepUnseen)
-        router.markAppliedBatchesConsumed()
-        if (router.remainingMillis() == 0L) {
-            result = result.copy(report = result.report.copy(issues = result.report.issues + "Publication exceeded the execution deadline"))
-            val file = if (rendered == null) archiveFile(out, result.report) else out.resolve("$day.json")
-            file.writeAtomically(outputJson.encodeToString(result.copy(metrics = if (rendered == null) result.metrics else result.metrics.copy(snapshots = emptyList()),
-                trackClassified = emptyMap())))
-            summary(result)
-        }
-        print("${rendered?.subject ?: "카드 0개"} · 추적 ${result.trackingUpdates.size}건 · " +
-            String.format(Locale.ROOT, "추정 USD %.6f", result.report.costUsd))
-        result.metrics.profiles.forEach { (profile, counts) ->
-            print("${profiles[profile]?.config?.name ?: profile} · 분류 ${counts.classified}건 · 기준 점수 통과 ${counts.thresholdPassed}건 · 최종 카드 후보 ${counts.selected}건")
-        }
-        result.report.failedSources.forEach { print("출처 실패 · ${it.source} · ${it.error}") }
-        result.report.issues.forEach { print("· $it") }
-        if (rendered == null) print("기존 카드 결과 유지 · 새 실행은 out/runs/에 보관")
-        else print("결과 저장 · out/$day.json · out/$day.html · out/$day.txt")
-        return rendered != null
-    } finally {
-        providers.filterIsInstance<AutoCloseable>().forEach { it.close() }
-        http.dispatcher.executorService.shutdown()
-        http.connectionPool.evictAll()
-    }
-}
+private fun cliDeadline(): Duration? =
+    if (System.getenv("COLLECTOR_JOB_STARTED_AT") != null) Duration.ofMinutes(150 - 20) else null
 
 internal fun costLedger(out: File, history: FileHistorySearch) = FileCostLedger(out.resolve("cost-ledger")) { day ->
     val prior = history.runs(day.plusDays(1), 1).firstOrNull()
@@ -576,87 +380,7 @@ internal fun costLedger(out: File, history: FileHistorySearch) = FileCostLedger(
         (prior?.report?.llmCalls?.sumOf { maxOf(it.costUsd, it.reservedUsd) } ?: 0.0)
 }
 
-private suspend fun runBackfill(args: Array<String>, secrets: SecretProvider, defaults: PipelineConfig, out: File, startedAt: Instant) {
-    val period = args.getOrNull(1).orEmpty()
-    val days = if (period == "4w") 28 else {
-        val match = requireNotNull(Regex("([1-9][0-9]*)d").matchEntire(period))
-        requireNotNull(match.groupValues[1].toIntOrNull())
-    }
-    var dryRun = false
-    var yes = false
-    var force = false
-    var budgetOverride: Double? = null
-    var date = LocalDate.now()
-    var index = 2
-    while (index < args.size) {
-        when (args[index++]) {
-            "--dry-run" -> dryRun = true
-            "--yes" -> yes = true
-            "--force" -> force = true
-            "--budget" -> budgetOverride = requireNotNull(args.getOrNull(index++)?.toDoubleOrNull())
-            "--date" -> {
-                val value = args.getOrNull(index++)
-                date = requireNotNull(runCatching { LocalDate.parse(value) }.getOrNull()?.takeIf {
-                    value?.length == 10 && it.toString() == value
-                })
-            }
-            else -> throw IllegalArgumentException("지원하지 않는 백필 옵션입니다.")
-        }
-    }
-    budgetOverride?.let { require(it.isFinite() && it >= 0.0) }
-    out.mkdirs()
-    withRunLock(out) {
-        val settings = BudgetSettings.load(out)
-        val monthlyBudget = MonthlyBudget(out, settings)
-        val sources = ConfigLoader.load(File("config/sources.local.json"))
-        val execute = yes && !dryRun
-        val history = FileHistorySearch(out, defaults.historyDays)
-        val costs = CostGuard(budgetOverride ?: settings.backfillRunUsd,
-            ledger = if (execute) costLedger(out, history) else null, budgetPerRun = true,
-            allowsReservation = monthlyBudget::allows)
-        val anthropicKey = secrets.get("ANTHROPIC_API_KEY")
-        val openAiKey = secrets.get("OPENAI_API_KEY")
-        val model = if (anthropicKey != null || openAiKey == null) defaults.models.classify else
-            checkNotNull(ModelCatalog.defaults.defaultModel(ProviderId.OPENAI, ModelTier.FAST))
-        val providers = mutableListOf<LlmProvider>()
-        val http = Http.client()
-        try {
-            var runRouter: LlmRouter? = null
-            val classifier = if (execute) {
-                anthropicKey?.let { providers += AnthropicProvider(it) }
-                openAiKey?.let { providers += OpenAiProvider(it) }
-                val profiles = ProfileLoader.loadDefaults()
-                val routingIssues = ProfileLoader.validateRouting(sources, profiles)
-                if (routingIssues.isNotEmpty()) {
-                    println("출처 설정 오류:\n- " + routingIssues.joinToString("\n- "))
-                    throw InvalidSourceRoutingException()
-                }
-                val router = LlmRouter(providers, costs, mapOf("classify" to model), defaults.models.fallback, preflightBudget = true)
-                router.startRun(startedAt, defaults.deadlineMinutes)
-                runRouter = router
-                val activeDates = (1..days).map { "${date.minusDays(it.toLong())}-backfill.json" }.toSet()
-                router.recoverBatches(out, defaults.batch, defaults.recentTopicDays) { it.name in activeDates }.forEach(::println)
-                Classifier(defaults, profiles, PromptResolver(FilePromptStore(File("config/prompts").toPath())), router)
-            } else null
-            val backfill = Backfill(out, sources, HackerNewsAdapter(http), GitHubAdapter(http, secrets), model, costs,
-                classifier, monthlyBudget = monthlyBudget)
-            if (runRouter == null) {
-                backfill.run(date, days, dryRun, yes, force)
-            } else if (kotlinx.coroutines.withTimeoutOrNull(runRouter.remainingMillis()) {
-                    backfill.run(date, days, dryRun, yes, force)
-                } == null) {
-                println("실행 마감 · 다음 실행에서 이어서")
-            }
-        } finally {
-            providers.filterIsInstance<AutoCloseable>().forEach { it.close() }
-            http.dispatcher.executorService.shutdown()
-            http.connectionPool.evictAll()
-        }
-    }
-}
-
-private class InvalidSourceRoutingException : RuntimeException()
-internal class RunLockedException : RuntimeException()
+internal typealias RunLockedException = collector.runtime.RunLockedException
 
 internal fun safeFailure(e: Exception): String {
     val reason = when (e) {
@@ -686,10 +410,10 @@ internal fun itemsToMarkSeen(result: PipelineResult): List<Item> {
     return result.items.filter { it.key !in result.trackingOnlyKeys && it.key !in failedKeys }
 }
 
-private fun archiveFile(out: File, report: RunReport): File =
+internal fun archiveFile(out: File, report: RunReport): File =
     out.resolve("runs/${report.runDate}-${report.startedAt.replace(':', '-')}.json")
 
-private fun archiveFailedRun(out: File, result: PipelineResult): File =
+internal fun archiveFailedRun(out: File, result: PipelineResult): File =
     out.resolve("runs/failed").resolve(archiveFile(out, result.report).name).apply {
         writeAtomically(outputJson.encodeToString(result))
     }
@@ -699,6 +423,7 @@ internal fun publishOrArchiveFailure(
 ): HtmlRenderer.Rendered? = try {
     publishRun(out, history, renderer, result, keepUnseen)
 } catch (e: Exception) {
+    if (e is kotlinx.coroutines.CancellationException) throw e
     val failed = result.copy(report = result.report.copy(issues = result.report.issues + safeFailure(e)))
     try {
         val archived = archiveFailedRun(out, failed)

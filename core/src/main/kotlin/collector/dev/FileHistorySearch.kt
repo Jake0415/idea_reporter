@@ -102,7 +102,7 @@ internal fun File.writeAtomically(content: String) {
     absoluteFile.parentFile.mkdirs()
     val temporary = Files.createTempFile(absoluteFile.parentFile.toPath(), ".collector-", ".tmp")
     try {
-        Files.writeString(temporary, content)
+        Files.write(temporary, content.toByteArray())
         Files.move(temporary, toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
     } finally {
         Files.deleteIfExists(temporary)

@@ -54,7 +54,7 @@ class DataSyncTest {
             "batch/provider.results.jsonl", "backfill/collected/2026-11-23.json",
             "2026-11-23-collect.json", "run.lock", "2026-11-23.json.tmp")
         for (path in excluded) write(out, path, "excluded")
-        DataSync(out, prompts, clock, historyDays = 90).push(branch)
+        DataSync(out, prompts, clock, pipelineConfig = out.resolve("pipeline.local.json"), historyDays = 90).push(branch)
 
         val manifest = outputJson.decodeFromString<DataManifest>(branch.resolve("manifest.json").readText())
         assertEquals(now.toString(), manifest.updatedAt)
@@ -86,7 +86,7 @@ class DataSyncTest {
         enqueue(branch, InboxRequest.SettingsSet(1, budgetId, time,
             inboxJson.parseToJsonElement("""{"dailyCardUsd":0.25}""") as kotlinx.serialization.json.JsonObject,
             ScheduleSettings(enabled = false)))
-        val sync = DataSync(out, prompts, clock)
+        val sync = DataSync(out, prompts, clock, pipelineConfig = out.resolve("pipeline.local.json"))
         sync.pull(branch)
         assertEquals("An override", prompts.resolve("criteria.md").readText())
         assertEquals(0.25, BudgetSettings.load(out).dailyCardUsd)
@@ -101,7 +101,7 @@ class DataSyncTest {
         enqueue(branch, InboxRequest.PromptSet(1, rejectedId, time, "track", "", PromptResolver.hash(PromptCatalog.defaultText("track"))))
         val secondOut = out.resolveSibling("second-out")
         val secondPrompts = prompts.resolveSibling("second-prompts")
-        val second = DataSync(secondOut, secondPrompts, clock)
+        val second = DataSync(secondOut, secondPrompts, clock, pipelineConfig = out.resolve("pipeline.local.json"))
         second.pull(branch)
         assertEquals("memo", outputJson.decodeFromString<List<Feedback>>(secondOut.resolve("feedback.json").readText()).single().memo)
         assertFalse(secondPrompts.resolve("criteria.md").exists())
@@ -126,7 +126,7 @@ class DataSyncTest {
             """.trimIndent())
         }
         enqueue(branch, InboxRequest.Analysis(1, valid, time, listOf("theme"), AnalysisMode.RUN, 0.0))
-        DataSync(out, prompts, clock).pull(branch)
+        DataSync(out, prompts, clock, pipelineConfig = out.resolve("pipeline.local.json")).pull(branch)
         assertEquals(1, files(out.resolve("inbox-results")).count { it.name.startsWith("invalid-") })
         assertEquals("rejected", result(out, badBudget).code)
         assertEquals("rejected", result(out, enormousBudget).code)
@@ -140,7 +140,7 @@ class DataSyncTest {
         val badRequest = """{"requestId":"$key"}"""
         write(branch, "inbox/$name", badRequest)
         enqueue(branch, InboxRequest.Reaction(1, key, now.toString(), "card", Feedback.Kind.STAR, "reason"))
-        val sync = DataSync(out, prompts, clock)
+        val sync = DataSync(out, prompts, clock, pipelineConfig = out.resolve("pipeline.local.json"))
         sync.pull(branch)
         assertTrue(result(out, key).ok)
         sync.push(branch)
@@ -153,7 +153,7 @@ class DataSyncTest {
     @Test fun promptBaseMismatchIsRecordedUnderOriginalRequestId() = withWorkspace { out, branch, prompts ->
         val key = id()
         enqueue(branch, InboxRequest.PromptSet(1, key, now.toString(), "criteria", "Override", "stale"))
-        DataSync(out, prompts, clock).pull(branch)
+        DataSync(out, prompts, clock, pipelineConfig = out.resolve("pipeline.local.json")).pull(branch)
         assertEquals("rejected", result(out, key).code)
         assertEquals("Prompt baseHash does not match", result(out, key).reason)
         assertFalse(prompts.resolve("criteria.md").exists())
@@ -163,7 +163,7 @@ class DataSyncTest {
         val summary = "x".repeat(301)
         write(out, "2026-11-23.json", """{"classification":{"summary":"$summary"},"private@example.com":"drop","text":"me%40example.com and me&#64;example.com"}""")
         write(out, "2026-11-23.html", "<p>&#60;b&#62; and me&#64;example.com</p>")
-        DataSync(out, prompts, clock).push(branch)
+        DataSync(out, prompts, clock, pipelineConfig = out.resolve("pipeline.local.json")).push(branch)
         val published = branch.resolve("out/2026-11-23.json").readText()
         assertFalse(published.contains("example.com"))
         assertFalse(published.contains("drop"))
@@ -175,13 +175,13 @@ class DataSyncTest {
     @Test fun internationalEmailsAreRedactedAfterDecoding() = withWorkspace { out, branch, prompts ->
         write(out, "2026-11-23.txt",
             "ops@bücher.example ops%40b%C3%BCcher.example 운영@bücher.example e\u0301@bücher.example q%CC%81%40bücher.example")
-        DataSync(out, prompts, clock).push(branch)
+        DataSync(out, prompts, clock, pipelineConfig = out.resolve("pipeline.local.json")).push(branch)
         assertEquals("[이메일] [이메일] [이메일] [이메일] [이메일]", branch.resolve("out/2026-11-23.txt").readText())
     }
 
     @Test fun quotedLocalPartEmailsAreRedacted() = withWorkspace { out, branch, prompts ->
         write(out, "2026-11-23.txt", "\"first last\"@example.com and \"a\\\"b\"@example.org")
-        DataSync(out, prompts, clock).push(branch)
+        DataSync(out, prompts, clock, pipelineConfig = out.resolve("pipeline.local.json")).push(branch)
         assertEquals("[이메일] and [이메일]", branch.resolve("out/2026-11-23.txt").readText())
     }
 
@@ -189,7 +189,7 @@ class DataSyncTest {
         // A file carried from the pull and left untouched locally must not overwrite a newer remote version
         // (for example a cost ledger updated by a mid-run state push).
         write(branch, "out/cost-ledger/2026-11-23.json", "{\"pulled\":true}")
-        val sync = DataSync(out, prompts, clock)
+        val sync = DataSync(out, prompts, clock, pipelineConfig = out.resolve("pipeline.local.json"))
         sync.pull(branch, processInbox = false)
         branch.resolve("out/cost-ledger/2026-11-23.json").writeText("{\"newer\":true}")
         sync.push(branch)
@@ -208,7 +208,7 @@ class DataSyncTest {
         saveResult(branch.resolve("out"), InboxResult(requestId = key, ok = true, processedAt = now.toString()))
         write(branch, "out/2020-01-01.txt", "expired")
         write(out, "2026-11-23.txt", "local")
-        DataSync(out, prompts, clock).push(branch)
+        DataSync(out, prompts, clock, pipelineConfig = out.resolve("pipeline.local.json")).push(branch)
         for (path in paths) assertEquals("{}", branch.resolve("out/$path").readText())
         assertTrue(result(branch.resolve("out"), key).ok)
         assertFalse(branch.resolve("out/2020-01-01.txt").exists())
@@ -216,7 +216,7 @@ class DataSyncTest {
     }
 
     @Test fun publicationDeletesOnlyMissingSnapshotFiles() = withWorkspace { out, branch, prompts ->
-        val sync = DataSync(out, prompts, clock)
+        val sync = DataSync(out, prompts, clock, pipelineConfig = out.resolve("pipeline.local.json"))
         val removed = "analysis-queue/" + id() + ".json"
         val remoteOnly = "analysis-queue/" + id() + ".json"
         write(branch, "out/$removed", "{}")
@@ -259,10 +259,10 @@ class DataSyncTest {
         write(out, "$day.txt", "Daily report\nStored body")
         write(out, "$day.html", "<p>Stored body</p>")
         write(out, "mail/sent.json", """[{"at":"$now","kind":"daily","key":"$day","result":"sent","recipientCount":1}]""")
-        DataSync(out, prompts, clock).push(branch)
+        DataSync(out, prompts, clock, pipelineConfig = out.resolve("pipeline.local.json")).push(branch)
 
         val resumed = out.resolveSibling("resumed")
-        DataSync(resumed, prompts, clock).pull(branch)
+        DataSync(resumed, prompts, clock, pipelineConfig = out.resolve("pipeline.local.json")).pull(branch)
         val history = FileHistorySearch(resumed, 30)
         assertTrue(history.search(signal, day.plusDays(1)).any { it.summary == "original snippet" })
         val historyRun = requireNotNull(history.cardRun(card.id))
@@ -285,12 +285,12 @@ class DataSyncTest {
             [{"at":"$now","kind":"daily","key":"2026-11-23","result":"sent","recipientCount":2,
               "recipient":"private-value","issue":"private-value"}]
         """.trimIndent())
-        DataSync(out, prompts, clock).push(branch)
+        DataSync(out, prompts, clock, pipelineConfig = out.resolve("pipeline.local.json")).push(branch)
         val journal = branch.resolve("out/mail/sent.json").readText()
         assertFalse(journal.contains("private-value"))
         assertFalse(journal.contains("\"issue\""))
         val artifact = out.resolve("mail/public-journal.json")
-        DataSync(out, prompts, clock).mailArtifact(artifact)
+        DataSync(out, prompts, clock, pipelineConfig = out.resolve("pipeline.local.json")).mailArtifact(artifact)
         assertEquals(journal, artifact.readText())
         val row = outputJson.decodeFromString<List<collector.mail.MailDelivery.Attempt>>(journal).single()
         assertEquals(2, row.recipientCount)
@@ -304,7 +304,7 @@ class DataSyncTest {
         write(branch, "manifest.json/old", "wrong shape")
         write(out, "2026-11-23.json", "{}")
         write(prompts, "criteria.md", "current")
-        DataSync(out, prompts, clock).push(branch)
+        DataSync(out, prompts, clock, pipelineConfig = out.resolve("pipeline.local.json")).push(branch)
         assertEquals("{}", branch.resolve("out/2026-11-23.json").readText())
         assertEquals("current", branch.resolve("config/prompts/criteria.md").readText())
         assertTrue(branch.resolve("manifest.json").isFile)
@@ -322,7 +322,7 @@ class DataSyncTest {
         val report = PipelineResult(emptyList(), emptyList(),
             RunReport("2026-11-23", time, emptyList(), emptyList(), emptyMap(), 0), cards = listOf(card))
         write(out, "2026-11-23.json", outputJson.encodeToString(report))
-        val sync = DataSync(out, prompts, clock)
+        val sync = DataSync(out, prompts, clock, pipelineConfig = out.resolve("pipeline.local.json"))
         sync.push(branch)
         enqueue(branch, InboxRequest.TrackStart(1, start, time, card.id))
         sync.pull(branch)
@@ -344,7 +344,7 @@ class DataSyncTest {
         val newer = old.copy(reason = "new", at = now.minusSeconds(1))
         val other = old.copy(cardId = "other")
         write(out, "feedback.json", outputJson.encodeToString(listOf(newer, old, other)))
-        val sync = DataSync(out, prompts, clock)
+        val sync = DataSync(out, prompts, clock, pipelineConfig = out.resolve("pipeline.local.json"))
         sync.push(branch)
         val undo = id()
         enqueue(branch, InboxRequest.FeedbackUndo(1, undo, now.toString(), "card", old.at.toString()))
@@ -360,7 +360,7 @@ class DataSyncTest {
             listOf(Feedback("card", Feedback.Kind.STAR, sensitive, sensitive, now))))
         write(prompts, "criteria.md", sensitive)
         write(out, "2026-11-23.json", """{"classified":[{"body":"full-body-private","item":{"source":"hn","url":"https://example.com","title":"$sensitive","author":"author-private","comments":["comment-private"],"snippet":"summary"}}]}""")
-        DataSync(out, prompts, clock).push(branch)
+        DataSync(out, prompts, clock, pipelineConfig = out.resolve("pipeline.local.json")).push(branch)
         for (path in listOf("out/feedback.json", "out/2026-11-23.json", "config/prompts/criteria.md")) {
             val published = branch.resolve(path).readText()
             for (secret in sensitive.split(' ') + listOf("author-private", "comment-private", "full-body-private")) {
@@ -379,7 +379,7 @@ class DataSyncTest {
         }
         write(inbox, "nested/request.json", "{}")
         write(inbox, "invalid.txt", "{}")
-        DataSync(out, prompts, clock).pull(branch)
+        DataSync(out, prompts, clock, pipelineConfig = out.resolve("pipeline.local.json")).pull(branch)
         assertTrue(inbox.listFiles().orEmpty().isEmpty())
         val results = files(out.resolve("inbox-results"))
         assertEquals(5, results.size)
@@ -396,7 +396,7 @@ class DataSyncTest {
         write(out, "mail/sent.json", listOf(row("daily", "sent"), row("trend", "failed")).joinToString(",", "[", "]"))
         write(branch, "out/mail/sent.json",
             listOf(row("daily", "failed", now.plusSeconds(1)), row("trend", "unknown")).joinToString(",", "[", "]"))
-        DataSync(out, prompts, clock).pull(branch, processInbox = false, importOnly = true)
+        DataSync(out, prompts, clock, pipelineConfig = out.resolve("pipeline.local.json")).pull(branch, processInbox = false, importOnly = true)
         val journal = out.resolve("mail/sent.json").readText()
         val states = outputJson.decodeFromString<List<collector.mail.MailDelivery.Attempt>>(journal)
             .associate { it.kind to it.result }
@@ -424,7 +424,7 @@ class DataSyncTest {
         ledger.reserve(date, unsettledId, 0.1)
         ledger.reserve(date, retryId, 0.2)
         write(out, "batch/msgbatch_test.results.jsonl", "private results")
-        DataSync(out, prompts, clock).push(branch)
+        DataSync(out, prompts, clock, pipelineConfig = out.resolve("pipeline.local.json")).push(branch)
         val published = branch.resolve("out/batch/public/2026-11-23-classify.json").readText()
         assertFalse(published.contains("private"))
         for (value in listOf("msgbatch_test", "test-run", "classify-2026-11-23-test-1", "hn:1", "fingerprint-test", "reservation-id", "settled")) {
@@ -435,7 +435,7 @@ class DataSyncTest {
         assertTrue(generation.contains("https://example.com/result"))
         assertFalse(generation.contains("alice"))
         val resumed = out.resolveSibling("resumed")
-        DataSync(resumed, prompts, clock).pull(branch)
+        DataSync(resumed, prompts, clock, pipelineConfig = out.resolve("pipeline.local.json")).pull(branch)
         assertEquals(published, resumed.resolve("batch/2026-11-23-classify.json").readText())
         assertTrue(resumed.resolve("batch/quarantine/msgbatch_test.unsettled.json").readText().contains("reservation-id"))
         assertTrue(resumed.resolve("batch/2026-11-23-backfill.json.retry.json").readText().contains(now.toString()))
@@ -466,7 +466,7 @@ class DataSyncTest {
         write(out, "2026-11-23.json", "previous daily")
         write(branch, "out/2026-11-23.json", "new daily")
         write(branch, "out/batch/public/2026-11-23-classify.json", "invalid checkpoint")
-        assertFails { DataSync(out, prompts, clock).pull(branch) }
+        assertFails { DataSync(out, prompts, clock, pipelineConfig = out.resolve("pipeline.local.json")).pull(branch) }
         assertEquals("previous daily", out.resolve("2026-11-23.json").readText())
     }
 
@@ -482,7 +482,7 @@ class DataSyncTest {
         val recent = InboxResult(requestId = id(), ok = true, processedAt = now.toString())
         saveResult(out, expired)
         saveResult(out, recent)
-        DataSync(out, prompts, clock, historyDays = 90).push(branch)
+        DataSync(out, prompts, clock, pipelineConfig = out.resolve("pipeline.local.json"), historyDays = 90).push(branch)
         for (prefix in listOf("out/", "out/state/")) {
             assertTrue(branch.resolve(prefix + "2026-07-01.json").isFile)
             assertFalse(branch.resolve(prefix + "2026-06-30.json").exists())
@@ -497,7 +497,7 @@ class DataSyncTest {
         enqueue(branch, InboxRequest.Analysis(1, pending, now.toString(), listOf("theme"), AnalysisMode.RUN, 0.1))
         enqueue(branch, InboxRequest.Analysis(1, expired, now.minusSeconds(7 * 86_400L).toString(),
             listOf("theme"), AnalysisMode.ESTIMATE, 0.1))
-        DataSync(out, prompts, clock).pull(branch)
+        DataSync(out, prompts, clock, pipelineConfig = out.resolve("pipeline.local.json")).pull(branch)
         runBlocking { runMain(arrayOf("--data-analysis-queue"), out, scheduledClock = clock) }
         assertEquals("analysis_pending", result(out, pending).code)
         assertTrue(out.resolve("analysis-queue/$pending.json").isFile)

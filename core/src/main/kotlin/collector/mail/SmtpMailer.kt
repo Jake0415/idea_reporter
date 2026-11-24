@@ -1,6 +1,7 @@
 package collector.mail
 
 import collector.port.SecretProvider
+import kotlinx.coroutines.CancellationException
 import jakarta.mail.Message
 import jakarta.mail.MessagingException
 import jakarta.mail.SendFailedException
@@ -12,14 +13,13 @@ import jakarta.mail.internet.MimeMessage
 import jakarta.mail.internet.MimeMultipart
 import org.eclipse.angus.mail.smtp.SMTPTransport
 import java.util.Properties
-import java.util.logging.ConsoleHandler
 import java.util.logging.Level
 import java.util.logging.LogManager
 import java.util.logging.Logger
 
-internal data class MailMessage(val subject: String, val html: String, val text: String)
+data class MailMessage(val subject: String, val html: String, val text: String)
 
-internal fun interface Mailer {
+fun interface Mailer {
     fun send(message: MailMessage)
 }
 
@@ -65,6 +65,7 @@ internal class SmtpMailer private constructor(
                 try {
                     transport.sendMessage(mime, mime.allRecipients)
                 } catch (e: Exception) {
+                    if (e is CancellationException) throw e
                     val failedBeforeData = !transport.dataCommandAttempted &&
                         generateSequence<Throwable>(e) { it.cause }
                             .filterIsInstance<SendFailedException>()
@@ -76,10 +77,13 @@ internal class SmtpMailer private constructor(
             } finally {
                 try {
                     transport.close()
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
                     Logger.getLogger(SmtpMailer::class.java.name).warning("SMTP 연결 종료 실패")
                 }
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: MailSendException) {
             throw e
         } catch (_: Exception) {
@@ -113,26 +117,19 @@ internal class SmtpMailer private constructor(
     }
 
     companion object {
-        private val libraryLoggers = listOf("jakarta.mail", "org.eclipse.angus.mail").map(Logger::getLogger)
+        private val libraryLoggers = listOf(
+            "jakarta.mail", "org.eclipse.angus", "org.eclipse.angus.mail.smtp", "org.eclipse.angus.mail.smtp.protocol"
+        ).map(Logger::getLogger)
 
         private fun restrictLibraryLogs() {
-            // 메일 발송 때마다 JVM 전역 JUL 설정을 초기화한다.
-            // 앱 자체 출력은 JUL에 의존하지 않으며, 나중에 JUL을 쓰면 이 초기화를 재검토한다.
             val manager = LogManager.getLogManager()
-            manager.reset()
-            manager.getLogger("").addHandler(ConsoleHandler().apply {
-                level = Level.WARNING
-                filter = java.util.logging.Filter {
-                    val name = it.loggerName.orEmpty()
-                    !name.startsWith("jakarta.mail") && !name.startsWith("org.eclipse.angus")
-                }
-            })
+
             for (root in libraryLoggers) {
                 // Library records can contain unredacted addresses or server replies at any level.
                 val children = manager.loggerNames.toList()
                     .filter { it.startsWith("${root.name}.") }.mapNotNull(manager::getLogger)
                 for (logger in listOf(root) + children) {
-                    logger.level = Level.WARNING
+                    logger.level = Level.OFF
                     logger.useParentHandlers = false
                     logger.filter = java.util.logging.Filter { false }
                 }

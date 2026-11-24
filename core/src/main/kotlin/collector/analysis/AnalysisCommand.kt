@@ -1,5 +1,7 @@
 package collector.analysis
 
+import collector.runtime.AnalysisEstimate
+import collector.runtime.RunLock
 import collector.budget.BudgetSettings
 import collector.budget.MonthlyBudget
 import collector.budget.OverBudget
@@ -37,7 +39,9 @@ internal class AnalysisCommand(
     private val print: (String) -> Unit = ::println,
     private val settingsOverride: BudgetSettings? = null,
     private val sendMail: (String) -> Unit = {},
-    private val beforePaidRun: () -> Unit = {}
+    private val beforePaidRun: () -> Unit = {},
+    private val runLock: RunLock? = null,
+    private val onEstimate: (AnalysisEstimate) -> Unit = {}
 ) {
     private val reports = AnalysisReports(out.resolve("analysis"))
     private fun settings() = settingsOverride ?: BudgetSettings.load(out, print)
@@ -89,7 +93,11 @@ internal class AnalysisCommand(
                 }
                 out.mkdirs()
                 val execute: suspend () -> Boolean = { analyze(themes.sorted(), date, yes, force, budget, fit) }
-                return if (acquireLock) withRunLock(out, execute) else execute()
+                return when {
+                    !acquireLock -> execute()
+                    runLock != null -> runLock.withLock(out, execute)
+                    else -> withRunLock(out, execute)
+                }
             }
             else -> throw IllegalArgumentException("지원하지 않는 분석 명령입니다.")
         }
@@ -170,7 +178,10 @@ internal class AnalysisCommand(
         val today = LocalDate.now(runClock)
         val spent = monthly.analysisSpend(today)
         val analysisRemaining = monthly.analysisRemaining(today, spent)
-        if (fitNumber == null && baseline != null && reuse(baseline)) return true
+        if (fitNumber == null && baseline != null && reuse(baseline)) {
+            onEstimate(AnalysisEstimate(0.0, 0.0, true))
+            return true
+        }
         val totalRemaining = monthly.remaining(today) ?: Double.POSITIVE_INFINITY
         val available = minOf(requestBudget, analysisRemaining, totalRemaining)
         val reservable = available * RESERVABLE_BUDGET_FRACTION
@@ -185,6 +196,7 @@ internal class AnalysisCommand(
             print("분석 실행 불가 · $limits · 남은 예산 ${usd(available)} · " +
                 "월 초기화일 ${nextBudgetMonth(today)} · --set-budget key=value")
         }
+        onEstimate(AnalysisEstimate(baseline?.estimate, baseline?.reserve, false))
         val selected = if (baseline != null && baseline.reserve <= reservable && fitNumber == null) baseline else {
             val options = buildList {
                 var previousReserve = baseline?.reserve ?: Double.POSITIVE_INFINITY
@@ -199,7 +211,10 @@ internal class AnalysisCommand(
             val requested = fitNumber?.let { number ->
                 requireNotNull(options.find { it.fit.step == number }) { "존재하지 않는 맞춤안입니다." }
             }
-            if (requested != null && reuse(requested)) return true
+            if (requested != null && reuse(requested)) {
+                onEstimate(AnalysisEstimate(0.0, 0.0, true))
+                return true
+            }
             if (available <= 0 || (settings.overBudget == OverBudget.STOP &&
                     (baseline == null || baseline.reserve > reservable))) {
                 monthly.analysisBlockReason(today)?.let(print)
@@ -216,7 +231,10 @@ internal class AnalysisCommand(
                 settings.overBudget == OverBudget.AUTO_FIT -> options.firstOrNull { it.reserve <= reservable }
                 else -> null
             }
-            if (choice != null && requested == null && reuse(choice)) return true
+            if (choice != null && requested == null && reuse(choice)) {
+                onEstimate(AnalysisEstimate(0.0, 0.0, true))
+                return true
+            }
             if (options.none { it.reserve <= reservable } || (choice != null && choice.reserve > reservable)) {
                 reject(choice?.reserve ?: options.lastOrNull()?.reserve ?: baseline?.reserve)
                 return !yes
@@ -229,6 +247,7 @@ internal class AnalysisCommand(
             choice
         }
         val (fit, input, schema, estimate, reserve) = selected
+        onEstimate(AnalysisEstimate(estimate, reserve, true))
         if (input.reportUrlMismatches > 0) {
             print("근거 URL 불일치 ${input.reportUrlMismatches}건 · 리포트 URL 사용")
         }

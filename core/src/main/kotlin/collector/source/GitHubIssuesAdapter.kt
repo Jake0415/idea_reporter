@@ -36,8 +36,8 @@ class GitHubIssuesAdapter(
     private val http: OkHttpClient,
     private val secrets: SecretProvider,
     baseUrl: String = "https://api.github.com/",
-    private val repositoryCache: File = File("out/cache/github-repos.json"),
-    private val debugDirectory: File = File("out/debug")
+    private val repositoryCache: File,
+    private val debugDirectory: File
 ) : SourceAdapter {
     override val id = "github-issues"
     private val base = baseUrl.toHttpUrl()
@@ -64,15 +64,15 @@ class GitHubIssuesAdapter(
         val queryTerms = queries.associateWith(::titleTerm)
         val titleSignalTerms = config.titleSignalWords.map(::titleTerm)
         val excludedTitles = config.excludeTitlePatterns.map { Regex(it, RegexOption.IGNORE_CASE) }
-        val date = LocalDate.ofInstant(now, ZoneOffset.UTC)
+        val date = now.atZone(ZoneOffset.UTC).toLocalDate()
         val routes = listOf("label", "title-intent").flatMap { route -> queries.map { it to route } }
         val budget = minOf(if (token == null) 9 else 24, routes.size)
-        val start = if (routes.isEmpty()) 0 else Math.floorMod(date.toEpochDay() * budget, routes.size)
+        val start = if (routes.isEmpty()) 0 else Math.floorMod(date.toEpochDay() * budget, routes.size.toLong()).toInt()
         val funnels = mutableListOf<Funnel>()
         val sampleCounts = mutableMapOf<String, Int>()
         val discussionCount = minOf(3, queries.size)
         val discussionStart = if (queries.isEmpty()) 0 else
-            Math.floorMod(LocalDate.ofInstant(now, ZoneOffset.UTC).toEpochDay() * discussionCount, queries.size)
+            Math.floorMod(now.atZone(ZoneOffset.UTC).toLocalDate().toEpochDay() * discussionCount, queries.size.toLong()).toInt()
         val limit = config.fetchPerQuery.coerceIn(1, 100)
         val cached = cacheLock.withLock {
             readJson<Map<String, CachedRepository>>(repositoryCache).orEmpty()

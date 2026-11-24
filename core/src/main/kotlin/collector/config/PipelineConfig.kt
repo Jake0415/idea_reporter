@@ -1,5 +1,6 @@
 package collector.config
 
+import collector.runtime.CollectorPaths
 import collector.analysis.AnalysisConfig
 import collector.llm.StageModel
 import kotlinx.serialization.Serializable
@@ -58,9 +59,9 @@ data class PipelineConfig(
     )
 
     companion object {
-        internal const val LOCAL_PATH = "config/pipeline.local.json"
+        internal val LOCAL_PATH: String get() = CollectorPaths.workingDirectory().pipelineConfig.invariantSeparatorsPath
 
-        internal fun load(file: File = File(LOCAL_PATH)): PipelineConfig =
+        internal fun load(file: File): PipelineConfig =
             if (file.isFile) Json.decodeFromString(merge(defaultJson, Json.parseToJsonElement(file.readText()).jsonObject).toString())
             else defaults
 

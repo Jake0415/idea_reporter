@@ -42,7 +42,6 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.ZoneOffset
-import java.util.HexFormat
 import java.util.Locale
 import java.util.UUID
 
@@ -99,7 +98,7 @@ internal class Backfill(
                 continue
             }
             val startedAt = clock()
-            if (execute && monthlyBudget?.allows(LocalDate.ofInstant(startedAt, ZoneId.systemDefault()),
+            if (execute && monthlyBudget?.allows(startedAt.atZone(ZoneId.systemDefault()).toLocalDate(),
                     (costs.dailyBudgetUsd - totalCost).coerceAtLeast(0.0)) == false) {
                 print("과거 채우기 실행 불가 · $MONTHLY_TOTAL_EXCEEDED")
                 return
@@ -219,7 +218,7 @@ internal class Backfill(
         private const val OUTPUT_TOKENS_PER_ITEM = 250
 
         private fun collectionHash(json: String): String =
-            HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(json.toByteArray()))
+            MessageDigest.getInstance("SHA-256").digest(json.toByteArray()).toHexString()
 
         internal fun estimateCost(model: StageModel, count: Int): Double =
             count * ModelCatalog.defaults.costUsd(model.provider, model.model, INPUT_TOKENS_PER_ITEM,

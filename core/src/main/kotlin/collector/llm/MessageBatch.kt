@@ -3,7 +3,6 @@ package collector.llm
 import collector.config.PipelineConfig
 import collector.dev.writeAtomically
 import collector.model.SupplementRef
-import com.anthropic.models.messages.batches.MessageBatch
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
@@ -175,6 +174,13 @@ private fun File.indexedCheckpoint(): BatchCheckpoint? {
 internal fun hasSavedBatch(out: File, date: String, stage: String): Boolean =
     batchPath(out, date, stage).let { it.isFile || it.completed().isFile || it.indexedCheckpoint() != null }
 
+internal fun hasLocalBatchResults(path: File): Boolean =
+    path.isFile && runCatching {
+        val checkpoint = Json.decodeFromString<BatchCheckpoint>(path.readText())
+        !checkpoint.rejected && !checkpoint.resultsIncomplete && checkpoint.quarantineReason == null &&
+            checkpoint.batchId?.let { path.savedResults(it).isFile } == true
+    }.getOrDefault(false)
+
 internal fun isPendingBatch(path: File): Boolean =
     path.isFile && runCatching {
         val checkpoint = Json.decodeFromString<BatchCheckpoint>(path.readText())
@@ -183,7 +189,7 @@ internal fun isPendingBatch(path: File): Boolean =
     }.getOrDefault(true)
 
 internal suspend fun runMessageBatch(
-    provider: AnthropicProvider?, guard: CostGuard, call: LlmCall?, path: File,
+    provider: BatchCapableProvider?, guard: CostGuard, call: LlmCall?, path: File,
     config: PipelineConfig.Batch, requests: List<LlmRequest>, projections: List<Double>,
     generationResume: GenerationBatchResume?, itemKeys: List<List<String>>,
     remainingMillis: () -> Long,
@@ -191,7 +197,7 @@ internal suspend fun runMessageBatch(
     recoveryRemainingMillis: () -> Long = { Long.MAX_VALUE },
     recovering: Boolean = false,
     retrySettlement: Boolean = true,
-    stateHook: () -> Boolean = { collector.dev.publishBatchCheckpoint() }
+    stateHook: () -> Boolean = { true }
 ): BatchOutcome {
     val started = System.nanoTime()
     val completed = path.completed()
@@ -302,7 +308,7 @@ internal suspend fun runMessageBatch(
         }
     }
 
-    var state: MessageBatch? = null
+    var state: BatchState? = null
     var checkpoint = when {
         resumed -> {
             val pointer = if (path.isFile) path else completed
@@ -360,12 +366,9 @@ internal suspend fun runMessageBatch(
                 return fallback("Batch intent checkpoint publication failed · synchronous fallback")
             }
             try {
-                state = bounded { provider.submitBatch(params) }
+                state = bounded { params() }
             } catch (e: Exception) {
-                if (e is CancellationException) {
-                    pending("Batch 제출 확인 필요", intent)
-                    throw e
-                }
+                if (e is CancellationException) throw e
                 if (e is LlmAuthException || (e as? LlmServiceException)?.status.let { it in setOf(400, 401, 403, 404, 413, 422) }) {
                     reject(intent)
                     return fallback("Batch 제출 실패 · ${requests.size}묶음 동기 실행")
@@ -373,7 +376,7 @@ internal suspend fun runMessageBatch(
                 return pending("Batch 제출 확인 필요", intent)
             }
             val submitted = try {
-                intent.copy(batchId = checkNotNull(state).id()).also {
+                intent.copy(batchId = checkNotNull(state).id).also {
                     path.writeAtomically(Json.encodeToString(it))
                 }
             } catch (e: Exception) {
@@ -425,7 +428,7 @@ internal suspend fun runMessageBatch(
         }
     }
 
-    suspend fun recheckMissing(api: AnthropicProvider, id: String, downloaded: List<ResultRow>): List<ResultRow>? {
+    suspend fun recheckMissing(api: BatchCapableProvider, id: String, downloaded: List<ResultRow>): List<ResultRow>? {
         val missing = checkpoint.requests.keys - downloaded.map { it.customId }.toSet()
         val resultFile = path.results(id)
         if (missing.isNotEmpty()) {
@@ -467,12 +470,12 @@ internal suspend fun runMessageBatch(
             val api = checkNotNull(provider)
             val candidates = bounded { lookup { api.findBatches(since.minusSeconds(600)) } }
             for (candidate in candidates) {
-                val id = candidate.id()
+                val id = candidate.id
                 val resultFile = path.results(id)
                 val downloaded = if (resultFile.isFile) resultFile.readResults() else try {
                     bounded { lookup { api.download(id) } }
                 } catch (e: LlmServiceException) {
-                    if (!candidate.ended() && e.status in listOf(400, 404, 409, 422)) continue
+                    if (!candidate.ended && e.status in listOf(400, 404, 409, 422)) continue
                     if (e.status == 404) continue
                     throw e
                 }
@@ -481,7 +484,7 @@ internal suspend fun runMessageBatch(
                 checkpoint = checkpoint.copy(batchId = id, notFoundRuns = 0)
                 path.writeAtomically(Json.encodeToString(checkpoint))
                 state = candidate
-                if (candidate.ended()) {
+                if (candidate.ended) {
                     recheckMissing(api, id, downloaded) ?: return incomplete()
                 }
                 break
@@ -499,12 +502,12 @@ internal suspend fun runMessageBatch(
             val api = provider ?: return pending("Batch 공급자 연결 필요", checkpoint)
             if (state == null) state = bounded { lookup { api.retrieveBatch(id) } }
             suspend fun waitUntilEnded(pollSeconds: Int) {
-                while (state?.ended() != true) {
+                while (state?.ended != true) {
                     delay(pollSeconds * 1000L)
                     state = lookup { api.retrieveBatch(id) }
                 }
             }
-            if (state?.ended() != true) {
+            if (!state.ended) {
                 val left = (config.maxWaitMinutes * 60_000L -
                     Duration.between(Instant.parse(checkpoint.submittedAt), Instant.now()).toMillis()).coerceAtLeast(0)
                 if (withTimeoutOrNull(minOf(left, pollRemainingMillis(), recoveryRemainingMillis())) {
@@ -513,10 +516,10 @@ internal suspend fun runMessageBatch(
                     val stillAllowed = config.maxWaitMinutes * 60_000L - Duration.between(since, Instant.now()).toMillis()
                     if (stillAllowed > 0 && pollRemainingMillis() > 0) return pending("Batch recovery deadline", checkpoint)
                     timedOut = true
-                    if (state?.processingStatus() != MessageBatch.ProcessingStatus.CANCELING) {
+                    if (state?.canceling != true) {
                         state = bounded { lookup { api.cancelBatch(id) } }
                     }
-                    if (state?.ended() != true && withTimeoutOrNull(minOf(60_000L, pollRemainingMillis(), recoveryRemainingMillis())) { waitUntilEnded(config.pollSeconds.coerceAtMost(5)); true } == null) {
+                    if (!state.ended && withTimeoutOrNull(minOf(60_000L, pollRemainingMillis(), recoveryRemainingMillis())) { waitUntilEnded(config.pollSeconds.coerceAtMost(5)); true } == null) {
                         if (Duration.between(since, Instant.now()) >= Duration.ofHours(48)) {
                             return quarantine(checkpoint, "recovery expired")
                         }
@@ -547,9 +550,9 @@ internal suspend fun runMessageBatch(
         }
         if (checkpoint.settled && path.name.endsWith("-backfill.json")) path.indexResult(id, checkpoint)
     } catch (e: Exception) {
+        if (e is CancellationException) throw e
         if (e is LlmAuthException) return missingKey(checkpoint, "provider authentication failed")
         if (checkpoint.resultsIncomplete) {
-            if (e is CancellationException) throw e
             if (e !is kotlinx.serialization.SerializationException) return incomplete()
         }
         if (e is kotlinx.serialization.SerializationException) return quarantine(checkpoint, "invalid result file")
@@ -564,13 +567,11 @@ internal suspend fun runMessageBatch(
             checkpoint = checkpoint.copy(notFoundRuns = 0)
             path.writeAtomically(Json.encodeToString(checkpoint))
         }
-        if (e !is CancellationException && !localResults && recoveryRemainingMillis() > 0 &&
+        if (!localResults && recoveryRemainingMillis() > 0 &&
             Duration.between(since, now) >= Duration.ofHours(48)) {
             return quarantine(checkpoint, "recovery expired")
         }
-        val outcome = pending("Batch 결과 조회 실패 · 다음 실행에서 재개", checkpoint)
-        if (e is CancellationException) throw e
-        return outcome
+        return pending("Batch 결과 조회 실패 · 다음 실행에서 재개", checkpoint)
     }
 
     val byId = rows.groupBy { it.customId }
@@ -601,25 +602,22 @@ internal suspend fun runMessageBatch(
 }
 
 
-private fun MessageBatch.ended() = processingStatus() == MessageBatch.ProcessingStatus.ENDED
-
 private fun File.readResults() = useLines { lines ->
     lines.filter { it.isNotBlank() }.map { Json.decodeFromString<ResultRow>(it) }.toList()
 }
 
 private fun List<ResultRow>.toJsonl() = joinToString("\n", postfix = "\n") { Json.encodeToString(it) }
 
-private suspend fun AnthropicProvider.download(id: String): List<ResultRow> {
+private suspend fun BatchCapableProvider.download(id: String): List<ResultRow> {
     val rows = mutableListOf<ResultRow>()
-    batchResults(id) { row ->
-        val decoded = decodeBatch(row)
+    batchResults(id) { customId, decoded ->
         val failure = decoded?.exceptionOrNull() as? LlmServiceException
         val usage = failure?.usage
         val charge = if (usage == null) null else LlmCall("", ProviderId.ANTHROPIC, failure.model.orEmpty(), "", "",
             inputTokens = usage.inputTokens, outputTokens = usage.outputTokens, cachedInputTokens = usage.cachedInputTokens,
             cacheWriteTokens = usage.cacheWriteTokens, costUsd = failure.costUsd,
             priceFallback = failure.priceFallback, priceUnverified = failure.priceUnverified)
-        rows += ResultRow(row.customId(), decoded?.getOrNull(),
+        rows += ResultRow(customId, decoded?.getOrNull(),
             failure?.reason ?: if (decoded?.isFailure == true) "invalid_json" else null, charge)
     }
     return rows
@@ -772,7 +770,7 @@ private fun classificationRows(pointer: File): List<ReusableClassification> {
 }
 
 internal fun cleanBatchFiles(directory: File, recentTopicDays: Int, now: Instant = Instant.now()) {
-    val reuseCutoff = LocalDate.ofInstant(now, java.time.ZoneId.systemDefault()).minusDays(recentTopicDays.toLong()).toString()
+    val reuseCutoff = now.atZone(java.time.ZoneId.systemDefault()).toLocalDate().minusDays(recentTopicDays.toLong()).toString()
     directory.listFiles().orEmpty().filter {
         it.isFile && it.name.matches(Regex("\\d{4}-\\d{2}-\\d{2}-(classify|generate|backfill)\\.json")) &&
             it.name.take(10) < reuseCutoff

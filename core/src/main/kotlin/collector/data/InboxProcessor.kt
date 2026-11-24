@@ -42,7 +42,9 @@ internal fun validateAnalysis(themes: List<String>, maxUsd: Double) {
     require(maxUsd.isFinite() && maxUsd >= 0)
 }
 
-internal class InboxProcessor(private val out: File, prompts: File, private val clock: Clock) {
+internal class InboxProcessor(
+    private val out: File, prompts: File, private val clock: Clock, private val pipelineConfig: File
+) {
     private val promptStore = FilePromptStore(prompts.toPath())
     private val trackedStore = JsonFileTrackedStore(out.resolve("tracked.json"))
 
@@ -118,7 +120,7 @@ internal class InboxProcessor(private val out: File, prompts: File, private val 
             is InboxRequest.TrackStart -> {
                 val ideas = trackedStore.load()
                 val existing = ideas.firstOrNull { it.cardId == request.cardId }
-                val config = PipelineConfig.load()
+                val config = PipelineConfig.load(pipelineConfig)
                 if (existing == null || existing.status == TrackedIdea.Status.STOPPED) {
                     require(ideas.count { it.status != TrackedIdea.Status.STOPPED } < config.tracking.maxTracked)
                 }

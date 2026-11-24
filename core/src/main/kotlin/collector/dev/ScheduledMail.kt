@@ -1,6 +1,8 @@
 package collector.dev
 
 import collector.analysis.AnalysisReports
+import collector.runtime.FileRunLock
+import collector.runtime.RunLock
 import collector.llm.CLASSIFICATION_BATCH_PENDING
 import collector.llm.batchPath
 import collector.llm.isPendingBatch
@@ -13,6 +15,7 @@ import collector.mail.UNKNOWN_DELIVERY_NOTICE
 import collector.port.SecretProvider
 import collector.trend.publishTrend
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ensureActive
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
@@ -25,7 +28,8 @@ import java.time.Instant
 import java.time.LocalDate
 
 internal fun runMailCommand(args: Array<String>, out: File, secrets: SecretProvider,
-                            delivery: MailDelivery = mailDelivery(out, secrets)) {
+                            delivery: MailDelivery = mailDelivery(out, secrets),
+                            clock: Clock = Clock.systemDefaultZone()) {
     if (args.first() == "--mail-test") {
         require(args.size == 1)
         delivery.test()
@@ -49,18 +53,25 @@ internal fun runMailCommand(args: Array<String>, out: File, secrets: SecretProvi
         MailKind.ANALYSIS -> requireNotNull(AnalysisReports(out.resolve("analysis")).list().firstOrNull()?.id) {
             "저장된 분석이 없습니다."
         }
-        else -> LocalDate.now().toString()
+        else -> LocalDate.now(clock).toString()
     }
-    if (kind == MailKind.DAILY && isPendingBatch(batchPath(out, reportKey, "classify"))) {
-        println(CLASSIFICATION_BATCH_PENDING)
-        return
-    }
-    if (delivery.send(kind, reportKey, resend) == MailSendResult.RECORD_FAILED) throw MailRecordFailure()
+    sendReportMail(out, delivery, kind, reportKey, resend)
 }
 
-internal fun mailDelivery(out: File, secrets: SecretProvider, publish: ((MailDelivery.Attempt?) -> Boolean)? = null): MailDelivery {
-    val smtp = SmtpMailer.from(secrets)
-    return MailDelivery(out, smtp, smtp?.recipientCount ?: 0,
+internal fun sendReportMail(out: File, delivery: MailDelivery, kind: MailKind,
+                            reportKey: String, resend: Boolean): MailSendResult? {
+    if (kind == MailKind.DAILY && isPendingBatch(batchPath(out, reportKey, "classify"))) {
+        println(CLASSIFICATION_BATCH_PENDING)
+        return null
+    }
+    return delivery.send(kind, reportKey, resend).also {
+        if (it == MailSendResult.RECORD_FAILED) throw MailRecordFailure()
+    }
+}
+
+internal fun mailDelivery(out: File, secrets: SecretProvider, publish: ((MailDelivery.Attempt?) -> Boolean)? = null,
+                          mailer: Mailer? = SmtpMailer.from(secrets), clock: Clock = Clock.systemDefaultZone()): MailDelivery {
+    return MailDelivery(out, mailer, (mailer as? SmtpMailer)?.recipientCount ?: 0, clock,
         onIssue = { kind, key, reason -> recordMailIssue(out, kind, key, reason, ::println) }, publish = publish)
 }
 
@@ -127,15 +138,21 @@ internal suspend fun runScheduled(
     startedAt: Instant = clock.instant(),
     deadlineMinutes: Int = collector.config.PipelineConfig.defaults.deadlineMinutes,
     deadlineClock: Clock = clock,
-    noMail: Boolean = false
+    noMail: Boolean = false,
+    runLock: RunLock = FileRunLock,
+    onMail: () -> Unit = {},
+    propagateLocked: Boolean = false
 ): Int {
-    val day = LocalDate.ofInstant(startedAt, clock.zone)
+    val day = startedAt.atZone(clock.zone).toLocalDate()
     val key = day.toString()
     val sunday = day.dayOfWeek == DayOfWeek.SUNDAY
     out.mkdirs()
     var exitCode = 1
     try {
-        withRunLock(out) {
+        runLock.withLock(out) {
+            if (noMail) out.resolve("mail/scheduled.json").delete()
+            val context = kotlin.coroutines.coroutineContext
+            var mailStarted = false
             val logDir = out.resolve("logs")
             val logFile = logDir.resolve("$key.log")
             val issues = mutableListOf<String>()
@@ -203,6 +220,12 @@ internal suspend fun runScheduled(
             }, onIssue = { kind, id, reason ->
                 issues += reason
                 recordMailIssue(out, kind, id, reason, ::log)
+            }, beforeSend = {
+                if (!mailStarted) {
+                    onMail()
+                    mailStarted = true
+                }
+                context.ensureActive()
             })
             var recordFailed = false
             var retried = emptySet<Pair<MailKind, String>>()
@@ -261,6 +284,7 @@ internal suspend fun runScheduled(
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
+        if (propagateLocked && e is RunLockedException) throw e
         println("예약 실행 실패 · ${safeFailure(e)}")
     }
     return exitCode

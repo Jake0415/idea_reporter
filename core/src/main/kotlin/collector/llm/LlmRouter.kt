@@ -46,7 +46,9 @@ class LlmRouter(
     private val timeoutMillis: Long? = null,
     private val stageFallback: Map<String, Boolean> = emptyMap(),
     private val stageTimeoutMillis: Map<String, Long> = emptyMap(),
-    private val preflightBudget: Boolean = false
+    private val preflightBudget: Boolean = false,
+    private val batchCheckpointHook: () -> Boolean = { true },
+    private val batchEnabled: Boolean = true
 ) {
     private val providers = providers.associateBy { it.id }
 
@@ -88,15 +90,16 @@ class LlmRouter(
         val directory = out.resolve("batch")
         val stopAt = System.nanoTime() + Duration.ofMinutes(config.recoveryMinutes.toLong()).toNanos()
         fun recoveryLeft() = ((stopAt - System.nanoTime()) / 1_000_000).coerceAtLeast(0)
-        recoverQuarantined(directory, costGuard, issues)
+        if (batchEnabled) recoverQuarantined(directory, costGuard, issues)
         val files = directory.listFiles().orEmpty().filter { it.isFile && it.name.matches(Regex("\\d{4}-\\d{2}-\\d{2}-(classify|generate|backfill)\\.json")) }
             .sortedWith(compareBy<File> { !keep(it) }.thenBy { it.name })
         for (path in files) {
+            if (!batchEnabled && !hasLocalBatchResults(path)) continue
             val outcome = try {
-                runMessageBatch(providers[ProviderId.ANTHROPIC] as? AnthropicProvider, costGuard, null,
+                runMessageBatch(providers[ProviderId.ANTHROPIC] as? BatchCapableProvider, costGuard, null,
                     path, config, emptyList(), emptyList(), null, emptyList(), ::remainingMillis,
                     pollRemainingMillis = ::pollRemainingMillis,
-                    recoveryRemainingMillis = { minOf(remainingMillis(), recoveryLeft()) }, recovering = true)
+                    recoveryRemainingMillis = { minOf(remainingMillis(), recoveryLeft()) }, recovering = true, stateHook = batchCheckpointHook)
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 BatchOutcome(issues = listOf("Batch recovery failed: " + path.name), pending = true)
@@ -122,25 +125,26 @@ class LlmRouter(
         val recovered = recoveredBatches[path]
         if (recovered?.pending == true) return recovered
         if (hasSavedBatch(out, runDate, stage)) {
-            val provider = providers[ProviderId.ANTHROPIC] as? AnthropicProvider
+            val provider = providers[ProviderId.ANTHROPIC] as? BatchCapableProvider
             val outcome = runMessageBatch(provider, costGuard, null, path, config, requests, emptyList(),
-                generationResume, itemKeys, ::remainingMillis, retrySettlement = recovered == null)
+                generationResume, itemKeys, ::remainingMillis, retrySettlement = recovered == null, stateHook = batchCheckpointHook)
             if (!outcome.pending && path.isFile && !isPendingBatch(path)) appliedBatches += path
             return if (recovered == null) outcome else outcome.copy(
                 issues = (recovered.issues + outcome.issues).distinct(), waitMillis = recovered.waitMillis + outcome.waitMillis)
         }
         if (recovered != null) return recovered
+        if (!batchEnabled) return BatchOutcome(synchronousFallback = true)
         if (requests.isEmpty()) return BatchOutcome()
         val promptId = promptVersions.keys.first()
         val model = primary(if (stage == "backfill") "classify" else stage, promptId)
         if (model.provider == ProviderId.OPENAI) return BatchOutcome(issues = listOf("Batch 미지원 공급자 · 동기 실행"))
-        val provider = providers[model.provider] as? AnthropicProvider ?: return BatchOutcome()
+        val provider = providers[model.provider] as? BatchCapableProvider ?: return BatchOutcome()
         val price = catalog.requirePrice(model.provider, model.model)
         val call = LlmCall(stage, model.provider, model.model, promptId, promptVersions.getValue(promptId),
             promptVersions = promptVersions, batch = true, priceUnverified = !price.priceVerified)
         val routed = requests.map { it.copy(model = model.model) }
         val outcome = runMessageBatch(provider, costGuard, call, path, config, routed,
-            routed.map { projectedTokens(it, model) * price.batchMultiplier }, generationResume, itemKeys, ::remainingMillis)
+            routed.map { projectedTokens(it, model) * price.batchMultiplier }, generationResume, itemKeys, ::remainingMillis, stateHook = batchCheckpointHook)
         if (!outcome.pending && path.isFile && !isPendingBatch(path)) appliedBatches += path
         return outcome
     }
@@ -151,7 +155,7 @@ class LlmRouter(
     ): List<SupplementRef> {
         if (!config.enabled || config.maxUses <= 0) return emptyList()
         val model = primary("classify", "classify")
-        val provider = providers[model.provider] as? AnthropicProvider ?: return emptyList()
+        val provider = providers[model.provider] as? WebSearchProvider ?: return emptyList()
         val request = LlmRequest(model.model,
             "주어진 주제와 관련된 기술, 사용자 요청, 제품을 웹에서 검색한다. 검색 결과의 URL과 제목, " +
                 "관련성을 한 줄로 설명한 note를 {url, title, note} 객체 배열로 반환한다.",

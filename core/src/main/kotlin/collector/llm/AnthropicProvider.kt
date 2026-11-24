@@ -37,7 +37,7 @@ class AnthropicProvider(
     apiKey: String,
     baseUrl: String = "https://api.anthropic.com",
     private val catalog: ModelCatalog = ModelCatalog.defaults
-) : LlmProvider, AutoCloseable {
+) : BatchCapableProvider, WebSearchProvider, AutoCloseable {
     override val id = ProviderId.ANTHROPIC
     private val client = AnthropicOkHttpClientAsync.builder().apiKey(apiKey).baseUrl(baseUrl).maxRetries(0).build()
 
@@ -114,7 +114,7 @@ class AnthropicProvider(
             }
         }
 
-    internal fun prepareBatch(requests: Map<String, LlmRequest>): BatchCreateParams {
+    override fun prepareBatch(requests: Map<String, LlmRequest>): suspend () -> BatchState {
         val opus = catalog.requirePrice(id, requests.values.first().model).model == "claude-opus-5-5"
         val params = BatchCreateParams.builder().requests(requests.map { (customId, req) ->
             val body = params(req)._body()
@@ -126,19 +126,21 @@ class AnthropicProvider(
             BatchCreateParams.Request.builder().customId(customId).params(batchParams.build()).build()
         })
         if (opus) params.putAdditionalHeader("anthropic-beta", "server-side-fallback-2026-07-01")
-        return params.build().also { jsonMapper().writeValueAsBytes(it._body().validate()) }
+        val prepared = params.build().also { jsonMapper().writeValueAsBytes(it._body().validate()) }
+        return { sdk { client.messages().batches().create(prepared).await().toBatchState() } }
     }
 
-    internal suspend fun submitBatch(params: BatchCreateParams): MessageBatch =
-        sdk { client.messages().batches().create(params).await() }
+    private fun MessageBatch.toBatchState() = BatchState(id(),
+        processingStatus() == MessageBatch.ProcessingStatus.ENDED,
+        processingStatus() == MessageBatch.ProcessingStatus.CANCELING)
 
-    internal suspend fun findBatches(since: Instant): List<MessageBatch> = sdk {
+    override suspend fun findBatches(since: Instant): List<BatchState> = sdk {
         buildList {
             var page = client.messages().batches().list().await()
             while (true) {
                 for (batch in page.items()) {
                     if (batch.createdAt().toInstant().isBefore(since)) return@buildList
-                    add(batch)
+                    add(batch.toBatchState())
                 }
                 if (!page.hasNextPage()) break
                 page = page.nextPage().await()
@@ -146,26 +148,22 @@ class AnthropicProvider(
         }
     }
 
-    internal suspend fun retrieveBatch(id: String): MessageBatch = sdk { client.messages().batches().retrieve(id).await() }
-    internal suspend fun cancelBatch(id: String): MessageBatch = sdk { client.messages().batches().cancel(id).await() }
+    override suspend fun retrieveBatch(id: String): BatchState = sdk { client.messages().batches().retrieve(id).await().toBatchState() }
+    override suspend fun cancelBatch(id: String): BatchState = sdk { client.messages().batches().cancel(id).await().toBatchState() }
 
-    internal suspend fun batchResults(id: String, receive: (MessageBatchIndividualResponse) -> Unit) = sdk {
+    override suspend fun batchResults(id: String, receive: (String, Result<LlmResult>?) -> Unit): Unit = sdk {
         val stream = client.messages().batches().resultsStreaming(id)
         try {
-            stream.subscribe { receive(it) }.onCompleteFuture().await()
+            stream.subscribe { receive(it.customId(), decodeBatch(it)) }.onCompleteFuture().await()
         } finally {
             stream.close()
         }
     }
 
-    internal fun decodeBatch(row: MessageBatchIndividualResponse): Result<LlmResult>? =
+    private fun decodeBatch(row: MessageBatchIndividualResponse): Result<LlmResult>? =
         row.result().succeeded().orElse(null)?.let { runCatching { decode(it.message(), batch = true) } }
 
-    internal data class SearchResult(
-        val refs: List<SupplementRef>, val usage: LlmUsage, val requests: Int, val model: String, val error: String?
-    )
-
-    internal suspend fun search(req: LlmRequest, config: PipelineConfig.Search): SearchResult = sdk {
+    override suspend fun search(req: LlmRequest, config: PipelineConfig.Search): SearchResult = sdk {
         val tool = WebSearchTool20260209.builder().maxUses(config.maxUses.toLong())
         if (config.allowedDomains.isNotEmpty()) tool.allowedDomains(config.allowedDomains)
         if (config.blockedDomains.isNotEmpty()) tool.blockedDomains(config.blockedDomains)

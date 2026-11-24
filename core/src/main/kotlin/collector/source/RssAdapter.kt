@@ -18,7 +18,6 @@ import java.io.InputStream
 import java.io.InterruptedIOException
 import java.security.MessageDigest
 import java.time.Instant
-import java.util.HexFormat
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
@@ -79,18 +78,29 @@ class RssAdapter(private val http: OkHttpClient) : SourceAdapter {
     }
 
     private fun parse(feed: RssFeed, requestUrl: HttpUrl, body: InputStream, since: Instant, now: Instant): List<Item> {
-        val builder = DocumentBuilderFactory.newInstance().apply {
+        // Android's DocumentBuilderFactory rejects most of these hardening switches (it throws instead of
+        // ignoring them), so each is applied best-effort. If the parser cannot itself refuse DOCTYPE, the
+        // document is checked for a DOCTYPE before parsing, keeping XXE/entity-expansion protection.
+        var doctypeBlocked = false
+        val factory = DocumentBuilderFactory.newInstance().apply {
             isNamespaceAware = true
-            isXIncludeAware = false
+            runCatching { isXIncludeAware = false }
             isExpandEntityReferences = false
-            setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true)
-            setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
-            setFeature("http://xml.org/sax/features/external-general-entities", false)
-            setFeature("http://xml.org/sax/features/external-parameter-entities", false)
-            setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "")
-            setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "")
-        }.newDocumentBuilder().apply { setErrorHandler(DefaultHandler()) }
-        val root = builder.parse(InputSource(body)).documentElement
+            runCatching { setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true) }
+            doctypeBlocked = runCatching { setFeature("http://apache.org/xml/features/disallow-doctype-decl", true) }.isSuccess
+            runCatching { setFeature("http://xml.org/sax/features/external-general-entities", false) }
+            runCatching { setFeature("http://xml.org/sax/features/external-parameter-entities", false) }
+            runCatching { setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "") }
+            runCatching { setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "") }
+        }
+        val source = if (doctypeBlocked) body else {
+            val bytes = body.readBytes()
+            val head = String(bytes, 0, minOf(bytes.size, 4096), Charsets.ISO_8859_1)
+            require(!head.contains("<!DOCTYPE", ignoreCase = true)) { "DOCTYPE가 있는 피드는 처리하지 않음" }
+            bytes.inputStream()
+        }
+        val builder = factory.newDocumentBuilder().apply { setErrorHandler(DefaultHandler()) }
+        val root = builder.parse(InputSource(source)).documentElement
         val atom = root.localName == "feed" && root.namespaceURI == "http://www.w3.org/2005/Atom"
         val entries = when {
             atom -> root.elements("entry")
@@ -122,7 +132,7 @@ class RssAdapter(private val http: OkHttpClient) : SourceAdapter {
             val snippet = if (atom) entry.text("summary") ?: entry.text("content") else entry.text("description")
             val hash = MessageDigest.getInstance("SHA-256").digest(guid.toByteArray())
             val author = if (atom) entry.elements("author").firstOrNull()?.text("name") else entry.text("author")
-            Item(id, "${feed.name}:${HexFormat.of().formatHex(hash)}", title, url, 0, publishedAt = date,
+            Item(id, "${feed.name}:${hash.toHexString()}", title, url, 0, publishedAt = date,
                 snippet = redactText(snippet), author = author?.let(::redact),
                 extra = mapOf("feed" to feed.name), profileHint = feed.profile.map(::redact))
         }
@@ -157,7 +167,7 @@ internal fun List<String>.rssPrivatePattern(): Regex? =
 private fun encodedSecretPattern(secret: String): String =
     secret.codePoints().toArray().joinToString("") { codePoint ->
         val character = String(Character.toChars(codePoint))
-        val encoded = HexFormat.of().withPrefix("%").formatHex(character.toByteArray(Charsets.UTF_8))
+        val encoded = character.toByteArray(Charsets.UTF_8).toHexString(HexFormat { bytes.bytePrefix = "%" })
         val formSpace = if (character == " ") "|\\+" else ""
         "(?:${Regex.escape(character)}|(?i:$encoded)$formSpace)"
     }

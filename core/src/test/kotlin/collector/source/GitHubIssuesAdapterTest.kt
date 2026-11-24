@@ -398,12 +398,19 @@ class GitHubIssuesAdapterTest {
                 "createdAt":"2026-11-20T00:00:00Z","upvoteCount":5,"reactions":{"totalCount":4},"comments":{"totalCount":3},
                 "category":{"name":"Ideas"},"repository":{"nameWithOwner":"owner/hidden","isPrivate":true}}"""
             server.enqueue(MockResponse().setBody("""{"data":{"search":{"nodes":[$privateDiscussion]}}}"""))
-            val (results, warning) = adapter(server, "fake-token").fetchWithWarning(defaults.copy(
+            val paths = collector.runtime.CollectorPaths(directory.resolve("out"), directory.resolve("config"))
+            val cache = paths.cacheDir.resolve("github-repos.json")
+            val adapter = GitHubIssuesAdapter(OkHttpClient(), { "fake-token" }, server.url("/").toString(),
+                cache, paths.debugDir)
+            val (results, warning) = adapter.fetchWithWarning(defaults.copy(
                 queries = listOf("llm"), commentItems = 0), now)
+            assertTrue(cache.isFile)
+            assertFalse(directory.resolve("github-repos.json").exists())
+            assertFalse(directory.resolve("github-issues-2026-11-20.json").exists())
             assertTrue(results.isEmpty())
             assertContains(warning.orEmpty(), "비공개 저장소 2건 제외")
             // Private titles must not leak into the debug funnel samples either.
-            val debug = directory.resolve("github-issues-2026-11-20.json").readText()
+            val debug = paths.debugDir.resolve("github-issues-2026-11-20.json").readText()
             assertFalse("secret plan" in debug)
             assertFalse("private idea" in debug)
             val graphql = (1..server.requestCount).map { server.takeRequest() }.single { it.path == "/graphql" }

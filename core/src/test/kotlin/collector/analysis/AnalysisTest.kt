@@ -425,8 +425,15 @@ class AnalysisTest {
             ProviderId.OPENAI, req.model, 100, 50, 0, 0.0007) }
         val settings = BudgetSettings(analysisRequestUsd = 0.25, analysisMonthlyUsd = 1.10, overBudget = OverBudget.AUTO_FIT)
         FileCostLedger(out.resolve("cost-ledger-analysis")).reserve(date, "earlier", 0.88)
-        val command = command(lines, settings = settings) { fake }
+        val estimates = mutableListOf<collector.runtime.AnalysisEstimate>()
+        val command = command(lines, settings = settings, onEstimate = estimates::add) { fake }
         command.run(arrayOf("--analyze", "local-doc", "other"))
+        val estimate = estimates.last()
+        assertTrue(estimate.canReserve)
+        assertTrue(assertNotNull(estimate.estimatedUsd) > 0)
+        assertTrue(assertNotNull(estimate.reservationUsd) > 0)
+        assertFalse(command.run(arrayOf("--analyze", "local-doc", "other", "--yes", "--budget", "0")))
+        assertFalse(estimates.last().canReserve)
         assertTrue(fake.requests.isEmpty())
         command.run(arrayOf("--analyze", "local-doc", "other", "--yes"))
         assertEquals(Effort.MEDIUM, fake.requests.single().effort)
@@ -436,6 +443,9 @@ class AnalysisTest {
         assertContains(warning, "이번 달 $")
         assertContains(lines, warning)
         assertContains(out.resolve("analysis/${run.id}.html").readText(), warning)
+        command.run(arrayOf("--analyze", "local-doc", "other"))
+        assertEquals(collector.runtime.AnalysisEstimate(0.0, 0.0, true), estimates.last())
+        assertEquals(1, fake.requests.size)
         lines.clear()
         command.run(arrayOf("--analysis-list"))
         assertContains(lines, warning)
@@ -507,7 +517,7 @@ class AnalysisTest {
                 val id = "00000000-0000-0000-0000-000000000001"
                 collector.dev.publishAnalysisStart(out, id, "123", clock.instant()) {
                     val branch = out.resolve("published").apply { mkdirs() }
-                    collector.data.DataSync(out, out.resolve("prompts"), clock).push(branch)
+                    collector.data.DataSync(out, out.resolve("prompts"), clock, pipelineConfig = out.resolve("pipeline.local.json")).push(branch)
                     assertTrue(FileCostLedger(branch.resolve("out/cost-ledger-analysis")).total(reservationDay) > 0.0)
                     assertContains(branch.resolve("out/inbox-results/$id.json").readText(), "\"running\"")
                     publicationAttempted = true
@@ -719,9 +729,10 @@ class AnalysisTest {
 
     private fun command(lines: MutableList<String>, config: AnalysisConfig = this.config,
                         settings: BudgetSettings = BudgetSettings(analysisRequestUsd = config.requestBudgetUsd,
-                            analysisMonthlyUsd = config.monthlyBudgetUsd), provider: () -> LlmProvider) =
+                            analysisMonthlyUsd = config.monthlyBudgetUsd),
+                        onEstimate: (collector.runtime.AnalysisEstimate) -> Unit = {}, provider: () -> LlmProvider) =
         AnalysisCommand(out, config, PromptResolver(FilePromptStore(out.resolve("prompts").toPath())),
-            provider, clock, { lines += it }, settings)
+            provider, clock, { lines += it }, settings, onEstimate = onEstimate)
 
     private fun input(signals: List<Signal> = listOf(demand, demand2, repo)): AnalysisInput {
         val day = RunReport(date.toString(), now.toString(), emptyList(), emptyList(), emptyMap(), 0)

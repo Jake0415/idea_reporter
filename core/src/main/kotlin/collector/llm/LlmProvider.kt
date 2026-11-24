@@ -1,7 +1,10 @@
 package collector.llm
 
+import collector.config.PipelineConfig
+import collector.model.SupplementRef
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
+import java.time.Instant
 
 @Serializable
 enum class ProviderId { ANTHROPIC, OPENAI }
@@ -36,6 +39,25 @@ data class LlmResult(
 
 data class ModelInfo(val id: String, val name: String = id)
 
+interface BatchCapableProvider : LlmProvider {
+    fun prepareBatch(requests: Map<String, LlmRequest>): suspend () -> BatchState
+    suspend fun findBatches(since: Instant): List<BatchState>
+    suspend fun retrieveBatch(id: String): BatchState
+    suspend fun cancelBatch(id: String): BatchState
+    suspend fun batchResults(id: String, receive: (String, Result<LlmResult>?) -> Unit)
+}
+
+data class BatchState(val id: String, val ended: Boolean, val canceling: Boolean)
+
+interface WebSearchProvider : LlmProvider {
+    suspend fun search(req: LlmRequest, config: PipelineConfig.Search): SearchResult
+}
+
+data class SearchResult(
+    val refs: List<SupplementRef>, val usage: LlmUsage, val requests: Int,
+    val model: String, val error: String?
+)
+
 interface LlmProvider {
     val id: ProviderId
     suspend fun listModels(): List<ModelInfo>
@@ -49,7 +71,7 @@ class LlmKeyMissingException(provider: ProviderId) : RuntimeException("키 미�
 class LlmConfigException(model: String) :
     RuntimeException("가격표에 없는 모델: $model — models 설정에 가격을 등록하세요")
 
-internal data class LlmUsage(
+data class LlmUsage(
     val inputTokens: Int,
     val outputTokens: Int,
     val cachedInputTokens: Int = 0,

@@ -6,6 +6,7 @@ import collector.dev.writeAtomically
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import java.io.File
+import kotlinx.coroutines.CancellationException
 import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
@@ -13,11 +14,11 @@ import java.util.Locale
 
 internal const val UNKNOWN_DELIVERY_NOTICE = "발송 여부 확인 필요 — 받은편지함 확인 후 필요하면 --resend"
 
-internal enum class MailSendResult {
+enum class MailSendResult {
     SENT, SKIPPED_DUPLICATE, FAILED, UNKNOWN, RECORD_FAILED, MISSING_REPORT
 }
 
-internal enum class MailKind(val directory: String) {
+enum class MailKind(val directory: String) {
     DAILY(""), TREND("trend"), ANALYSIS("analysis");
 
     val label: String get() = name.lowercase(Locale.ROOT)
@@ -45,7 +46,8 @@ internal class MailDelivery(
     private val clock: Clock = Clock.systemDefaultZone(),
     private val print: (String) -> Unit = ::println,
     private val onIssue: (MailKind?, String?, String) -> Unit = { _, _, _ -> },
-    private val publish: ((Attempt?) -> Boolean)? = null
+    private val publish: ((Attempt?) -> Boolean)? = null,
+    private val beforeSend: () -> Unit = {}
 ) {
     @Serializable
     internal data class Attempt(
@@ -85,7 +87,8 @@ internal class MailDelivery(
         }
         val history = try {
             attempts()
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+        if (e is CancellationException) throw e
             issue(kind, key, "메일 기록 읽기 또는 복구 실패")
             return MailSendResult.RECORD_FAILED
         }
@@ -114,16 +117,19 @@ internal class MailDelivery(
             val body = textFile.readText()
             val subject = body.lineSequence().first().also { require(it.isNotBlank()) }
             MailMessage(subject, htmlFile.readText(), body)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+        if (e is CancellationException) throw e
             val reason = "메일 보고서 읽기 실패"
             issue(kind, key, reason)
             return if (saveOutcome(history, attempt.copy(result = "failed", issue = reason), kind)) {
                 if (publishOutcome(kind, key)) MailSendResult.FAILED else MailSendResult.RECORD_FAILED
             } else MailSendResult.RECORD_FAILED
         }
+        beforeSend()
         try {
             save(history + attempt)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+        if (e is CancellationException) throw e
             issue(kind, key, "메일 발송 시도 기록 저장 실패")
             return MailSendResult.RECORD_FAILED
         }
@@ -137,6 +143,7 @@ internal class MailDelivery(
             transport.send(message)
             MailSendResult.SENT
         } catch (e: Exception) {
+        if (e is CancellationException) throw e
             if (e is MailSendException && e.uncertain) MailSendResult.UNKNOWN else MailSendResult.FAILED
         }
         val failure = when (result) {
@@ -155,7 +162,8 @@ internal class MailDelivery(
 
     private fun publishJournal(attempt: Attempt?): Boolean = try {
         publish?.invoke(attempt) != false
-    } catch (_: Exception) {
+    } catch (e: Exception) {
+        if (e is CancellationException) throw e
         false
     }
 
@@ -168,7 +176,8 @@ internal class MailDelivery(
     private fun saveOutcome(history: List<Attempt>, attempt: Attempt, kind: MailKind): Boolean = try {
         save(history + attempt)
         true
-    } catch (_: Exception) {
+    } catch (e: Exception) {
+        if (e is CancellationException) throw e
         val accepted = attempt.result == "sent"
         issue(kind, attempt.key, if (accepted) "발송은 됐으나 기록 실패" else "메일 기록 저장 실패")
         false
@@ -183,13 +192,14 @@ internal class MailDelivery(
             history.groupBy { it.kind to it.key }.values.mapNotNull { entries ->
                 if (entries.last().result != "failed" || entries.any { it.result == "sent" || it.result == "unknown" }) return@mapNotNull null
                 val firstFailure = entries.first { it.result == "failed" }
-                val date = LocalDate.ofInstant(Instant.parse(firstFailure.firstFailureAt ?: firstFailure.at), clock.zone)
+                val date = Instant.parse(firstFailure.firstFailureAt ?: firstFailure.at).atZone(clock.zone).toLocalDate()
                 if (date !in today.minusDays(3)..today) return@mapNotNull null
                 val kind = MailKind.entries.first { it.label == firstFailure.kind }
                 kind.validateKey(firstFailure.key)
                 if (eligible(kind, firstFailure.key)) kind to firstFailure.key else null
             }.toSet()
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+        if (e is CancellationException) throw e
             issue(null, null, "메일 재시도 기록 읽기 또는 복구 실패")
             onResult(null, null, MailSendResult.RECORD_FAILED)
             return emptySet()
@@ -200,15 +210,18 @@ internal class MailDelivery(
         return targets
     }
 
-    fun test() {
-        val transport = mailer ?: run { unavailable(); return }
+    fun test(): MailSendResult {
+        val transport = mailer ?: run { unavailable(); return MailSendResult.FAILED }
         val title = "[AI 아이디어 수집기] 메일 설정 확인"
         try {
             transport.send(MailMessage(title, "<p>$title</p>", title))
             print("테스트 메일 발송 완료")
+            return MailSendResult.SENT
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             val reason = if (e is MailSendException && e.uncertain) UNKNOWN_DELIVERY_NOTICE else "테스트 메일 발송 실패"
             issue(null, null, reason)
+            return if (reason == UNKNOWN_DELIVERY_NOTICE) MailSendResult.UNKNOWN else MailSendResult.FAILED
         }
     }
 

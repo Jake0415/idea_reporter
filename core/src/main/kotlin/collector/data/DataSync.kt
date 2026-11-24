@@ -97,7 +97,7 @@ private data class DecodedText(val value: String, val positions: List<IntRange>)
 private fun decodeForRedaction(text: String): DecodedText {
     var current = DecodedText(text, text.indices.map { it..it })
     while (true) {
-        val next = current.replace(percentEscapes) { URLDecoder.decode(it.value, Charsets.UTF_8) }.replace(entity) {
+        val next = current.replace(percentEscapes) { URLDecoder.decode(it.value, Charsets.UTF_8.name()) }.replace(entity) {
             val code = it.groupValues[1].toIntOrNull() ?: it.groupValues[2].toIntOrNull(16)
             if (code != null && Character.isValidCodePoint(code)) String(Character.toChars(code))
             else entities[it.groupValues[3]] ?: it.value
@@ -167,7 +167,8 @@ internal class DataSync(
     private val out: File,
     private val prompts: File,
     private val clock: Clock = Clock.systemDefaultZone(),
-    private val historyDays: Int = PipelineConfig.load().historyDays
+    private val pipelineConfig: File,
+    private val historyDays: Int = PipelineConfig.load(pipelineConfig).historyDays
 ) {
     private val settings = out.resolve(DataBranch.SETTINGS)
     private val pullSnapshot = out.resolve(".data-pull-snapshot.json")
@@ -232,7 +233,7 @@ internal class DataSync(
         if (processInbox) processInbox(branch)
     }
 
-    fun processInbox(branch: File) = InboxProcessor(out, prompts, clock).process(branch.resolve(DataBranch.INBOX))
+    fun processInbox(branch: File) = InboxProcessor(out, prompts, clock, pipelineConfig).process(branch.resolve(DataBranch.INBOX))
 
     private fun readPullSnapshot(): Map<String, String?> {
         if (!pullSnapshot.isFile) return emptyMap()
@@ -268,7 +269,7 @@ internal class DataSync(
         }
         val trackingStart = readJson<List<TrackedIdea>>(trackedFile).orEmpty()
             .filter { it.status != TrackedIdea.Status.STOPPED }
-            .minOfOrNull { LocalDate.ofInstant(it.startedAt, clock.zone) }
+            .minOfOrNull { it.startedAt.atZone(clock.zone).toLocalDate() }
         val resultsCutoff = clock.instant().minus(java.time.Duration.ofDays(90))
         fun retained(path: String, tree: File): Boolean {
             if (!allowedOut(path)) return false

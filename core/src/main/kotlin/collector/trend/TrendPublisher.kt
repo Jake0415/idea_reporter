@@ -32,7 +32,7 @@ internal fun publishTrend(
         for ((name, content) in files) {
             val temporary = Files.createTempFile(trend.toPath(), ".collector-", ".tmp")
             staged[trend.resolve(name)] = temporary
-            Files.writeString(temporary, content)
+            Files.write(temporary, content.toByteArray())
         }
         for ((file, temporary) in staged) {
             val previous = if (file.isFile) file.readText() else null

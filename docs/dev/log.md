@@ -161,3 +161,8 @@
 - 지시 `P16-app-screens.md`, 개발 Codex. Compose 화면 15개(SC-00 마법사·01·02·03·06·07·09·10/10a·11·12·13·14·15·16), A 피드 토큰, 접근성(48dp·200% 글꼴·대비).
 - 1회차 리뷰: 코드(OpenAI 높음 2·중간 6, Claude 높음 2·중간 5)·UX(Design 플러그인, 높음 5·중간 6) + 사용자 결정 A~D(SC-00 단계형 마법사, 연결 전 빈 화면+안내, 지금 실행은 상단 ↻, 개발 화면은 디버그만) → `P16-fix-r1.md` 21항목 반영(화면·입력 보존, 요청 순서, 설정 디코드 크래시, 지금 실행 중복 방지, 비활성 사유, 경고 띠, 근거 줄, 상태 enum, lint K2 우회 제거 등). 테스트 core 365·앱 34·에뮬레이터 15, release lint 통과. 캡처 `out/screens/P16-r1/`.
 - **2026-11-24 폰 실행 전환 결정**으로 inbox·dispatch 흐름은 R2에서 걷어내고 설정 화면은 R3에서 원래 명세로 복원하므로, P16의 2회차 이후 리뷰(코드+UX)는 R3 리뷰에 합쳐 진행한다.
+## R1 폰 실행 전환(1): core 실행 런타임 분리
+- 사용자 결정(2026-11-24) 폰이 매일 실행 → `collector.runtime.CollectorRuntime(paths, secrets, clock, 팩토리)`·`CollectorPaths`로 일일·예약·분석·트렌드·메일·예산 조립을 `Main`에서 분리, 상대 경로 하드코딩 제거(CWD 기본값 없음). PC `Main`·Actions는 같은 런타임을 쓰며 동작 보존. 지시 `R1-runtime.md`, 개발 Codex.
+- 1회차 리뷰: Claude 통과(중간 3), OpenAI 높음 3(안드로이드 API 26 비호환 Java API — `Files.writeString`(36.1)·`HexFormat`(34)·`List.of`(30) 등, 재개 테스트 custom_id, LLM·메일 구현 결합) → `R1-fix-r1.md`(API 교체+ASM 클래스 검사 테스트, 팩토리 주입·`BatchCapableProvider`/`WebSearchProvider`, 취소는 실패 기록 안 함, JUL 전역 reset은 PC만, 인계 파일 삭제 잠금 안, RECOVER/MAIL 단계·취소 확인, stateHook 기본 무동작).
+- 2회차: Claude 통과, OpenAI 낮음 → **Claude 직접 수정**: 안드로이드 XML 파서가 보안 기능 설정에서 예외를 내 RSS가 전부 실패하던 문제(설정은 가능한 것만, DOCTYPE 차단을 못 하면 본문의 DOCTYPE을 먼저 거부해 XXE 방어 유지), PC 분석 큐가 취소를 실패로 기록하던 문제. 테스트 370개.
+- 이관(낮음): ASM 검사는 core 클래스만(의존 JAR·필드 참조 제외) — R2에서 에뮬레이터 실제 경로로 확인. MAIL 콜백 직후 취소 시 그날 메일 재시도 기록이 없을 수 있음.

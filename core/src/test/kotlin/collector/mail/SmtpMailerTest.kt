@@ -342,7 +342,7 @@ class SmtpMailerTest {
     }
 
     @Test @Order(1)
-    fun `first SMTP send clears JUL configuration for loggers created by Angus`() = kotlinx.coroutines.runBlocking {
+    fun `first SMTP send keeps JUL configuration and silences Angus`() = kotlinx.coroutines.runBlocking {
         val manager = LogManager.getLogManager()
         val smtpLogger = "org.eclipse.angus.mail.smtp"
         val reply = "250 Synthetic mail server response"
@@ -364,14 +364,15 @@ class SmtpMailerTest {
             System.setErr(output)
             try {
                 manager.readConfiguration(config.byteInputStream())
-                assertNull(manager.getLogger(smtpLogger))
+                val rootHandlers = manager.getLogger("").handlers.toList()
                 deliver(acceptedReply = reply) { smtp -> smtp.send(message); message }
                 val logs = captured.toString(Charsets.UTF_8) +
                     temporary.listFiles().orEmpty().filter { it.extension == "log" }.joinToString { it.readText() }
                 assertFalse(logs.contains("first@example.invalid"))
                 assertFalse(logs.contains("second@example.invalid"))
                 assertFalse(logs.contains(reply))
-                assertNull(manager.getProperty("$smtpLogger.handlers"))
+                assertEquals("java.util.logging.FileHandler", manager.getProperty("$smtpLogger.handlers"))
+                assertEquals(rootHandlers, manager.getLogger("").handlers.toList())
             } finally {
                 System.setOut(stdout)
                 System.setErr(stderr)
@@ -393,7 +394,7 @@ class SmtpMailerTest {
         loggers.forEach { it.level = Level.FINEST; it.addHandler(handler) }
         try {
             `SMTP refuses plaintext and discards potentially sensitive server responses`()
-            assertTrue(loggers.all { it.level == Level.WARNING })
+            assertTrue(loggers.all { it.level == Level.OFF && !it.useParentHandlers })
             assertTrue(records.isEmpty())
         } finally {
             loggers.zip(previous).forEach { (logger, state) ->

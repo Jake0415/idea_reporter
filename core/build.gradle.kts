@@ -18,6 +18,7 @@ dependencies {
     implementation("org.eclipse.angus:angus-mail:2.0.5")
 
     testImplementation(kotlin("test"))
+    testImplementation("org.ow2.asm:asm:9.9.1")
     testImplementation(libs.junit.jupiter)
     testRuntimeOnly(libs.junit.platform.launcher)
     testImplementation(libs.coroutines.test)

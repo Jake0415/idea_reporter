@@ -26,7 +26,6 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeout
 import java.time.Instant
-import java.time.LocalDate
 import java.time.ZoneId
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
@@ -74,7 +73,7 @@ class Pipeline(
 
     suspend fun run(file: SourcesFile): PipelineResult {
         val startedAt = clock()
-        val today = LocalDate.ofInstant(startedAt, zone)
+        val today = startedAt.atZone(zone).toLocalDate()
         val paid = full?.takeIf { paidStageSkipReason == null }
         val tracked = paid?.tracked().orEmpty()
         val totalStart = System.nanoTime()
