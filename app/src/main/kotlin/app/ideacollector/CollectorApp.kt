@@ -83,6 +83,10 @@ class CollectorApp : Application() {
         get() = getSharedPreferences("mail-settings", 0).getBoolean("enabled", true)
         set(value) { getSharedPreferences("mail-settings", 0).edit().putBoolean("enabled", value).apply() }
 
+    internal var includeMailCandidates: Boolean
+        get() = getSharedPreferences("mail-settings", 0).getBoolean("include-candidates", false)
+        set(value) { getSharedPreferences("mail-settings", 0).edit().putBoolean("include-candidates", value).apply() }
+
     internal suspend fun mailDraft(recipient: String, sender: String, password: String): Map<String, String> {
         val entered = mailKeys.zip(listOf(recipient, sender, password).map(String::trim)).toMap()
         val stored = secrets.getAll(entered.filterValues(String::isBlank).keys)
@@ -145,6 +149,7 @@ class CollectorApp : Application() {
             val mailAvailable = runtimeOverride != null || hasMailCredentials()
             runtime.runScheduled(ScheduledOptions(mail = mailAvailable,
                 mailEnabled = { mailAvailable && mailEnabled },
+                includeMailCandidates = includeMailCandidates,
                 batchOverrideForRun = { resume || schedule.options().batch },
                 deadline = Duration.ofMinutes(60), onStage = onStage, deferBatch = deferrals < 6,
                 honorSchedule = automatic, runDate = date, beforeRun = { flushLocalChanges(it) },

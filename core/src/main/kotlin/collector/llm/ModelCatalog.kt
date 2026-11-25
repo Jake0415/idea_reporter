@@ -25,7 +25,8 @@ data class ModelPrice(
     val longContext: LongContextPrice? = null,
     val batchMultiplier: Double = 0.5,
     val webSearchUsd: Double = 0.01,
-    val webSearchPriceVerified: Boolean = false
+    val webSearchPriceVerified: Boolean = false,
+    val webSearch: Boolean = false
 )
 
 @Serializable
@@ -43,6 +44,10 @@ class ModelCatalog(private val prices: List<ModelPrice>) {
 
     fun defaultModel(provider: ProviderId, tier: ModelTier): StageModel? =
         prices.firstOrNull { it.provider == provider && it.tier == tier }?.let { StageModel(provider, it.model) }
+
+    internal fun cheapestWebSearchModel(provider: ProviderId): StageModel? =
+        prices.filter { it.provider == provider && it.webSearch }.minByOrNull { it.inputUsd }
+            ?.let { StageModel(provider, it.model) }
 
     fun supports(provider: ProviderId, model: String): Boolean = runCatching { requirePrice(provider, model) }.isSuccess
 

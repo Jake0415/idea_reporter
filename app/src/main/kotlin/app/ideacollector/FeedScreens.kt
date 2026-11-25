@@ -83,7 +83,7 @@ internal fun TodayContent(data: ScreenState, sync: SyncState?, open: (Page, Stri
     else {
         if (run.report.runDate != today()) Notice(noToday)
         Small(R.string.r3_today_meta, displayDate(run.report.runDate), run.report.costUsd)
-        RunCounts(run.report)
+        RunCounts(run.report) { open(Page.CANDIDATES, run.report.runDate) }
         if (run.report.failedSources.isNotEmpty()) {
             val failure = stringResource(R.string.failed_sources, run.report.failedSources.joinToString { it.source })
             val history = data.runs.firstOrNull { it.second.startedAt == run.report.startedAt }
@@ -94,15 +94,27 @@ internal fun TodayContent(data: ScreenState, sync: SyncState?, open: (Page, Stri
     }
     runAction()
     if (run != null) {
-        run.cards.forEachIndexed { index, card -> FeedCard(data, card, open, send, retry, undo, index + 1) }
-        if (run.cards.isEmpty()) Small(R.string.no_results)
+        val cards = run.cards + data.requested.filter { it.report.runDate == run.report.runDate }.flatMap { it.cards }
+        cards.forEachIndexed { index, card -> FeedCard(data, card, open, send, retry, undo, index + 1) }
+        if (cards.isEmpty()) Small(R.string.no_results)
         else if (!firstStarUsed && data.tracks.isEmpty() && data.startingCards.isEmpty()) Small(R.string.track_empty)
     }
 }
 
-@Composable internal fun RunCounts(report: RunReport) {
+@Composable internal fun RunCounts(report: RunReport, onCandidates: (() -> Unit)? = null) {
     val candidates = report.stages.firstOrNull { it.stage == "select" }?.output ?: 0
-    Small(R.string.counts, report.fetchedTotal, candidates, report.cardCount)
+    if (onCandidates == null) {
+        Small(R.string.counts, report.fetchedTotal, candidates, report.cardCount)
+    } else {
+        FlowRow(itemVerticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Small(R.string.candidates_collected, report.fetchedTotal)
+            Text(stringResource(R.string.candidates_count, candidates),
+                modifier = Modifier.clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onCandidates)
+                    .padding(horizontal = 4.dp, vertical = 16.dp),
+                color = MaterialTheme.colorScheme.tertiary, style = MaterialTheme.typography.labelMedium)
+            Small(R.string.candidates_generated, report.cardCount)
+        }
+    }
 }
 
 private fun direction(trend: TrackedIdea.Trend) = when (trend) {
@@ -141,9 +153,22 @@ private fun FeedCard(data: ScreenState, card: IdeaCard, open: (Page, String) -> 
         }
         if (!data.dismissed(card)) FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             Tag(card.category)
-            card.badges.forEach { Tag(it, true) }
+            card.badges.forEach {
+                if (it == "요청" || it == "내가 고른 카드") CandidateBadge(stringResource(R.string.candidates_requested))
+                else Tag(it, true)
+            }
         }
         RequestChips(data.cardRequests(card.id), retry)
+    }
+}
+
+@Composable
+internal fun CandidateBadge(text: String) {
+    Surface(shape = androidx.compose.foundation.shape.CircleShape,
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary),
+        color = MaterialTheme.colorScheme.surface) {
+        Text(text, Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+            style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.tertiary)
     }
 }
 
@@ -204,13 +229,16 @@ internal fun Star(data: ScreenState, card: IdeaCard, send: (List<InboxRequest>) 
     Small(card.oneLiner)
     FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         Tag(card.category)
-        card.badges.forEach { Tag(it, true) }
+        card.badges.forEach {
+            if (it == "요청" || it == "내가 고른 카드") CandidateBadge(stringResource(R.string.candidates_requested))
+            else Tag(it, true)
+        }
         card.tags.forEach { Tag("#" + it) }
     }
     data.activeTrack(card)?.let { Nav(R.string.tracking) { open(Page.TRACK_DETAIL, it.id) } }
     Block(R.string.why, card.whyToday)
     Block(R.string.problem, card.problem)
-    val daily = data.daily.firstOrNull { card in it.cards }
+    val daily = (data.daily + data.requested).firstOrNull { card in it.cards }
     val items = daily?.items.orEmpty()
     val runAt = daily?.report?.startedAt
     Evidence(R.string.tech, card.techSignals, items, runAt)
@@ -332,14 +360,21 @@ internal fun Star(data: ScreenState, card: IdeaCard, send: (List<InboxRequest>) 
         }
     }
     val cards = data.filtered(star, hide, category, matches).filter { tag == null || tag in it.tags }
+    val groups = cards.groupBy { it.runDate }
+    val emptyDays = if (query.isBlank() && !star && category == null && tag == null)
+        data.daily.filter { it.cards.isEmpty() }.map { it.report.runDate } else emptyList()
+    val dates = (groups.keys + emptyDays).sortedDescending()
     when {
         failed -> Notice(stringResource(R.string.error), warning = true)
         searching -> Small(R.string.loading)
-        cards.isEmpty() -> Small(R.string.no_results)
-        else -> cards.groupBy { it.runDate }.toSortedMap(compareByDescending { it }).forEach { (date, group) ->
+        dates.isEmpty() -> Small(R.string.no_results)
+        else -> dates.forEach { date ->
             Text(displayDate(date), style = MaterialTheme.typography.titleMedium)
             data.daily.firstOrNull { it.report.runDate == date }?.let { RunCounts(it.report) }
-            group.forEach { FeedCard(data, it, open, send, retry, undo) }
+            TextButton(onClick = { open(Page.CANDIDATES, date) }, modifier = Modifier.heightIn(min = 48.dp)) {
+                Text(stringResource(R.string.candidates_open))
+            }
+            groups[date].orEmpty().forEach { FeedCard(data, it, open, send, retry, undo) }
         }
     }
 }

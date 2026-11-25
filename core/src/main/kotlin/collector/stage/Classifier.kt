@@ -26,7 +26,8 @@ class Classifier(
 ) {
     suspend fun classify(items: List<Item>, topics: List<TopicHistory>, tracked: List<TrackedIdea>,
                          hnContexts: Map<String, HnContext> = emptyMap(), runDate: String? = null,
-                         out: File? = null, backfill: Boolean = false): ClassificationResult {
+                         out: File? = null, backfill: Boolean = false,
+                         quoteOnly: ((LlmRequest) -> Unit)? = null, singleAttempt: Boolean = false): ClassificationResult {
         val resolved = listOf(prompts.resolve("classify")) + profiles.ids.flatMap {
             listOf(prompts.resolve("profile.$it.match"), prompts.resolve("profile.$it.analysis"))
         }
@@ -62,6 +63,10 @@ class Classifier(
             return LlmRequest("", system, user.toString(), outputSchema, "classify", batch.size * 400 + 128, Effort.LOW)
         }
         val batches = items.chunked(config.classifyBatchSize)
+        if (quoteOnly != null) {
+            batches.forEach { quoteOnly(buildRequest(it, false)) }
+            return ClassificationResult(emptyList(), emptyList(), 0)
+        }
         val stage = if (backfill) "backfill" else "classify"
         val byKey = items.associateBy { it.key }
         fun savedRows(responses: List<Pair<List<String>, LlmResult>>) = buildMap {
@@ -111,11 +116,11 @@ class Classifier(
 
             suspend fun request(batch: List<Item>, retry: Boolean): Response<Output> =
                 structuredCall(router, "classify", resolved, buildRequest(batch, retry),
-                    retryInvalid = !retry, allowFallback = !retry,
+                    retryInvalid = !singleAttempt && !retry, allowFallback = !singleAttempt && !retry,
                     onAttempt = { batch.mapTo(synchronousKeys) { it.key } })
 
             val result = if (saved == null) request(batch, retry = false) else Response.Ok(Output(saved))
-            if (result == Response.Failed(TRUNCATED_RESPONSE) && batch.size > 1 && splitDepth < 2) {
+            if (!singleAttempt && result == Response.Failed(TRUNCATED_RESPONSE) && batch.size > 1 && splitDepth < 2) {
                 val midpoint = batch.size / 2
                 val left = classifyBatch(batch.subList(0, midpoint), splitDepth + 1)
                 val right = classifyBatch(batch.subList(midpoint, batch.size), splitDepth + 1)
@@ -130,7 +135,7 @@ class Classifier(
                 }
             }
             val unresolved = if (result is Response.Ok) batch.filter { accepted[it.key] == null } else emptyList()
-            val retryResult = if (unresolved.isEmpty()) null else request(unresolved, retry = true)
+            val retryResult = if (singleAttempt || unresolved.isEmpty()) null else request(unresolved, retry = true)
             val retried = (retryResult as? Response.Ok)?.value?.items.orEmpty().groupBy { it.externalId }
             val budgetBlocked = result == Response.Failed(BUDGET_LIMIT) || retryResult == Response.Failed(BUDGET_LIMIT)
             val trackedIds = tracked.map { it.id }.toSet()

@@ -46,9 +46,10 @@ object Backup {
     private val sourcesJson = Json(ConfigLoader.json) { encodeDefaults = false }
     private val webUrl = Regex("""(?i)https?://[^\s<>"']+""")
     private val daily = Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}\\.json")
+    private val requested = Regex("requested/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9a-fA-F-]{36}\\.json")
     private val run = Regex("runs/(?:failed/|scheduled/)?[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9TtZz.+-]+\\.json")
-    private val ledger = Regex("out/cost-ledger(?:-analysis)?/[0-9]{4}-[0-9]{2}-[0-9]{2}\\.json")
-    private val marker = Regex("out/cost-ledger(?:-analysis)?/[0-9]{4}-[0-9]{2}\\.blocked")
+    private val ledger = Regex("out/cost-ledger(?:-analysis|-requested)?/[0-9]{4}-[0-9]{2}-[0-9]{2}\\.json")
+    private val marker = Regex("out/cost-ledger(?:-analysis|-requested)?/[0-9]{4}-[0-9]{2}\\.blocked")
     private val address = Regex("""(?:[\p{L}\p{M}\p{N}.!#$%&'*+/=?^_{}|~-]+|"(?:[^"\\\r\n]|\\.)+")@[\p{L}\p{M}\p{N}*-]+(?:\.[\p{L}\p{M}\p{N}*-]+)+""")
     private val credential = Regex("(?i)(?:sk-(?:ant-)?[a-z0-9_-]{16,}|gh[pousr]_[a-z0-9_]{16,}|github_pat_[a-z0-9_]{16,})")
     private val dataFields = setOf("keyword", "keywords", "excludeKeywords", "topicKey", "itemKey", "itemKeys",
@@ -128,7 +129,7 @@ object Backup {
                 original.takeUnless(::omit)?.let(::scrub)
             } else {
                 val projected = project(path, original, exporting = true)
-                val resultFile = path.startsWith("out/") && (daily.matches(file.name) || run.matches(path.removePrefix("out/")))
+                val resultFile = path.startsWith("out/") && (daily.matches(file.name) || run.matches(path.removePrefix("out/")) || requested.matches(path.removePrefix("out/")))
                 val rssValues = if (resultFile) rssFeedValues + webUrl.findAll(original).flatMap { match ->
                     match.value.trimEnd('\\').toHttpUrlOrNull()?.rssPrivateValues().orEmpty()
                 }.toList() else emptyList()
@@ -177,7 +178,7 @@ object Backup {
             require(allowed(path))
             if (content.toByteArray().size > MAX_BYTES) throw TooLarge()
             val relative = path.substringAfter('/')
-            val resultFile = daily.matches(relative) || run.matches(relative)
+            val resultFile = daily.matches(relative) || run.matches(relative) || requested.matches(relative)
             if (resultFile) dates += LocalDate.parse(relative.substringAfterLast('/').take(10))
             if (path.endsWith(".md")) {
                 require(redact(content) == content)
@@ -209,7 +210,11 @@ object Backup {
         }.mapTo(mutableSetOf()) { it.name.take(10) }
         return backup.files.filterKeys { path ->
             val date = recordDate(path)
-            date == null || (date !in existingDates && date !in pendingDates)
+            when {
+                requested.matches(path.removePrefix("out/")) -> path !in existing
+                date == null -> true
+                else -> date !in existingDates && date !in pendingDates
+            }
         }
     }
 
@@ -224,7 +229,7 @@ object Backup {
         recover(paths)
         val old = current(paths)
         val writes = importFiles(paths, backup, old.keys)
-        val deletes = old.keys.filter { recordDate(it) == null } - writes.keys
+        val deletes = old.keys.filter { recordDate(it) == null && !it.startsWith("out/requested/") } - writes.keys
         val targets = writes.keys + deletes
         val parent = transactionRoot(paths).apply { mkdirs() }
         val temporary = Files.createTempDirectory(parent.toPath(), ".backup-").toFile()
@@ -394,7 +399,7 @@ object Backup {
     private fun allowed(path: String): Boolean {
         val name = path.substringAfter('/')
         return when (path.substringBefore('/')) {
-            "out" -> daily.matches(name) || (run.matches(name) && !legacyProtected(path)) ||
+            "out" -> daily.matches(name) || requested.matches(name) || (run.matches(name) && !legacyProtected(path)) ||
                 name in setOf("tracked.json", "feedback.json", "settings/schedule.json")
             "config" -> name in setOf("pipeline.local.json", "sources.local.json", "analysis.local.json") ||
                 PromptCatalog.entries.keys.any { name == "prompts/$it.md" || name == "prompts/$it.versions.json" }
@@ -444,6 +449,10 @@ object Backup {
             }
             name.endsWith(".versions.json") -> typed<List<Revision>>(content)
             daily.matches(name) -> typed<PipelineResult>(content)
+            requested.matches(name) -> {
+                val result = json.decodeFromString<PipelineResult>(content)
+                json.encodeToJsonElement(result.copy(report = result.report.copy(llmCalls = emptyList())))
+            }
             "report" in json.parseToJsonElement(content).jsonObject -> {
                 val result = json.decodeFromString<PipelineResult>(content)
                 json.encodeToJsonElement(PipelineResult(emptyList(), emptyList(), result.report, cards = result.cards))

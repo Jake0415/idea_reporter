@@ -5,6 +5,7 @@ import collector.config.PipelineConfig
 import collector.dev.FileCostLedger
 import collector.dev.FileHistorySearch
 import collector.dev.costLedger
+import collector.dev.requestedCostLedger
 import collector.dev.outputJson
 import collector.dev.readJson
 import collector.dev.writeAtomically
@@ -23,9 +24,28 @@ internal class MonthlyBudget(private val out: File, private val settings: Budget
     val analysisLedger = FileCostLedger(out.resolve("cost-ledger-analysis"))
     private val cardLedger by lazy { costLedger(out, FileHistorySearch(out, PipelineConfig.defaults.historyDays)) }
 
+    private val requestedLedger by lazy { requestedCostLedger(out) }
+
     fun analysisSpend(day: LocalDate) = analysisLedger.monthlyTotal(day)
+    private fun totalSpend(day: LocalDate, analysis: Double = analysisSpend(day)) =
+        cardLedger.monthlyTotal(day) + requestedLedger.monthlyTotal(day) + analysis
+
+    private fun requestedBlock(day: LocalDate) = out.resolve("cost-ledger-requested/${YearMonth.from(day)}.blocked")
+
+    fun requestedBlocked(day: LocalDate) = requestedBlock(day).isFile
+
+    fun blockRequested(day: LocalDate, approvedUsd: Double, settledUsd: Double) {
+        requestedBlock(day).writeAtomically(outputJson.encodeToString(
+            mapOf("approvedUsd" to approvedUsd, "settledUsd" to settledUsd)
+        ))
+    }
+
+    fun releaseRequested(day: LocalDate) {
+        Files.deleteIfExists(requestedBlock(day).toPath())
+    }
+
     fun remaining(day: LocalDate): Double? = settings.monthlyTotalUsd?.let {
-        (it - cardLedger.monthlyTotal(day) - analysisSpend(day)).coerceAtLeast(0.0)
+        (it - totalSpend(day)).coerceAtLeast(0.0)
     }
 
     fun allows(day: LocalDate, reservation: Double): Boolean {
@@ -76,7 +96,7 @@ internal class MonthlyBudget(private val out: File, private val settings: Budget
         val analysis = analysisSpend(day)
         return listOfNotNull(
             warning("분석", analysis, settings.analysisMonthlyUsd),
-            settings.monthlyTotalUsd?.let { warning("전체", cardLedger.monthlyTotal(day) + analysis, it) }
+            settings.monthlyTotalUsd?.let { warning("전체", totalSpend(day, analysis), it) }
         )
     }
 
@@ -88,7 +108,7 @@ internal class MonthlyBudget(private val out: File, private val settings: Budget
     fun status(day: LocalDate): List<String> {
         val cards = cardLedger.monthlyTotal(day)
         val analysis = analysisSpend(day)
-        val total = cards + analysis
+        val total = totalSpend(day, analysis)
         val remainingTotal = remaining(day) ?: Double.POSITIVE_INFINITY
         val remainingAnalysis = analysisRemaining(day, analysis)
         fun monthly(label: String, spent: Double, cap: Double?, available: Double?) =

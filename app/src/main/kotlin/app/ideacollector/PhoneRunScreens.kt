@@ -265,6 +265,8 @@ internal fun PhoneOperations(app: CollectorApp, settings: AppSettings, data: Scr
         var daily by rememberSaveable(saved.dailyCardUsd) { mutableStateOf(saved.dailyCardUsd.toString()) }
         var monthly by rememberSaveable(saved.monthlyTotalUsd) { mutableStateOf(saved.monthlyTotalUsd?.toString().orEmpty()) }
         var analysis by rememberSaveable(saved.analysisRequestUsd) { mutableStateOf(saved.analysisRequestUsd.toString()) }
+        var requested by rememberSaveable(saved.requestCardUsd) { mutableStateOf(saved.requestCardUsd.toString()) }
+        var requestedDaily by rememberSaveable(saved.requestDailyUsd) { mutableStateOf(saved.requestDailyUsd.toString()) }
         Text(stringResource(R.string.r3_schedule), style = MaterialTheme.typography.titleMedium)
         RunOption(R.string.daily_enabled, enabled) { enabled = it }
         RunTimePicker(seconds) { seconds = it }
@@ -277,13 +279,34 @@ internal fun PhoneOperations(app: CollectorApp, settings: AppSettings, data: Scr
         CredentialsAndModels()
         HorizontalDivider()
         Text(stringResource(R.string.r3_budget), Modifier.bringIntoViewRequester(budgetSection), style = MaterialTheme.typography.titleMedium)
-        Field(daily, { daily = it }, R.string.daily_budget, true, decimal = true)
+        val requestedBlocked = remember { mutableStateOf(false) }
+        LaunchedEffect(app) {
+            // 읽기 실패로 설정 화면이 꺼지지 않게 한다. 실행 직전에 core가 차단 표식을 다시 확인한다.
+            requestedBlocked.value = try {
+                withContext(Dispatchers.IO) { app.runtime().requestedCardsBlocked() }
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { false }
+        }
+        if (requestedBlocked.value) {
+            Notice(stringResource(R.string.request_card_settlement_block_here), warning = true)
+            Secondary(R.string.request_card_release) {
+                operation {
+                    withContext(Dispatchers.IO) { app.runtime().releaseRequestedCards() }
+                    requestedBlocked.value = false
+                }
+            }
+        }
+        Field(daily, { daily = it }, R.string.daily_budget, true, help = R.string.budget_daily_card_help, decimal = true)
         Field(monthly, { monthly = it }, R.string.r3_monthly, true, help = R.string.r3_monthly_hint, decimal = true)
         Field(analysis, { analysis = it }, R.string.r3_analysis_limit, true, decimal = true)
+        Field(requested, { requested = it }, R.string.request_card_limit, true, decimal = true)
+        Field(requestedDaily, { requestedDaily = it }, R.string.request_card_daily_limit, true,
+            help = R.string.request_card_daily_limit_help, decimal = true)
+        val requestedDailyAmount = budgetAmount(requestedDaily)
         val dailyAmount = budgetAmount(daily)
         val monthlyAmount = budgetAmount(monthly)
         val analysisAmount = budgetAmount(analysis)
-        val valid = dailyAmount != null && analysisAmount != null && (monthly.isBlank() || monthlyAmount != null)
+        val requestedAmount = budgetAmount(requested)
+        val valid = dailyAmount != null && analysisAmount != null && requestedAmount != null && requestedDailyAmount != null && (monthly.isBlank() || monthlyAmount != null)
         Text(stringResource(R.string.r3_advanced), style = MaterialTheme.typography.titleMedium)
         RunOption(R.string.run_batch, batch) { batch = it }
         if (batch) Small(R.string.r3_batch_hint)
@@ -294,6 +317,8 @@ internal fun PhoneOperations(app: CollectorApp, settings: AppSettings, data: Scr
                     if (dailyAmount?.toDouble() != saved.dailyCardUsd) put("dailyCardUsd", JsonPrimitive(dailyAmount))
                     if (monthlyAmount?.toDouble() != saved.monthlyTotalUsd) put("monthlyTotalUsd", monthlyAmount?.let(::JsonPrimitive) ?: JsonNull)
                     if (analysisAmount?.toDouble() != saved.analysisRequestUsd) put("analysisRequestUsd", JsonPrimitive(analysisAmount))
+                    if (requestedAmount?.toDouble() != saved.requestCardUsd) put("requestCardUsd", JsonPrimitive(requestedAmount))
+                    if (requestedDailyAmount?.toDouble() != saved.requestDailyUsd) put("requestDailyUsd", JsonPrimitive(requestedDailyAmount))
                 }
                 val scheduleChange = ScheduleSettings(enabled).takeIf { enabled != savedEnabled }
                 if (changes.isNotEmpty() || scheduleChange != null) app.submit(listOf(InboxRequest.SettingsSet(

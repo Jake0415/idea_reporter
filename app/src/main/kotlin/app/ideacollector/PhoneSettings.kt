@@ -306,6 +306,16 @@ internal fun MailSettings(app: CollectorApp, operation: (suspend () -> Unit) -> 
         configured = app.hasMailCredentials()
     }
     if (!onboarding) Small(if (configured && enabled) R.string.r3_mail_on else R.string.r3_mail_off)
+    if (!onboarding && !busy) {
+        var includeCandidates by remember { mutableStateOf(app.includeMailCandidates) }
+        RunOption(R.string.candidates_mail, includeCandidates) { value ->
+            operation {
+                app.requireBackupReady()
+                app.includeMailCandidates = value
+                includeCandidates = value
+            }
+        }
+    }
     SecureTokenInput()
     fun addressError(value: String) = R.string.r3_mail_address_invalid.takeIf {
         value.isNotBlank() && !android.util.Patterns.EMAIL_ADDRESS.matcher(value.trim()).matches()

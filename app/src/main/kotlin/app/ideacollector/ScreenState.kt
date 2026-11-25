@@ -91,7 +91,8 @@ internal class ScreenState(artifacts: List<Artifact>, val requests: List<Request
     private val payloads = requests.associate { it.requestId to runCatching { it.payload() }.getOrNull() }
     fun payload(row: RequestRow) = payloads[row.requestId]
     val daily = artifacts.filter { it.kind == "daily" }.sortedByDescending { it.path }.map { it.decode<PipelineResult>() }
-    val cards = daily.flatMap { it.cards }.distinctBy { it.id }
+    val requested = artifacts.filter { it.kind == "requested" }.map { it.decode<PipelineResult>() }
+    val cards = (daily + requested).flatMap { it.cards }.distinctBy { it.id }
     val latestTrend = artifacts.filter { it.kind == "trend" }.maxByOrNull { it.path }?.decode<collector.trend.TrendReport>()
     val analyses = artifacts.filter { it.kind == "analysis" && it.path.endsWith(".json") }
         .mapNotNull { runCatching { it.decode<AnalysisResult>() }.getOrNull() }.sortedByDescending { it.createdAt }

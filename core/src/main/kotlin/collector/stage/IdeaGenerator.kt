@@ -35,12 +35,15 @@ class IdeaGenerator(
                          feedback: List<String>, recentCards: List<String>,
                          merged: Map<String, List<Signal>> = emptyMap(),
                          retryAfterTruncation: Boolean = false, out: File? = null, batchAllowed: Boolean = true,
-                         snapshotBatchInputs: Boolean = false): GeneratedCards {
+                         snapshotBatchInputs: Boolean = false,
+                         quoteOnly: ((LlmRequest) -> Unit)? = null,
+                         singleAttempt: Boolean = false,
+                         researchedRefs: List<SupplementRef>? = null): GeneratedCards {
         val mergedEvidence = signals.associate { (item) ->
             item.key to merged[item.key].orEmpty().filter { it.item.url in item.mergedUrls }
         }
         val evidence = (signals + mergedEvidence.values.flatten()).distinctBy { it.item.key }
-        if (evidence.size < 2 || evidence.none { it.classification.profile == "tech-signal" }) {
+        if (quoteOnly == null && (evidence.size < 2 || evidence.none { it.classification.profile == "tech-signal" })) {
             return GeneratedCards(emptyList(), "쓸 수 있는 기술 항목을 포함한 카드 후보를 두 건 이상 확보하지 못했습니다.")
         }
         val ideas = prompts.resolve("ideas")
@@ -53,7 +56,7 @@ class IdeaGenerator(
                 jsonSchema = outputSchema(false))
         } else null
         var reusedPaidBatch = false
-        var verifiedRefs = emptyMap<String, SupplementRef>()
+        var verifiedRefs = verified(researchedRefs.orEmpty())
         fun user(compact: Boolean, includeSupplement: Boolean = true) = buildJsonObject {
             put("today", today)
             put("ideaCount", config.ideaCount)
@@ -101,7 +104,12 @@ class IdeaGenerator(
             }
         }
         val tokens = config.ideaCount * 1400 + 128
-        if (!resumingBatch && config.supplementSearch.enabled && config.supplementSearch.maxUses > 0) {
+        if (quoteOnly != null) {
+            quoteOnly(LlmRequest("", ideas.text, user(compact = false).toString(),
+                outputSchema(config.supplementSearch.enabled), "generate", tokens, Effort.LOW))
+            return GeneratedCards(emptyList())
+        }
+        if (researchedRefs == null && !resumingBatch && config.supplementSearch.enabled && config.supplementSearch.maxUses > 0) {
             try {
                 val topics = signals.take(config.ideaCount * 2)
                     .map { it.classification.topicLabel.ifBlank { it.item.title } }.distinct()
@@ -112,8 +120,10 @@ class IdeaGenerator(
             } catch (e: CancellationException) {
                 throw e
             } catch (_: BudgetExceededException) {
+                if (singleAttempt) return GeneratedCards(emptyList(), BUDGET_LIMIT)
                 issues += "예산 부족 · 보충 검색 생략"
             } catch (_: Exception) {
+                if (singleAttempt) return GeneratedCards(emptyList(), "보충 검색 실패")
                 issues += "보충 검색 실패 · 검색 없이 작성"
             }
         }
@@ -132,10 +142,11 @@ class IdeaGenerator(
             reusedPaidBatch = snapshotBatchInputs && resumingBatch && batch?.responses?.get(0)?.isSuccess == true
             val current = savedInput ?: request.copy(user = user(compact).toString(), jsonSchema = outputSchema(verifiedRefs.isNotEmpty()))
             return structuredCall(router, "generate", listOf(ideas, criteria), current,
-                initial = batch?.responses?.get(0))
+                initial = batch?.responses?.get(0), allowFallback = !singleAttempt)
         }
         val first = request(compact = false, limit = if (retryAfterTruncation) tokens * 3 / 2 else tokens, useBatch = batchAllowed)
-        val response = if (first is Response.Failed && first.reason == "비용 상한" && !reusedPaidBatch) request(compact = true, limit = tokens) else first
+        val response = if (!singleAttempt && first is Response.Failed && first.reason == BUDGET_LIMIT && !reusedPaidBatch)
+            request(compact = true, limit = tokens) else first
         return when (response) {
             is Response.Ok -> GeneratedCards(response.value.cards.map { card ->
                 val refs = card.supplementRefs.mapNotNull { ref ->

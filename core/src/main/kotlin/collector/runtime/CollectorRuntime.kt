@@ -7,6 +7,7 @@ import collector.analysis.AnalysisConfig
 import collector.backfill.Backfill
 import collector.budget.BudgetSettings
 import collector.budget.MonthlyBudget
+import collector.source.hasPrivateRssQuery
 import collector.config.ConfigLoader
 import collector.config.PipelineConfig
 import collector.config.SourcesFile
@@ -32,6 +33,15 @@ import collector.source.Http
 import collector.source.SourceAdapter
 import collector.stage.Classifier
 import collector.stage.IdeaGenerator
+import collector.stage.CardValidator
+import collector.stage.CitationValidator
+import collector.stage.CommentFetcher
+import collector.model.Signal
+import collector.model.Item
+import collector.model.ClassifiedItem
+import collector.refine.UrlNormalizer
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -65,7 +75,8 @@ data class DailyOptions(
     val deadline: Duration? = null,
     val onStage: (RunStage) -> Unit = {},
     val sources: SourcesFile? = null,
-    val deferBatch: Boolean = false
+    val deferBatch: Boolean = false,
+    val includeMailCandidates: Boolean = false
 )
 
 data class ScheduledOptions(
@@ -83,7 +94,8 @@ data class ScheduledOptions(
     val onMailRetriesExpired: (Int) -> Unit = {},
     val deferMailDelivery: Boolean = false,
     val onLockAcquired: () -> Unit = {},
-    val mailEnabled: () -> Boolean = { mail }
+    val mailEnabled: () -> Boolean = { mail },
+    val includeMailCandidates: Boolean = false
 )
 
 data class DailySummary(
@@ -126,6 +138,298 @@ class CollectorRuntime(
     }
 ) {
     private val out get() = paths.outDir
+
+    fun candidates(date: LocalDate): CandidateView =
+        readJson<PipelineResult>(out.resolve("$date.json"))?.let(::candidateView) ?: CandidateView()
+
+    private val requestedResearchTitleChars = 120
+    private val requestedResearchUrlChars = 512
+    private val requestedResearchSnippetChars = 180
+    private val requestedCommentAuthorChars = 80
+    private val requestedCommentTextChars = 500
+
+    private fun boundedRequestedComments(comments: List<collector.model.Comment>, limit: Int) =
+        comments.take(limit).map {
+            it.copy(author = it.author.take(requestedCommentAuthorChars), text = it.text.take(requestedCommentTextChars))
+        }
+
+    fun requestedCardsBlocked(): Boolean =
+        MonthlyBudget(out, BudgetSettings.load(out) {}).requestedBlocked(LocalDate.now(clock))
+
+    suspend fun releaseRequestedCards() = locked {
+        MonthlyBudget(out, BudgetSettings.load(out) {}).releaseRequested(LocalDate.now(clock))
+    }
+
+    private fun supportsRequestedResearch(provider: ProviderId): Boolean {
+        dailyProviders?.let { supplied ->
+            val providers = supplied()
+            return try {
+                providers.any { it.id == provider && it is WebSearchProvider }
+            } finally {
+                providers.forEach { (it as? AutoCloseable)?.close() }
+            }
+        }
+        val key = secrets.get("${provider.name}_API_KEY") ?: return provider == ProviderId.ANTHROPIC
+        val instance = providerFactory(provider, key)
+        return try {
+            instance is WebSearchProvider
+        } finally {
+            (instance as? AutoCloseable)?.close()
+        }
+    }
+
+    private suspend fun prepareRequestedCards(
+        date: LocalDate, keys: List<String>, research: Boolean, approvedDay: LocalDate? = null
+    ): RequestedPlan {
+        require(keys.size in 1..3 && keys.distinct().size == keys.size)
+        val recoveryPending = Backup.recoveryPending(paths)
+        val daily = requireNotNull(readJson<PipelineResult>(out.resolve("$date.json")))
+        val byKey = candidateView(daily).candidates.associateBy { it.key }
+        val selected = keys.map { byKey.getValue(it).signal }.filter { publicRequestedUrl(it.item.url) }
+        val defaults = pipelineConfig()
+        val config = defaults.copy(ideaCount = keys.size, models = defaults.models.copy(fallback = false),
+            supplementSearch = defaults.supplementSearch.copy(enabled = research, maxUses = 3))
+        val history = FileHistorySearch(out, config.historyDays)
+        val past = history.runs(date, config.historyDays)
+        val hits = selected.associate { it.item.key to history.search(it, date) }
+        val hitIds = hits.values.flatten().map { it.id }.toSet()
+        val available = daily.classified + past.flatMap { it.classified }.filter {
+            it.item.key in hitIds || selected.any { seed -> seed.classification.topicKey == it.classification.topicKey }
+        }
+        val rawEvidence = requestedEvidence(selected, available.filter { publicRequestedUrl(it.item.url) })
+        fun bound(signal: Signal) = signal.copy(
+            item = signal.item.copy(comments = boundedRequestedComments(signal.item.comments, config.commentsPerItem)),
+            enrichedComments = boundedRequestedComments(signal.enrichedComments, config.commentsPerItem)
+        )
+        val evidence = RequestedEvidence(rawEvidence.selected.map(::bound), rawEvidence.added.map(::bound))
+        val merged = requestedMergedMembers(listOf(daily) + past, evidence.signals)
+        val recent = past.flatMap { it.cards } + daily.cards +
+            out.resolve("requested").listFiles().orEmpty().flatMap { readJson<PipelineResult>(it)?.cards.orEmpty() }
+        val feedback = history.feedback().distinctBy { it.cardId }.take(config.feedbackExamples).mapNotNull { entry ->
+            history.cardRun(entry.cardId)?.cards?.firstOrNull { it.id == entry.cardId }?.let {
+                listOfNotNull(it.title, it.category, entry.kind.name, entry.reason).joinToString(" · ")
+            }
+        }
+        val recentTitles = recent.filter { it.runDate >= date.minusDays(config.recentCardDays.toLong()).toString() }
+            .map { it.title }.distinct()
+        val budget = BudgetSettings.load(out) {}
+        val day = LocalDate.now(clock)
+        val ledger = requestedCostLedger(out)
+        val monthly = MonthlyBudget(out, budget)
+        val dailyRemaining = (budget.requestDailyUsd - ledger.total(day)).coerceAtLeast(0.0)
+        val monthlyRemaining = monthly.remaining(day) ?: Double.POSITIVE_INFINITY
+        val remaining = minOf(budget.requestCardUsd, dailyRemaining, monthlyRemaining)
+        val router = LlmRouter(emptyList(), CostGuard(0.0), strictRequestBudget = true)
+        val prompts = PromptResolver(FilePromptStore(paths.promptsDir.toPath()))
+        val searchUser = outputJson.encodeToString(selected.map {
+            it.classification.topicLabel.ifBlank { it.item.title }
+        }.distinct())
+        var estimate: Double? = null
+        var researchMaxUsd: Double? = null
+        val searchModel = collector.llm.ModelCatalog.defaults.cheapestWebSearchModel(config.models.classify.provider)
+            ?.takeIf { supportsRequestedResearch(it.provider) }
+        if (!recoveryPending && selected.size == keys.size &&
+            (if (research) searchModel != null else evidence.sufficient)) {
+            val researchEstimateSignals = if (!research) emptyList() else (1..3).map { index ->
+                val item = Item("web", UUID.nameUUIDFromBytes(byteArrayOf(index.toByte())).toString(),
+                    "\u001f".repeat(requestedResearchTitleChars), "a".repeat(requestedResearchUrlChars), 0,
+                    publishedAt = Instant.EPOCH, snippet = "\u001f".repeat(requestedResearchSnippetChars))
+                Signal(item, ClassifiedItem(item.key, "market-signal", 10.0, "", "\u001f".repeat(180),
+                    List(5) { "\u001f".repeat(30) }, "a".repeat(80), "\u001f".repeat(80)))
+            }
+            var classificationUsd = 0.0
+            if (research) Classifier(config, ProfileLoader.loadDefaults(), prompts, router).classify(
+                researchEstimateSignals.map { it.item }, emptyList(), emptyList(),
+                quoteOnly = { classificationUsd += router.projectedTokens(it, config.models.classify) })
+            val quotedSignals = if (!research) evidence.signals else evidence.signals.map { signal ->
+                if (sourceAdapters != null || evidence.selected.none { it.item.key == signal.item.key } || signal.item.source !in setOf("hn", "reddit")) signal else signal.copy(
+                    enrichedComments = List(config.commentsPerItem) {
+                        collector.model.Comment("\u001f".repeat(requestedCommentAuthorChars), "\u001f".repeat(requestedCommentTextChars))
+                    })
+            } + researchEstimateSignals
+            IdeaGenerator(config, prompts, router).generate(date.toString(), citableRequestedSignals(quotedSignals, merged), hits, feedback,
+                recentTitles, merged = merged, batchAllowed = false, quoteOnly = { request ->
+                    val generationUsd = router.projectedGeneration(request, config.models.generate, research)
+                    val baseUsd = generationUsd + classificationUsd
+                    estimate = baseUsd + if (research) router.projectedSupplement(
+                        searchUser, config.supplementSearch, checkNotNull(searchModel)) else 0.0
+                    if (research) researchMaxUsd = baseUsd + router.projectedSupplement(
+                        searchUser, config.supplementSearch, checkNotNull(searchModel), upperEstimate = true)
+                })
+        }
+        val monthBlocked = monthly.requestedBlocked(LocalDate.now(clock)) ||
+            approvedDay?.let(monthly::requestedBlocked) == true
+        val block = when {
+            recoveryPending -> RequestedCardBlock.RECOVERY_PENDING
+            selected.size != keys.size -> RequestedCardBlock.PRIVATE_URL
+            monthBlocked -> RequestedCardBlock.MONTHLY_BLOCK
+            research && searchModel == null -> RequestedCardBlock.RESEARCH_UNSUPPORTED
+            monthlyRemaining <= 0.0 -> RequestedCardBlock.MONTHLY_LIMIT
+            dailyRemaining <= 0.0 -> RequestedCardBlock.DAILY_LIMIT
+            estimate == null -> RequestedCardBlock.INSUFFICIENT_EVIDENCE
+            estimate <= remaining -> null
+            remaining == monthlyRemaining -> RequestedCardBlock.MONTHLY_LIMIT
+            remaining == dailyRemaining -> RequestedCardBlock.DAILY_LIMIT
+            else -> RequestedCardBlock.REQUEST_LIMIT
+        }
+        val budgetBlocks = setOf(RequestedCardBlock.DAILY_LIMIT, RequestedCardBlock.MONTHLY_LIMIT, RequestedCardBlock.REQUEST_LIMIT)
+        val plainExceedsBudget = if (research && block in budgetBlocks && evidence.sufficient &&
+            dailyRemaining > 0.0 && monthlyRemaining > 0.0) {
+            var plainUsd = 0.0
+            val plainConfig = config.copy(supplementSearch = config.supplementSearch.copy(enabled = false))
+            IdeaGenerator(plainConfig, prompts, router).generate(date.toString(),
+                citableRequestedSignals(evidence.signals, merged), hits, feedback, recentTitles,
+                merged = merged, batchAllowed = false,
+                quoteOnly = { plainUsd = router.projectedGeneration(it, config.models.generate, false) })
+            plainUsd > remaining
+        } else false
+        val quote = RequestedCardEstimate(evidence.added, evidence.sufficient, estimate,
+            block == null, remaining, dailyRemaining, budget.requestCardUsd, budget.requestDailyUsd, block, researchMaxUsd,
+            searchModel != null, monthBlocked || dailyRemaining <= 0.0 || monthlyRemaining <= 0.0 ||
+                plainExceedsBudget || !research && block in budgetBlocks)
+        return RequestedPlan(quote, config, prompts, evidence, hits, recent, ledger, monthly, searchUser,
+            feedback, recentTitles, merged)
+    }
+
+    private data class RequestedPlan(
+        val quote: RequestedCardEstimate, val config: PipelineConfig, val prompts: PromptResolver,
+        val evidence: RequestedEvidence, val hits: Map<String, List<collector.stage.HistoryHit>>,
+        val recent: List<collector.model.IdeaCard>, val ledger: CostLedger, val monthly: MonthlyBudget,
+        val searchUser: String, val feedback: List<String>, val recentTitles: List<String>,
+        val merged: Map<String, List<Signal>>
+    )
+
+    suspend fun estimateRequestedCards(date: LocalDate, keys: List<String>, research: Boolean): RequestedCardEstimate =
+        prepareRequestedCards(date, keys, research).quote
+
+    suspend fun runRequestedCards(date: LocalDate, keys: List<String>, research: Boolean, approvedMaxUsd: Double,
+        onLockAcquired: () -> Unit = {}, mailEnabled: () -> Boolean = { false }): RequestedCardResult = locked {
+        onLockAcquired()
+        require(approvedMaxUsd.isFinite() && approvedMaxUsd >= 0)
+        val approvedDay = LocalDate.now(clock)
+        val plan = prepareRequestedCards(date, keys, research, approvedDay)
+        val quote = plan.quote
+        check(quote.block != RequestedCardBlock.RECOVERY_PENDING)
+        if (!quote.allowed || checkNotNull(quote.estimatedUsd) > approvedMaxUsd)
+            return@locked RequestedCardResult(retryAllowed = true, requote = quote)
+        val approvedUsd = minOf(quote.maxUsd, approvedMaxUsd)
+        val guard = CostGuard(approvedUsd, clock = clock, ledger = plan.ledger,
+            budgetPerRun = true, onOversettlement = { ledgerDay, settledUsd ->
+                plan.monthly.blockRequested(ledgerDay, approvedUsd, settledUsd)
+            }, allowsReservation = { day, amount ->
+                !plan.monthly.requestedBlocked(day) &&
+                    (day == approvedDay || !plan.monthly.requestedBlocked(approvedDay)) &&
+                    amount <= quote.dailyLimitUsd - plan.ledger.total(day) && plan.monthly.allows(day, amount)
+            })
+        val model = plan.config.models.generate
+        val searchModel = plan.config.models.classify
+        val providers = dailyProviders?.invoke() ?: (listOf(model) + listOf(searchModel).filter { research })
+            .distinctBy { it.provider }.mapNotNull {
+                secrets.get("${it.provider.name}_API_KEY")?.let { key -> providerFactory(it.provider, key) }
+            }
+        try {
+            if (providers.none { it.id == model.provider } ||
+                research && providers.none { it.id == searchModel.provider && it is WebSearchProvider })
+                return@locked RequestedCardResult(failure = "설정한 공급자를 사용할 수 없습니다.", retryAllowed = true)
+            val router = LlmRouter(providers, guard, mapOf("generate" to model, "classify" to searchModel),
+                fallback = false, preflightBudget = true, batchEnabled = false, strictRequestBudget = true)
+            val localSignals = if (research && sourceAdapters == null) {
+                val http = Http.client()
+                try {
+                    val fetcher = CommentFetcher(http, plan.config.commentsPerItem, RedditAdapter(http, secrets))
+                    plan.evidence.signals.map { signal ->
+                        if (plan.evidence.selected.none { it.item.key == signal.item.key }) signal
+                        else signal.copy(enrichedComments = boundedRequestedComments(fetcher.fetch(signal.item), plan.config.commentsPerItem).ifEmpty { signal.enrichedComments })
+                    }
+                } finally {
+                    http.connectionPool.evictAll()
+                    http.dispatcher.executorService.shutdown()
+                }
+            } else plan.evidence.signals
+            val researched = if (research) try {
+                router.supplementSearch(plan.searchUser, plan.config.supplementSearch).filter { publicRequestedUrl(it.url) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                return@locked RequestedCardResult(failure = "보충 검색에 실패했습니다.", retryAllowed = guard.calls.isEmpty())
+            } else emptyList()
+            val knownUrls = localSignals.flatMap { listOf(it.item.url) + it.item.mergedUrls }
+                .map(UrlNormalizer::normalize).toSet()
+            val researchItems = researched.asSequence().mapNotNull { ref ->
+                val url = ref.url.toHttpUrlOrNull() ?: return@mapNotNull null
+                if (url.username.isNotEmpty() || url.password.isNotEmpty() || url.toString().length > requestedResearchUrlChars) return@mapNotNull null
+                val normalized = UrlNormalizer.normalize(url.toString())
+                if (normalized in knownUrls || ref.title.isBlank()) return@mapNotNull null
+                Item("web", UUID.nameUUIDFromBytes(normalized.toByteArray()).toString(), ref.title.take(requestedResearchTitleChars),
+                    url.toString(), 0, publishedAt = clock.instant(), snippet = ref.note.take(requestedResearchSnippetChars))
+            }.distinctBy { it.key }.take(3).toList()
+            val webClassification = if (researchItems.isEmpty()) null else
+                Classifier(plan.config, ProfileLoader.loadDefaults(), plan.prompts, router)
+                    .classify(researchItems, emptyList(), emptyList(), singleAttempt = true)
+            if (webClassification?.dropped.orEmpty().any { it.reason in setOf(DropReason.CLASSIFY_FAILED, DropReason.BUDGET_EXCEEDED) })
+                return@locked RequestedCardResult(failure = "추가 조사 자료를 분류하지 못했습니다.", retryAllowed = guard.calls.isEmpty())
+            val webSignals = webClassification?.signals.orEmpty()
+                    .filter { signal ->
+                        val row = signal.classification
+                        plan.config.profiles[row.profile]?.let { (row.score ?: 0.0) >= it.threshold } == true
+                    }
+                    .map { signal ->
+                        val row = signal.classification
+                        signal.copy(classification = row.copy(summary = row.summary.take(180), tags = row.tags.take(5).map { it.take(30) },
+                            topicKey = row.topicKey.take(80), topicLabel = row.topicLabel.take(80)))
+                    }
+            val signals = citableRequestedSignals(localSignals + webSignals, plan.merged)
+            if (!RequestedEvidence(signals, emptyList()).sufficient)
+                return@locked RequestedCardResult(failure = "추가 조사 후에도 근거가 부족합니다.", retryAllowed = guard.calls.isEmpty())
+            val generator = IdeaGenerator(plan.config, plan.prompts, router)
+            val generated = generator.generate(date.toString(), signals, plan.hits, plan.feedback, plan.recentTitles,
+                merged = plan.merged, batchAllowed = false, singleAttempt = true, researchedRefs = researched)
+            val selectedKeys = plan.evidence.selected.map { it.item.key }.toSet()
+            val cards = CardValidator(plan.config, generator.categories.map { it.id }.toSet())
+                .validate(generated.cards, CitationValidator(signals, plan.merged)).filter { card ->
+                    fun refs(value: collector.model.IdeaCard) =
+                        (value.techSignals + value.demandSignals + value.competitors).map { it.itemId }.toSet()
+                    val cited = refs(card)
+                    cited.any { it in selectedKeys } && plan.recent.none { refs(it) == cited || it.title == card.title }
+                }.map { it.copy(badges = it.badges + "내가 고른 카드") }
+            if (cards.isEmpty()) return@locked RequestedCardResult(failure = generated.failure ?: "검증을 통과한 카드가 없습니다.",
+                retryAllowed = guard.calls.isEmpty())
+            val report = RunReport(date.toString(), clock.instant().toString(), emptyList(), emptyList(),
+                emptyMap(), 0, llmCalls = guard.calls, cardCount = cards.size)
+            val record = PipelineResult(signals.map { it.item }, emptyList(), report, classified = signals, cards = cards)
+            out.resolve("requested/$date-${UUID.randomUUID()}.json").writeAtomically(outputJson.encodeToString(record))
+            val mailFailed = if (mailEnabled()) runCatching {
+                val rendered = HtmlRenderer(generator.categories).render(record)
+                if (mailEnabled()) checkNotNull(createMailer()).send(MailMessage(rendered.subject, rendered.html, rendered.text))
+            }.onFailure { if (it is CancellationException) throw it }.isFailure else false
+            RequestedCardResult(cards.map { it.id }, mailFailed = mailFailed)
+        } finally {
+            providers.forEach { (it as? AutoCloseable)?.close() }
+        }
+    }
+    private fun publicRequestedUrl(value: String): Boolean {
+        val url = value.toHttpUrlOrNull() ?: return false
+        return url.username.isEmpty() && url.password.isEmpty() && (0 until url.querySize).none(url::hasPrivateRssQuery)
+    }
+
+    private fun citableRequestedSignals(signals: List<Signal>, merged: Map<String, List<Signal>>) =
+        signals.map { signal ->
+            val urls = merged[signal.item.key].orEmpty().map { it.item.url }.toSet()
+            signal.copy(item = signal.item.copy(mergedUrls = signal.item.mergedUrls.filter { it in urls }))
+        }
+
+    private fun requestedMergedMembers(runs: List<PipelineResult>, signals: List<Signal>): Map<String, List<Signal>> {
+        val keys = signals.filter { it.item.mergedUrls.isNotEmpty() }.map { it.item.key }.toSet()
+        return runs.flatMap { run ->
+            val classified = run.classified.associateBy { it.item.key }
+            run.dropped.mapNotNull { drop ->
+                if (drop.reason != DropReason.SAME_TOPIC || drop.detail !in keys || !publicRequestedUrl(drop.item.url))
+                    return@mapNotNull null
+                classified[drop.item.key]?.let { drop.detail to it.copy(item = drop.item.copy(mergedUrls = emptyList())) }
+            }
+        }.groupBy({ it.first }, { it.second })
+    }
+
     private fun pipelineConfig() = PipelineConfig.load(paths.pipelineConfig)
     private fun createMailer() = if (mailer == null) SmtpMailer.from(secrets) else mailer.invoke()
 
@@ -168,7 +472,8 @@ class CollectorRuntime(
                 try {
                     published = executeDaily(emptyArray(), start, print = {}, summary = { result = it },
                         deadlineClock = deadlineClock, options = DailyOptions(batchOverride = options.batchOverrideForRun?.invoke() ?: options.batchOverride,
-                            deadline = options.deadline, onStage = options.onStage, sources = sources, deferBatch = options.deferBatch),
+                            deadline = options.deadline, onStage = options.onStage, sources = sources, deferBatch = options.deferBatch,
+                            includeMailCandidates = options.includeMailCandidates),
                         runDate = options.runDate,
                         onUnpublishedBatch = options.onUnpublishedBatch,
                         beforePublish = { day ->
@@ -339,7 +644,7 @@ class CollectorRuntime(
         val guard = CostGuard(budget.dailyCardUsd, clock = clock,
             ledger = costLedger(out, FileHistorySearch(out, pipelineConfig().historyDays)), allowsReservation = monthly::allows)
         val projection = LlmRouter(emptyList(), guard).projectedTokens(request, model)
-        if (projection > budget.dailyCardUsd - dailyCost(LocalDate.now(clock)) ||
+        if (projection > dailyCardBudgetRemaining(LocalDate.now(clock)) ||
             !monthly.allows(LocalDate.now(clock), projection)) throw BudgetExceededException()
         require(projection <= approvedUsd)
         val providers = dailyProviders?.invoke() ?: listOf(providerFactory(model.provider,
@@ -406,11 +711,16 @@ class CollectorRuntime(
 
     fun dailyCost(date: LocalDate): Double = collector.dev.FileCostLedger(out.resolve("cost-ledger")).total(date)
 
+    fun dailyCardBudgetRemaining(date: LocalDate): Double {
+        val budget = BudgetSettings.load(out) {}
+        val spend = costLedger(out, FileHistorySearch(out, pipelineConfig().historyDays)).total(date)
+        return (budget.dailyCardUsd - spend).coerceAtLeast(0.0)
+    }
+
     fun dailyBudgetExceeded(date: LocalDate): Boolean {
         val settings = BudgetSettings.load(out) {}
         val monthly = MonthlyBudget(out, settings)
-        val spend = costLedger(out, FileHistorySearch(out, pipelineConfig().historyDays)).total(date)
-        return spend >= settings.dailyCardUsd || monthly.dailySkipReason(date, settings.dailyCardUsd) != null
+        return dailyCardBudgetRemaining(date) <= 0.0 || monthly.dailySkipReason(date, settings.dailyCardUsd) != null
     }
 
     suspend fun applyLocalChanges(changes: List<collector.data.InboxRequest>) = locked {
@@ -713,7 +1023,8 @@ class CollectorRuntime(
                 archiveFailedRun(out, result)
                 return false
             }
-            val renderer = HtmlRenderer(IdeaGenerator(defaults, prompts, router).categories)
+            val renderer = HtmlRenderer(IdeaGenerator(defaults, prompts, router).categories,
+                includeCandidates = options.includeMailCandidates)
             val rendered = publishOrArchiveFailure(out, history, renderer, result, keepUnseen, beforePublish)
             router.markAppliedBatchesConsumed()
             if (router.remainingMillis() == 0L) {

@@ -11,6 +11,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlin.math.ceil
 
+private const val requestedSearchInputTokens = 100_000L // 화면의 "최대 약" 금액과 같은 기준으로 예약해 초과 폭을 줄인다
 internal const val supplementCount = 3
 internal const val supplementTitleChars = 120
 internal const val supplementNoteChars = 300
@@ -49,6 +50,7 @@ class LlmRouter(
     private val preflightBudget: Boolean = false,
     private val batchCheckpointHook: () -> Boolean = { true },
     private val batchEnabled: Boolean = true,
+    private val strictRequestBudget: Boolean = false,
     private val deferBatch: Boolean = false
 ) {
     private val providers = providers.associateBy { it.id }
@@ -150,25 +152,36 @@ class LlmRouter(
         return outcome
     }
 
+    private fun supplementRequest(user: String, model: StageModel) = LlmRequest(model.model,
+        "주어진 주제와 관련된 기술, 사용자 요청, 제품을 웹에서 검색한다. 검색 결과의 URL과 제목, " +
+            "관련성을 한 줄로 설명한 note를 {url, title, note} 객체 배열로 반환한다.",
+        user, kotlinx.serialization.json.JsonObject(emptyMap()), "supplement-search", 1024, Effort.LOW)
+
+    internal fun projectedSupplement(user: String, config: PipelineConfig.Search, model: StageModel, upperEstimate: Boolean = false): Double =
+        projectedTokens(supplementRequest(user, model), model, extraInput = when {
+            strictRequestBudget -> config.maxUses * requestedSearchInputTokens
+            else -> config.maxUses * 8192L
+        }) + catalog.requirePrice(model.provider, model.model).webSearchUsd * config.maxUses
+
+    internal fun projectedGeneration(request: LlmRequest, model: StageModel, research: Boolean): Double =
+        projectedTokens(request, model, extraInput = if (research) supplementInputHeadroom else 0L)
+
     internal suspend fun supplementSearch(
         user: String, config: PipelineConfig.Search, promptVersion: String = "default",
         generationRequest: LlmRequest? = null
     ): List<SupplementRef> {
         if (!config.enabled || config.maxUses <= 0) return emptyList()
-        val model = primary("classify", "classify")
+        val classify = primary("classify", "classify")
+        val model = if (strictRequestBudget) catalog.cheapestWebSearchModel(classify.provider) ?: return emptyList() else classify
         val provider = providers[model.provider] as? WebSearchProvider ?: return emptyList()
-        val request = LlmRequest(model.model,
-            "주어진 주제와 관련된 기술, 사용자 요청, 제품을 웹에서 검색한다. 검색 결과의 URL과 제목, " +
-                "관련성을 한 줄로 설명한 note를 {url, title, note} 객체 배열로 반환한다.",
-            user, kotlinx.serialization.json.JsonObject(emptyMap()), "supplement-search", 1024, Effort.LOW)
+        val request = supplementRequest(user, model)
         val price = catalog.requirePrice(model.provider, model.model)
         val call = LlmCall("supplement-search", model.provider, model.model, "ideas", promptVersion)
         val generationHeadroom = if (generationRequest != null)
             projectedTokens(generationRequest, primary("generate", "ideas"), extraInput = supplementInputHeadroom) else 0.0
         val timeout = minOf(stageTimeoutMillis["classify"] ?: timeoutMillis ?: 60_000, remainingMillis())
         if (timeout <= 0) throw LlmServiceException(reason = "timeout")
-        val reservation = costGuard.reserve(projectedTokens(request, model, extraInput = config.maxUses * 8192L) +
-            price.webSearchUsd * config.maxUses, headroomUsd = generationHeadroom)
+        val reservation = costGuard.reserve(projectedSupplement(user, config, model), headroomUsd = generationHeadroom)
         var settlement = call.copy(costUsd = reservation.amount, error = "provider_error",
             priceUnverified = !price.priceVerified || !price.webSearchPriceVerified)
         try {
@@ -236,7 +249,10 @@ class LlmRouter(
 
     internal fun projectedTokens(request: LlmRequest, model: StageModel, extraInput: Long = 0): Double {
         val price = catalog.requirePrice(model.provider, model.model)
-        val input = estimateInputTokens(request.system, request.user, request.jsonSchema.toString()) + 1024L + extraInput
+        val texts = arrayOf(request.system, request.user, request.jsonSchema.toString())
+        val estimatedInput = estimateInputTokens(*texts)
+        val input = (if (strictRequestBudget) ceil(estimatedInput * 1.5).toLong()
+            else estimatedInput.toLong()) + 1024L + extraInput
         val long = price.longContext?.takeIf { input > it.thresholdInputTokens }
         val inputRate = long?.input ?: price.inputUsd
         val maxInputRate = if (model.provider == ProviderId.ANTHROPIC)

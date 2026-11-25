@@ -2,9 +2,11 @@ package collector.report
 
 import collector.pipeline.PipelineResult
 import collector.stage.Category
+import collector.runtime.candidateView
 import collector.model.TrackedIdea
 import collector.model.SignalRef
 import collector.source.GitHubIssuesAdapter
+import collector.source.hasPrivateRssQuery
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.time.LocalDate
 import java.util.Locale
@@ -13,7 +15,8 @@ import collector.report.MailTheme as T
 /**
  * 일일 아이디어 메일. [appLinks] = "앱에서 보기"(ideacollector://) 링크 — 앱이 나오기 전에는 끈다(2026-11-23 결정, 4단계에서 켬).
  */
-class HtmlRenderer(categories: List<Category>, private val appLinks: Boolean = false) {
+class HtmlRenderer(categories: List<Category>, private val appLinks: Boolean = false,
+                   private val includeCandidates: Boolean = false) {
     private val names = categories.associate { it.id to it.name }
 
     data class Rendered(val subject: String, val html: String, val text: String)
@@ -28,13 +31,32 @@ class HtmlRenderer(categories: List<Category>, private val appLinks: Boolean = f
         val costs = "오늘 비용 ${usd(todayCost)} · 이번 달 합계 ${usd(monthCost)} · 실행 시간 ${report.totalMillis}ms"
         val batchWait = (report.classificationBatchWaitMillis / 60_000).takeIf { it > 0 }?.let { "분류 Batch 대기 ${it}분" }
         val titles = result.tracked.associate { it.id to it.title }
+        val unused = if (includeCandidates) candidateView(result).candidates.filterNot { it.usedInCard }.take(15)
+            .map { entry ->
+                val (item, classification) = entry.signal
+                val profile = when (classification.profile) {
+                    "tech-signal" -> "쓸 수 있는 기술"
+                    "demand-signal" -> "사람들의 요청·불편"
+                    "market-signal" -> "이미 나온 제품"
+                    else -> ""
+                }
+                val summary = classification.summary.ifBlank { item.title }.lineSequence().first()
+                val score = classification.score?.let(::strength).orEmpty()
+                // 원문 URL에 인증값(사용자 정보·민감 쿼리)이 있으면 메일에 싣지 않는다.
+                val safeUrl = item.url.toHttpUrlOrNull()?.takeIf { url ->
+                    url.username.isEmpty() && url.password.isEmpty() &&
+                        (0 until url.querySize).none { url.hasPrivateRssQuery(it) }
+                }?.toString()
+                Triple(summary, listOf(profile, score.takeIf { it.isNotBlank() }?.plus("점").orEmpty())
+                    .filter { it.isNotBlank() }.joinToString(" · "), safeUrl)
+            } else emptyList()
         val text = buildString {
             appendLine(subject)
             appendLine("단계별 건수 · $funnel")
             batchWait?.let { appendLine(it) }
             if (failures.isNotEmpty()) appendLine("실패 출처 · $failures · 나머지 출처로 만들었습니다")
             report.issues.forEach { appendLine(it) }
-            appendLine("\n목차")
+            if (result.cards.isNotEmpty()) appendLine("\n목차")
             result.cards.forEachIndexed { index, card ->
                 appendLine("${index + 1}. ${card.title} · ${names[card.category]} ${card.badges.joinToString(" · ")}".trimEnd())
             }
@@ -50,6 +72,10 @@ class HtmlRenderer(categories: List<Category>, private val appLinks: Boolean = f
                 appendLine("가장 큰 위험 · ${card.biggestRisk}")
                 if (appLinks) appendLine("앱에서 보기 · ideacollector://card/${card.id}")
             }
+            if (unused.isNotEmpty()) {
+                appendLine("\n오늘 후보(카드 안 된 것)")
+                unused.forEach { (summary, meta, url) -> appendLine("$summary\n$meta" + url?.let { " · 원문 열기 · $it" }.orEmpty()) }
+            }
             appendLine("\n추적 업데이트")
             if (result.trackingUpdates.isEmpty()) appendLine("추적 중인 아이디어에 오늘 새 소식이 없습니다")
             result.trackingUpdates.forEach {
@@ -64,12 +90,14 @@ class HtmlRenderer(categories: List<Category>, private val appLinks: Boolean = f
             if (failures.isNotEmpty()) appendLine(T.banner("실패 출처 · ${escape(failures)} · 나머지 출처로 만들었습니다", T.Tone.WARNING))
             batchWait?.let { appendLine("<p style=\"${T.meta}\">$it</p>") }
             report.issues.forEach { appendLine(T.banner(escape(it), T.Tone.INFO)) }
-            appendLine("<h2 style=\"${T.h2}\">목차</h2><ol style=\"margin:0 0 8px;padding-left:20px\">")
-            result.cards.forEach { card ->
-                appendLine("<li style=\"margin:0 0 6px\"><a href=\"#${escape(card.id)}\" style=\"${T.link}\">${escape(card.title)}</a> " +
-                    pills(card.category, card.badges) + "</li>")
+            if (result.cards.isNotEmpty()) {
+                appendLine("<h2 style=\"${T.h2}\">목차</h2><ol style=\"margin:0 0 8px;padding-left:20px\">")
+                result.cards.forEach { card ->
+                    appendLine("<li style=\"margin:0 0 6px\"><a href=\"#${escape(card.id)}\" style=\"${T.link}\">${escape(card.title)}</a> " +
+                        pills(card.category, card.badges) + "</li>")
+                }
+                appendLine("</ol>")
             }
-            appendLine("</ol>")
             for ((index, card) in result.cards.withIndex()) {
                 val inner = buildString {
                     append("<h3 style=\"${T.h3}\">${index + 1}. ${escape(card.title)}</h3>")
@@ -99,6 +127,15 @@ class HtmlRenderer(categories: List<Category>, private val appLinks: Boolean = f
                 }
                 appendLine(T.card(inner, id = escape(card.id)))
             }
+            if (unused.isNotEmpty()) {
+                appendLine("<h2 style=\"${T.h2}\">오늘 후보(카드 안 된 것)</h2>")
+                unused.forEach { (summary, meta, url) ->
+                    val href = url?.toHttpUrlOrNull()
+                    val original = if (href == null) "" else " · <a href=\"${escape(href.toString())}\" style=\"${T.link}\">원문 열기</a>"
+                    appendLine("<p style=\"${T.p}\"><strong style=\"${T.strong}\">${escape(summary)}</strong><br>" +
+                        "<span style=\"${T.meta}\">${escape(meta)}$original</span></p>")
+                }
+            }
             appendLine("<h2 style=\"${T.h2}\">추적 업데이트</h2>")
             if (result.trackingUpdates.isEmpty()) appendLine("<p style=\"${T.meta}\">추적 중인 아이디어에 오늘 새 소식이 없습니다</p>")
             result.trackingUpdates.forEach {
@@ -124,7 +161,7 @@ class HtmlRenderer(categories: List<Category>, private val appLinks: Boolean = f
             badges.map { T.pill(escape(it), T.Tone.HIGHLIGHT) }).joinToString(" ")
     private fun escape(text: String) = text.replace("&", "&amp;").replace("<", "&lt;")
         .replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&#39;")
-    private fun usd(cost: Double) = String.format(Locale.ROOT, "$%.5f", cost)
+    private fun usd(cost: Double) = String.format(Locale.ROOT, "$%.2f", cost)
     private fun strength(value: Double) = String.format(Locale.ROOT, "%.1f", value)
     private fun arrow(trend: TrackedIdea.Trend) = when (trend) {
         TrackedIdea.Trend.UP -> "↑"

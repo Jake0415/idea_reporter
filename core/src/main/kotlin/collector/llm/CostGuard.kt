@@ -49,6 +49,7 @@ class CostGuard(
     initialSpentUsd: Double = 0.0,
     private val ledger: CostLedger? = null,
     private val budgetPerRun: Boolean = false,
+    private val onOversettlement: ((LocalDate, Double) -> Unit)? = null,
     private val allowsReservation: (LocalDate, Double) -> Boolean = { _, _ -> true }
 ) {
     @Serializable
@@ -61,6 +62,7 @@ class CostGuard(
     private val pendingBatchReservations = mutableSetOf<String>()
     private var date = LocalDate.now(clock)
     private var spent = initialSpentUsd
+    private var settledUsd = 0.0
     private var ledgerLoaded = budgetPerRun || ledger == null
 
     init {
@@ -124,6 +126,12 @@ class CostGuard(
                 spent = ledger.total(date)
             } else if (budgetPerRun || reservation == null || reservation.day == date) {
                 spent += maxOf(call.costUsd, reservedUsd) - (reservation?.amount ?: 0.0)
+            }
+            if (reservation != null && settled && onOversettlement != null) {
+                val previous = settledUsd
+                settledUsd += call.costUsd
+                if (previous <= dailyBudgetUsd && settledUsd > dailyBudgetUsd)
+                    onOversettlement(reservation.day, settledUsd)
             }
             synchronized(history) { history.add(if (reservedUsd > call.costUsd) call.copy(reservedUsd = reservedUsd) else call) }
         }

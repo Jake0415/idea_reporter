@@ -374,6 +374,8 @@ private fun workflowMailPublisher(out: File, prompts: File): (MailDelivery.Attem
 private fun cliDeadline(): Duration? =
     if (System.getenv("COLLECTOR_JOB_STARTED_AT") != null) Duration.ofMinutes(150 - 20) else null
 
+internal fun requestedCostLedger(out: File) = FileCostLedger(out.resolve("cost-ledger-requested"))
+
 internal fun costLedger(out: File, history: FileHistorySearch) = FileCostLedger(out.resolve("cost-ledger")) { day ->
     val prior = history.runs(day.plusDays(1), 1).firstOrNull()
     history.archivedCost(day, day, reserved = true, skipStartedAt = prior?.report?.startedAt) +

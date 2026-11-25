@@ -12,7 +12,6 @@ import androidx.compose.runtime.saveable.listSaver
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
-import collector.budget.BudgetSettings
 import app.ideacollector.work.CollectorRunService
 import java.time.LocalDate
 import androidx.compose.ui.res.stringResource
@@ -75,8 +74,7 @@ internal fun PromptTrial(app: CollectorApp, viewModel: ScreensViewModel, data: S
             try {
                 val answer = withContext(Dispatchers.IO) {
                     val runtime = app.runtime()
-                    val limit = BudgetSettings.load(app.paths.outDir) {}.dailyCardUsd
-                    runtime.estimatePromptTrial(id, body, items) to (limit - runtime.dailyCost(LocalDate.now())).coerceAtLeast(0.0)
+                    runtime.estimatePromptTrial(id, body, items) to runtime.dailyCardBudgetRemaining(LocalDate.now())
                 }
                 state.draft = body
                 state.itemKeys = ArrayList(items.map { it.key })

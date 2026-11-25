@@ -19,7 +19,9 @@ data class BudgetSettings(
     val backfillRunUsd: Double = 0.50,
     val monthlyTotalUsd: Double? = null,
     val warnAtPercent: Int = 80,
-    val overBudget: OverBudget = OverBudget.ASK
+    val overBudget: OverBudget = OverBudget.ASK,
+    val requestCardUsd: Double = 0.50,
+    val requestDailyUsd: Double = 1.00
 ) {
     companion object {
         private fun file(out: File) = out.resolve("settings/budget.json")
@@ -71,7 +73,7 @@ data class BudgetSettings(
         }
 
         private val keys = setOf("dailyCardUsd", "analysisRequestUsd", "analysisMonthlyUsd", "backfillRunUsd",
-            "monthlyTotalUsd", "warnAtPercent", "overBudget")
+            "monthlyTotalUsd", "warnAtPercent", "overBudget", "requestCardUsd", "requestDailyUsd")
 
         internal fun update(out: File, values: JsonObject) {
             require(values.isNotEmpty() && values.keys.all { it in keys })
@@ -94,6 +96,8 @@ data class BudgetSettings(
         }
         return when (key) {
             "dailyCardUsd" -> copy(dailyCardUsd = amount())
+            "requestCardUsd" -> copy(requestCardUsd = amount())
+            "requestDailyUsd" -> copy(requestDailyUsd = amount())
             "analysisRequestUsd" -> copy(analysisRequestUsd = amount())
             "analysisMonthlyUsd" -> copy(analysisMonthlyUsd = amount())
             "backfillRunUsd" -> copy(backfillRunUsd = amount())

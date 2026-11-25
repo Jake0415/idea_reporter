@@ -172,11 +172,11 @@ private val secureInputs = mutableMapOf<android.view.Window, Pair<Int, Boolean>>
     }
 }
 
-@Composable internal fun RunOption(label: Int, enabled: Boolean, change: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).toggleable(enabled, role = Role.Switch, onValueChange = change),
+@Composable internal fun RunOption(label: Int, enabled: Boolean, interactive: Boolean = true, change: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).toggleable(enabled, enabled = interactive, role = Role.Switch, onValueChange = change),
         horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(stringResource(label), Modifier.weight(1f))
-        Switch(enabled, onCheckedChange = null)
+        Switch(enabled, onCheckedChange = null, enabled = interactive)
     }
 }
 

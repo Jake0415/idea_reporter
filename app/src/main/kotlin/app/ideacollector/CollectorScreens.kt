@@ -32,7 +32,7 @@ import kotlinx.coroutines.launch
 
 internal enum class Page(val title: Int) {
     TODAY(R.string.today_title), TRACK(R.string.track), ARCHIVE(R.string.archive), SETTINGS(R.string.settings),
-    CARD(R.string.card), TRACK_DETAIL(R.string.track_detail), RUNS(R.string.runs),
+    CARD(R.string.card), CANDIDATES(R.string.candidates_title), TRACK_DETAIL(R.string.track_detail), RUNS(R.string.runs),
     RUN_DETAIL(R.string.run_detail), PROMPTS(R.string.prompts), PROMPT_EDIT(R.string.prompt_edit),
     OPERATE(R.string.operate), SOURCES(R.string.sources), CRITERIA(R.string.criteria), ABOUT(R.string.about),
     SOURCE_DETAIL(R.string.sources), ANALYSIS(R.string.analysis_title), ANALYSIS_RESULT(R.string.r3_analysis_result)
@@ -260,7 +260,7 @@ internal fun CollectorScreens(app: CollectorApp, viewModel: ScreensViewModel, de
         }, modifier = Modifier.padding(padding).consumeWindowInsets(padding).fillMaxSize()) {
             key(route.page.name, route.id) {
                 val scroll = rememberScrollState()
-                val content = if (route.page in setOf(Page.SOURCE_DETAIL, Page.PROMPT_EDIT)) Modifier else Modifier.verticalScroll(scroll)
+                val content = if (route.page in setOf(Page.SOURCE_DETAIL, Page.PROMPT_EDIT, Page.CANDIDATES)) Modifier else Modifier.verticalScroll(scroll)
                 val keyboard = if (route.page in setOf(Page.OPERATE, Page.CRITERIA, Page.PROMPT_EDIT)) {
                     Modifier.imePadding()
                 } else Modifier
@@ -296,6 +296,7 @@ internal fun CollectorScreens(app: CollectorApp, viewModel: ScreensViewModel, de
                             }
                             Page.TRACK -> Tracks(data, open, send, retry)
                             Page.ARCHIVE -> Archive(dao, repo, data, open, send, retry, undo)
+                            Page.CANDIDATES -> CandidatesScreen(route.id, data.daily, app, sample, open)
                             Page.CARD -> CardDetail(data, route.id, open, send, retry, undo)
                             Page.TRACK_DETAIL -> TrackDetail(data, route.id, open, send, retry)
                             Page.SETTINGS -> {

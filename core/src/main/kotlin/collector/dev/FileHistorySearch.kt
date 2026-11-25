@@ -48,6 +48,8 @@ class FileHistorySearch(private val out: File, private val historyDays: Int) : R
 
     override fun cardRun(cardId: String): PipelineResult? =
         runsByDate.values.firstOrNull { run -> run.cards.any { it.id == cardId } }
+            ?: archives("requested").asSequence().mapNotNull { readJson<PipelineResult>(it) }
+                .firstOrNull { run -> run.cards.any { it.id == cardId } }
             ?: archives().asSequence().mapNotNull { readJson<PipelineResult>(it) }
                 .firstOrNull { run -> run.cards.any { it.id == cardId } }
 

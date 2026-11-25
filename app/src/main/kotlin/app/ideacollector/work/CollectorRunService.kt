@@ -40,6 +40,9 @@ class CollectorRunService : Service() {
         }
         RunNotifications.channel(this)
         if (app.recovery.value != BackupRecovery.READY) {
+            if (intent?.hasExtra("requestedKeys") == true)
+                requestedOutcome.value = collector.runtime.RequestedCardResult(
+                    failure = getString(R.string.backup_recovery_pending), retryAllowed = true)
             if (promote(RunNotifications.notification(this, getString(R.string.backup_recovery_pending)).build())) {
                 stopForeground(STOP_FOREGROUND_REMOVE)
             }
@@ -49,6 +52,8 @@ class CollectorRunService : Service() {
         runCatching { app.schedule.clearBatteryExemptionIfGranted() }
         val firstRun = intent?.getBooleanExtra("firstRun", false) == true
         val themes = intent?.getStringArrayListExtra("themes")
+        val requestedKeys = intent?.getStringArrayListExtra("requestedKeys")
+        val daily = themes == null && requestedKeys == null
         if (!app.operationRunning.compareAndSet(expect = false, update = true)) {
             intent?.getStringExtra("date")?.let(LocalDate::parse)?.let { date ->
                 app.appScope.launch {
@@ -56,6 +61,7 @@ class CollectorRunService : Service() {
                 }
             }
             if (themes != null) analysisOutcome.value = collector.runtime.AnalysisSummary(false, failure = getString(R.string.run_already_running))
+            if (requestedKeys != null) requestedOutcome.value = collector.runtime.RequestedCardResult(failure = getString(R.string.run_already_running), retryAllowed = true)
             if (firstRun) dailyOutcome.value = DailyOutcome(false, R.string.run_already_running)
             alreadyRunning()
             if (!foreground) {
@@ -77,16 +83,21 @@ class CollectorRunService : Service() {
         running.value = true
         val date = intent?.getStringExtra("date")?.let(LocalDate::parse) ?: LocalDate.now()
         var resume = intent?.getBooleanExtra("resume", false) == true
-        val automatic = intent?.hasExtra("date") == true && !firstRun
-        val initial = if (themes == null) R.string.run_collecting else R.string.run_analyzing
+        val automatic = daily && intent?.hasExtra("date") == true && !firstRun
+        val initial = when {
+            requestedKeys != null -> R.string.request_card_running
+            themes != null -> R.string.run_analyzing
+            else -> R.string.run_collecting
+        }
         RunNotifications.currentStage.value = initial
         val cancel = PendingIntent.getService(this, 0, Intent(this, CollectorRunService::class.java).setAction(CANCEL),
             PendingIntent.FLAG_IMMUTABLE)
         if (!promote(RunNotifications.progress(this, getString(initial), cancel))) {
             if (automatic && !resume) app.schedule.pendingReservation(date)
             running.value = false
-            if (themes == null) dailyOutcome.value = DailyOutcome(false, R.string.run_failed)
-            else analysisOutcome.value = collector.runtime.AnalysisSummary(false, failure = getString(R.string.run_failed))
+            if (daily) dailyOutcome.value = DailyOutcome(false, R.string.run_failed)
+            if (themes != null) analysisOutcome.value = collector.runtime.AnalysisSummary(false, failure = getString(R.string.run_failed))
+            if (requestedKeys != null) requestedOutcome.value = collector.runtime.RequestedCardResult(failure = getString(R.string.run_failed), retryAllowed = true)
             app.appScope.launch {
                 try {
                     app.finishOperation()
@@ -97,13 +108,14 @@ class CollectorRunService : Service() {
             return START_NOT_STICKY
         }
         foreground = true
-        activeDailyDate = date.takeIf { themes == null }
+        activeDailyDate = date.takeIf { daily }
         runJob = scope.launch(start = CoroutineStart.UNDISPATCHED) {
             var chargedAttempt = false
             var successful = false
             var result: String? = null
             var reason = R.string.run_failed
             var analysisResult: collector.runtime.AnalysisSummary? = null
+            var requestedResult: collector.runtime.RequestedCardResult? = null
             try {
                 if (firstRun) {
                     val runtime = app.runtime()
@@ -121,7 +133,21 @@ class CollectorRunService : Service() {
                     result = getString(reason)
                     return@launch
                 }
-                if (themes != null) {
+                if (requestedKeys != null) {
+                    val request = requireNotNull(intent)
+                    val outcome = withContext(Dispatchers.IO) {
+                        app.requireRunReady()
+                        val mailAvailable = app.runtimeOverride != null || app.hasMailCredentials()
+                        app.runtime().runRequestedCards(LocalDate.parse(request.getStringExtra("candidateDate")),
+                            requestedKeys, request.getBooleanExtra("research", false), request.getDoubleExtra("limit", -1.0),
+                            onLockAcquired = app::requireRunReady,
+                            mailEnabled = { request.getBooleanExtra("requestMail", false) && mailAvailable && app.mailEnabled })
+                    }
+                    requestedResult = outcome
+                    successful = outcome.cardIds.isNotEmpty()
+                    result = if (successful) getString(if (outcome.mailFailed) R.string.request_card_mail_failed
+                        else R.string.request_card_done) else if (outcome.requote != null) getString(R.string.r3_analysis_requote) else outcome.failure
+                } else if (themes != null) {
                     val limit = requireNotNull(intent).getDoubleExtra("limit", -1.0)
                     val outcome = withContext(Dispatchers.IO) {
                         val mailAvailable = app.hasMailCredentials()
@@ -161,10 +187,14 @@ class CollectorRunService : Service() {
                 if (!successful && result == null) result = getString(R.string.run_failed)
             } catch (_: BackupRecoveryBlocked) {
                 reason = R.string.backup_recovery_pending
+                if (requestedKeys != null) requestedResult = collector.runtime.RequestedCardResult(
+                    failure = getString(reason), retryAllowed = true)
             } catch (_: RunAttemptLimitReached) {
                 result = getString(R.string.run_attempt_limit)
             } catch (_: RunLockedException) {
                 reason = R.string.run_already_running
+                if (requestedKeys != null) requestedResult = collector.runtime.RequestedCardResult(
+                    failure = getString(reason), retryAllowed = true)
                 if (chargedAttempt) app.schedule.refundAttempt(date)
                 if (automatic && !resume) app.schedule.pendingReservation(date)
                 alreadyRunning()
@@ -186,8 +216,9 @@ class CollectorRunService : Service() {
                 stopSelf(latestStartId)
                 withContext(NonCancellable) {
                     app.finishOperation()
-                    if (themes == null) dailyOutcome.value = DailyOutcome(successful, reason)
-                    else analysisOutcome.value = analysisResult ?: collector.runtime.AnalysisSummary(false, failure = getString(reason))
+                    if (daily) dailyOutcome.value = DailyOutcome(successful, reason)
+                    if (themes != null) analysisOutcome.value = analysisResult ?: collector.runtime.AnalysisSummary(false, failure = getString(reason))
+                    if (requestedKeys != null) requestedOutcome.value = requestedResult ?: collector.runtime.RequestedCardResult(failure = getString(reason))
                     result?.let { RunNotifications.result(app, it, successful, "analysis".takeIf { themes != null }) }
                 }
             }
@@ -231,6 +262,7 @@ class CollectorRunService : Service() {
 
         internal val analysisOutcome = MutableStateFlow<collector.runtime.AnalysisSummary?>(null)
         internal val dailyOutcome = MutableStateFlow<DailyOutcome?>(null)
+        internal val requestedOutcome = MutableStateFlow<collector.runtime.RequestedCardResult?>(null)
         internal val running = MutableStateFlow(false)
 
         internal fun startDaily(context: Context, date: LocalDate? = null, resume: Boolean = false, firstRun: Boolean = false): Boolean {
@@ -249,6 +281,13 @@ class CollectorRunService : Service() {
                 .putStringArrayListExtra("themes", ArrayList(themes)).putExtra("limit", limit).putExtra("budgetVersion", budgetVersion))) {
                 analysisOutcome.value = collector.runtime.AnalysisSummary(false, failure = context.getString(R.string.run_failed))
             }
+        }
+
+        internal fun startRequested(context: Context, date: String, keys: List<String>, research: Boolean, limit: Double, mail: Boolean): Boolean {
+            requestedOutcome.value = null
+            return start(context, Intent(context, CollectorRunService::class.java)
+                .putExtra("candidateDate", date).putStringArrayListExtra("requestedKeys", ArrayList(keys))
+                .putExtra("research", research).putExtra("limit", limit).putExtra("requestMail", mail))
         }
 
         private fun start(context: Context, intent: Intent): Boolean = try {

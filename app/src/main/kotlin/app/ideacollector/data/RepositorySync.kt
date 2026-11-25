@@ -68,7 +68,7 @@ internal class RepositorySync(
                 }
                 for ((artifact, run) in updates) {
                     dao.saveArtifact(artifact)
-                    if (artifact.kind == "daily" && run != null) {
+                    if (artifact.kind in setOf("daily", "requested") && run != null) {
                         dao.saveCards(run.cards.map { CardRow(LOCAL_REPO, artifact.path, it.id, contractJson.encodeToString(it)) })
                         dao.indexCards(run.cards.map { card ->
                             val evidence = (card.techSignals + card.demandSignals + card.competitors).map { it.note } +
@@ -103,7 +103,7 @@ internal class RepositorySync(
         if (artifact.kind == "prompt") return Entry(artifact)
         val json = artifact.json
         return when (artifact.kind) {
-            "daily", "run" -> {
+            "daily", "run", "requested" -> {
                 val element = contractJson.parseToJsonElement(json)
                 if (artifact.kind == "run" && element is kotlinx.serialization.json.JsonObject && "report" !in element) {
                     contractJson.decodeFromString<RunReport>(json)
@@ -133,6 +133,7 @@ internal class RepositorySync(
             path.removePrefix("config/prompts/").removeSuffix(".versions.json") in collector.prompt.PromptCatalog.entries -> "prompt-history"
         !path.endsWith(".json") -> null
         daily.matches(path) -> "daily"
+        path.startsWith("out/requested/") -> "requested"
         path == "out/tracked.json" -> "tracking"
         path == "out/feedback.json" -> "feedback"
         path.startsWith("out/runs/scheduled/") -> "scheduled-log"
