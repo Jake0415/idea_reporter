@@ -16,6 +16,7 @@
 - 출처: Hacker News, GitHub, Hugging Face, Reddit, Product Hunt, (선택) arXiv — 공식 API 우선, HTML 파싱은 피한다.
 - LLM: **Claude(Anthropic)·OpenAI 두 공급자 지원, 사용자가 자기 키를 등록하면 연동**(design.md §5-1). 단계별(분류·작성)로 공급자·모델 선택, 모델 목록은 공급자 API에서 받음, 두 키가 있으면 대체 공급자 1회 재시도. 기본값(Claude): 분류 `claude-haiku-5-5`, 작성 `claude-opus-5-5`. 일일 비용 상한(`dailyBudgetUsd`).
 - **키 취급:** API 키는 코드·문서·설정 파일·로그·커밋에 절대 쓰지 않는다. PC는 환경 변수(`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`), 앱은 Keystore.
+- **개인 빌드(2026-11-26 사용자 결정):** 혼자 쓰므로 `.gradlew.bat :app:assembleDebug -PembedEnv`로 만든 debug APK에만 `.env`의 허용 키(AI 키·GitHub·메일·Reddit·PH)를 자산으로 넣고, 앱이 첫 실행 때 Keystore로 옮긴다(EnvSeed.kt). 이 APK는 키를 담고 있으니 공유·업로드 금지, 설치 뒤 일반 빌드로 다시 덮는다. release·플래그 없는 빌드·테스트에는 들어가지 않는다.
 - [Horizon](https://github.com/Thysrael/Horizon)(MIT) **설계만 차용**해 Kotlin으로 새로 구현: 신호 프로필 3종(기술·수요·경쟁), 프로필별 임계값, 주제 합치기, 분류별 상한, 댓글 수집, 과거 기록 검색, 인용 검증, 출처 통계, RSS 입력 어댑터. 근거는 [docs/verification/horizon-rea-check.md](docs/verification/horizon-rea-check.md). 코드·프롬프트를 옮기면 `THIRD_PARTY_NOTICES.md`에 고지.
 - 디자인 톤: A 피드(인스타그램풍, docs/design-tokens.md). **토큰 원본은 `mockup/tokens.css` 하나** — Astryx 시안·trend.html·메일(`MailTheme.kt`, 테스트로 대조)이 같이 쓴다. 2026-11-23 확정: 포인트 `#0095F6`(아이콘·★·고리), 흰 글자 버튼 `#0077D9`, 차분한 상태 4색(경고 노랑은 실패·주의에만, 좋은 신호 배지는 파랑), 카드는 테두리만, MVP 하단 탭은 오늘·추적·보관함·설정(아이콘 + 작은 글자 라벨, 트렌드 탭은 7단계에 5번째), 메일은 가벼운 카드형(640px, 인라인 CSS)·앱 링크는 4단계 전까지 숨김.
 - **화면 용어(2026-11-23):** 메일·앱·리포트에는 쉬운 말만 쓴다 — 기술 신호→"쓸 수 있는 기술", 수요 신호→"사람들의 요청·불편", 시장 신호·경쟁 제품→"이미 나온 제품", 신호 프로필→"분류 기준", 깔때기→"단계별 건수". 코드 식별자는 그대로. 전체 표는 design.md 용어집.

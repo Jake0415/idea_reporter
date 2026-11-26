@@ -277,6 +277,11 @@ class CollectorApp : Application() {
     override fun onCreate() {
         super.onCreate()
         recoverBackup()
+        appScope.launch {
+            try { EnvSeed.import(this@CollectorApp) }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (_: Exception) { android.util.Log.w("EnvSeed", "개인 빌드 키를 옮기지 못했습니다") }
+        }
         RunNotifications.restorePreviousFailures(this)
         val work = androidx.work.WorkManager.getInstance(this)
         listOf("periodic-sync", "manual-sync", "outbox").forEach { work.cancelUniqueWork(it) }
