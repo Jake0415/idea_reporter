@@ -22,6 +22,7 @@ import app.ideacollector.data.SyncState
 import collector.data.DataBranch.VERSION
 import collector.data.InboxRequest
 import collector.model.*
+import collector.stage.ideaCategories
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -152,7 +153,8 @@ private fun FeedCard(data: ScreenState, card: IdeaCard, open: (Page, String) -> 
             TextButton(onClick = { undo(dismissal) }) { Text(stringResource(R.string.undo_dismissal)) }
         }
         if (!data.dismissed(card)) FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            Tag(card.category)
+            Tag(ideaCategories.firstOrNull { it.id == card.category }?.name ?: card.category)
+            ExpansionBadge(card)
             card.badges.forEach {
                 if (it == "요청" || it == "내가 고른 카드") CandidateBadge(stringResource(R.string.candidates_requested))
                 else Tag(it, true)
@@ -173,13 +175,27 @@ internal fun CandidateBadge(text: String) {
 }
 
 @Composable
-private fun Tag(text: String, highlight: Boolean = false) {
-    Surface(color = if (!highlight) MaterialTheme.colorScheme.surfaceVariant else
-        MaterialTheme.colorScheme.secondaryContainer,
-        shape = MaterialTheme.shapes.extraSmall) {
+private fun ExpansionBadge(card: IdeaCard) {
+    if (card.kind != "expanded") return
+    val label = lensLabels[card.lens]?.first ?: return
+    Tag(stringResource(R.string.expansion_badge, stringResource(label)), outline = true)
+}
+
+@Composable
+private fun Tag(text: String, highlight: Boolean = false, outline: Boolean = false) {
+    val colors = MaterialTheme.colorScheme
+    Surface(
+        color = when {
+            outline -> androidx.compose.ui.graphics.Color.Transparent
+            highlight -> colors.secondaryContainer
+            else -> colors.surfaceVariant
+        },
+        contentColor = if (highlight) colors.onSecondaryContainer else colors.onSurfaceVariant,
+        border = if (outline) androidx.compose.foundation.BorderStroke(1.dp, colors.outline) else null,
+        shape = MaterialTheme.shapes.extraSmall
+    ) {
         Text(text, Modifier.padding(horizontal = 8.dp, vertical = 4.dp), style = MaterialTheme.typography.bodySmall,
-            color = if (!highlight) MaterialTheme.colorScheme.onSurfaceVariant else
-                MaterialTheme.colorScheme.onSecondaryContainer)
+            maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -228,7 +244,8 @@ internal fun Star(data: ScreenState, card: IdeaCard, send: (List<InboxRequest>) 
     Text(card.title, style = MaterialTheme.typography.titleLarge)
     Small(card.oneLiner)
     FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        Tag(card.category)
+        Tag(ideaCategories.firstOrNull { it.id == card.category }?.name ?: card.category)
+        ExpansionBadge(card)
         card.badges.forEach {
             if (it == "요청" || it == "내가 고른 카드") CandidateBadge(stringResource(R.string.candidates_requested))
             else Tag(it, true)
@@ -243,7 +260,22 @@ internal fun Star(data: ScreenState, card: IdeaCard, send: (List<InboxRequest>) 
     val runAt = daily?.report?.startedAt
     Evidence(R.string.tech, card.techSignals, items, runAt)
     Evidence(R.string.demand, card.demandSignals, items, runAt)
+    Evidence(R.string.evidence, (card.techSignals + card.demandSignals + card.competitors).distinctBy { it.url }, items, runAt)
+    if (card.supplementRefs.isNotEmpty()) {
+        Text(stringResource(R.string.supplement), style = MaterialTheme.typography.titleMedium)
+        card.supplementRefs.forEach { Link(it.url, it.title, it.note) }
+    }
     Evidence(R.string.products, card.competitors, items, runAt)
+    if (card.kind == "expanded") {
+        Surface(color = MaterialTheme.colorScheme.surfaceVariant, contentColor = MaterialTheme.colorScheme.onSurface,
+            shape = MaterialTheme.shapes.medium) {
+            Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(stringResource(R.string.expansion_speculation), style = MaterialTheme.typography.titleMedium)
+                Small(R.string.expansion_speculation_help)
+                card.speculation.forEach { Text("• $it", style = MaterialTheme.typography.bodyMedium) }
+            }
+        }
+    }
     Block(R.string.history, card.history.joinToString("\n"))
     Text(stringResource(R.string.judgment), style = MaterialTheme.typography.titleMedium)
     Panel {
@@ -253,11 +285,6 @@ internal fun Star(data: ScreenState, card: IdeaCard, send: (List<InboxRequest>) 
         Block(R.string.validation, card.validationPlan)
     }
     Block(R.string.caveats, card.caveats.joinToString("\n"))
-    Evidence(R.string.evidence, (card.techSignals + card.demandSignals + card.competitors).distinctBy { it.url }, items, runAt)
-    if (card.supplementRefs.isNotEmpty()) {
-        Text(stringResource(R.string.supplement), style = MaterialTheme.typography.titleMedium)
-        card.supplementRefs.forEach { Link(it.url, it.title, it.note) }
-    }
     val dismissal = data.undoableDismissal(card)
     if (dismissal == null) Secondary(R.string.not_interested) { sheet = true }
     else TextButton(onClick = { undo(dismissal) }) { Text(stringResource(R.string.undo_dismissal)) }

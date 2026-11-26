@@ -18,7 +18,15 @@
   "maxCandidatesPerTag": 2,
   "minDemandCandidates": 2,
   "recentTopicDays": 14,
-  "recentCardDays": 7,
+  "recentCardDays": 14,
+  "expansion": {
+    "enabled": true,
+    "cardsPerDay": 1,
+    "seedCount": 3,
+    "seedHistoryDays": 30,
+    "lenses": { "other-customer": true, "korea": true, "b2b-flip": true, "unbundle": true, "invert": true, "second-order": true },
+    "myFields": []
+  },
   "badges": { "hnPointsPerHour": 10, "githubStarsPerDay": 100, "streakDays": 3, "streakMin": 2 },
   "tracking": { "maxTracked": 10, "quietDays": 30, "queriesPerSource": 1, "minRawScoreFactor": 0.3,
                 "strengthWeights": { "demand-signal": 1.5, "market-signal": 1.0, "tech-signal": 1.0 },

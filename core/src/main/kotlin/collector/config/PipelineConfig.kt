@@ -3,6 +3,7 @@ package collector.config
 import collector.runtime.CollectorPaths
 import collector.analysis.AnalysisConfig
 import collector.llm.StageModel
+import collector.stage.expansionLenses
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -31,11 +32,28 @@ data class PipelineConfig(
     val backfillBudgetUsd: Double = 0.5,
     val analysis: AnalysisConfig = AnalysisConfig(),
     val batch: Batch = Batch(),
-    val deadlineMinutes: Int = 130
+    val deadlineMinutes: Int = 130,
+    val expansion: Expansion = Expansion()
 ) {
     init {
         require(deadlineMinutes > 0)
         require(classifyConcurrency >= 1) { "classifyConcurrency must be at least 1" }
+    }
+
+    @Serializable data class Expansion(
+        val enabled: Boolean = true, val cardsPerDay: Int = 1, val seedCount: Int = 3,
+        val seedHistoryDays: Int = 30, val lenses: Map<String, Boolean> = expansionLenses.associate { it.id to true },
+        val myFields: List<String> = emptyList()
+    ) {
+        internal fun boundedMyFields(): List<String> = myFields.take(5).map {
+            it.substring(0, it.offsetByCodePoints(0, it.codePointCount(0, it.length).coerceAtMost(30)))
+        }
+
+        init {
+            require(cardsPerDay in 0..2) { "expansion.cardsPerDay must be in 0..2" }
+            require(seedCount in 0..6) { "expansion.seedCount must be in 0..6" }
+            require(seedHistoryDays >= 0) { "expansion.seedHistoryDays must be non-negative" }
+        }
     }
 
     @Serializable data class Models(val classify: StageModel, val generate: StageModel, val fallback: Boolean)
@@ -65,8 +83,12 @@ data class PipelineConfig(
             if (file.isFile) parse(file.readText())
             else defaults
 
-        internal fun parse(text: String, format: Json = Json): PipelineConfig =
-            format.decodeFromString(merge(defaultJson, Json.parseToJsonElement(text).jsonObject).toString())
+        internal fun parse(text: String, format: Json = Json): PipelineConfig {
+            val config = format.decodeFromString<PipelineConfig>(
+                merge(defaultJson, Json.parseToJsonElement(text).jsonObject).toString()
+            )
+            return config.copy(expansion = config.expansion.copy(myFields = config.expansion.boundedMyFields()))
+        }
 
         private fun merge(base: JsonObject, local: JsonObject): JsonObject = JsonObject(base + local.mapValues { (key, value) ->
             val original = base[key]

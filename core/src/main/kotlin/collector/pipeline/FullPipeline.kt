@@ -2,6 +2,7 @@ package collector.pipeline
 
 import collector.config.GitHubConfig
 import collector.dev.writeAtomically
+import collector.dev.readJson
 import collector.llm.batchPath
 import collector.llm.hasSavedBatch
 import collector.llm.isPendingBatch
@@ -30,7 +31,7 @@ import java.time.LocalDate
 import java.util.UUID
 
 class FullPipeline(
-    private val config: PipelineConfig, private val profiles: ProfileLoader.ProfileSet, prompts: PromptResolver,
+    private val config: PipelineConfig, private val profiles: ProfileLoader.ProfileSet, private val prompts: PromptResolver,
     router: LlmRouter, private val costs: CostGuard, private val http: OkHttpClient,
     private val history: RunHistory, private val trackedStore: TrackedStore,
     val collectOnly: Boolean = false,
@@ -53,7 +54,8 @@ class FullPipeline(
         val collection: BatchCollectionInput,
         val classified: ClassificationResult, val selected: SelectionResult, val enriched: SelectionResult,
         val cache: Map<String, TrackClassification>, val matches: Map<String, List<HistoryHit>>,
-        val feedback: List<String>, val recentCards: List<String>
+        val feedback: List<String>, val recentCards: List<String>,
+        val repetitionHistory: List<RecentCard>? = null, val expansionSeeds: List<ExpansionSeed> = emptyList()
     )
 
     private fun batchInputFile(date: String, stage: String): File? = out?.takeIf { snapshotBatchInputs }?.let {
@@ -240,24 +242,40 @@ class FullPipeline(
         val enriched = enrichedSelection.kept
         val allCards = priorRuns.flatMap { it.cards }.associateBy { it.id }
         val matches = saved?.matches ?: enriched.associate { it.item.key to history.search(it, today) }
-        val feedback = saved?.feedback ?: history.feedback().asSequence().distinctBy { it.cardId }.mapNotNull { entry ->
+        val reactions by lazy { history.feedback().distinctBy { it.cardId } }
+        val feedback = saved?.feedback ?: reactions.asSequence().mapNotNull { entry ->
             val card = allCards[entry.cardId] ?: history.cardRun(entry.cardId)?.cards
                 ?.firstOrNull { it.id == entry.cardId } ?: return@mapNotNull null
             listOfNotNull(card.title, card.category, if (entry.kind == Feedback.Kind.STAR) "★" else "관심 없음",
                 entry.reason, entry.memo).joinToString(" · ")
         }.take(config.feedbackExamples).toList()
-        val recentCards = saved?.recentCards ?: priorRuns.filter { it.report.runDate >= today.minusDays(config.recentCardDays.toLong()).toString() }
-            .flatMap { it.cards }.map { it.title }
+        val repetitionHistory = saved?.repetitionHistory ?: (priorRuns
+            .filter { it.report.runDate >= today.minusDays(config.recentCardDays.toLong()).toString() }
+            .flatMap { it.recentCards() } + history.requestedRecentCards(today, config.recentCardDays))
+            .sortedByDescending { it.card.runDate }.distinctBy { it.card.id }
+        val recentCards = saved?.recentCards ?: repetitionHistory.map { it.promptLine() }
+        val expansionSeeds = saved?.expansionSeeds ?: if (config.expansion.enabled && config.expansion.lenses.values.any { it }) {
+            val weights = reactions.mapNotNull { entry ->
+                val card = allCards[entry.cardId] ?: history.cardRun(entry.cardId)?.cards?.firstOrNull { it.id == entry.cardId }
+                card?.lens?.takeIf { card.kind == "expanded" }?.let { lens ->
+                    lens to if (entry.kind == Feedback.Kind.STAR) 1 else -1
+                }
+            }.groupingBy { it.first }.fold(0) { sum, entry -> sum + entry.second }
+            val seedHistory = out?.resolve("expansion-seeds.json")?.let { readJson<List<UsedExpansionSeed>>(it) }.orEmpty()
+            val seedSignals = enriched + verifiedMergedEvidence(enriched, enrichedSelection.groups).values.flatten()
+            makeExpansionSeeds(today, config.expansion, seedSignals, prompts.resolve("criteria").text,
+                seedHistory, weights, prompts.resolve("ideas").text, repetitionHistory)
+        } else emptyList()
         val inputFile = batchInputFile(date, "generate")
         if (saved == null && config.batch.generate && inputFile != null && enriched.isNotEmpty() &&
             out != null && !hasSavedBatch(out, date, "generate")) {
             inputFile.writeAtomically(Json.encodeToString(GenerationInput(BatchCollectionInput(base, collected, tracking, tracked),
-                classified, selected, enrichedSelection, cache, matches, feedback, recentCards)))
+                classified, selected, enrichedSelection, cache, matches, feedback, recentCards, repetitionHistory, expansionSeeds)))
         }
         suspend fun generate(retryAfterTruncation: Boolean = false, batchAllowed: Boolean = true) =
             stage("generate", enriched.size, { it: GeneratedCards -> it.cards.size }) {
                 generator.generate(date, enriched, matches, feedback, recentCards, enrichedSelection.groups,
-                    retryAfterTruncation, out, batchAllowed, snapshotBatchInputs).also { issues += it.issues }
+                    retryAfterTruncation, out, batchAllowed, snapshotBatchInputs, expansionSeeds = expansionSeeds).also { issues += it.issues }
             }
         var generated = generate()
         // 생성 Batch가 아직 대기 중이면(결과 조회 실패 포함) 추적 비용을 쓰기 전에 이어받기로 넘긴다.
@@ -276,8 +294,9 @@ class FullPipeline(
         val cardRejections = mutableMapOf<String, Int>()
         val validationIssues = mutableListOf<String>()
         val firstAttemptIssues = mutableListOf<String>()
-        suspend fun validate(cards: List<IdeaCard>) = stage("validate", cards.size, { it: List<IdeaCard> -> it.size }) {
-            validator.validate(cards, citations, onRejected = { card, rejection ->
+        suspend fun validate(generation: GeneratedCards) = stage("validate", generation.cards.size, { it: List<IdeaCard> -> it.size }) {
+            validator.validate(generation.cards, citations, repetitionHistory, expansionSeeds,
+                requiresExpansionFields = generation.requiresExpansionFields, onRejected = { card, rejection ->
                 validationIssues += "카드 제외 (${card.title}) · ${rejection.detail}"
                 val reason = rejection.reason.name
                 cardRejections[reason] = cardRejections.getOrDefault(reason, 0) + 1
@@ -287,13 +306,13 @@ class FullPipeline(
                 it.copy(badges = badgeCalculator.badges(citations.citedSignals(it), priorTopics + topics, snapshots, now, today))
             }
         }
-        var cards = validate(generated.cards)
-        if (!generated.reusedPaidBatch && (generated.failure in setOf("JSON 응답 오류", TRUNCATED_RESPONSE) || generated.cards.isNotEmpty() && cards.isEmpty())) {
+        var cards = validate(generated)
+        if (!generated.reusedPaidBatch && (generated.failure in setOf("JSON 응답 오류", TRUNCATED_RESPONSE) || generated.cards.isNotEmpty() && cards.isEmpty() && cardRejections.keys != setOf(CardRejectionReason.REPEAT.name))) {
             firstAttemptIssues += validationIssues.map { "1차 시도: $it" }
             validationIssues.clear()
             cardRejections.clear()
             generated = generate(retryAfterTruncation = generated.failure == TRUNCATED_RESPONSE, batchAllowed = false)
-            cards = validate(generated.cards)
+            cards = validate(generated)
         }
         if (cards.isEmpty()) issues += generated.failure ?: "근거 링크·필수 항목·분류 검증을 통과한 카드가 없습니다."
         issues += classified.dropped.filter { it.reason == DropReason.CLASSIFY_FAILED || it.reason == DropReason.BUDGET_EXCEEDED }
@@ -353,6 +372,8 @@ class FullPipeline(
         return base.copy(
             items = input.map { enrichedById[it.key]?.item ?: it }, dropped = dropped, classified = signals,
             cards = cards, trackingUpdates = updates, topics = topics,
+            usedExpansionSeeds = expansionSeeds.filter { seed -> cards.any { it.kind == "expanded" && it.seedId == seed.id } }
+                .map { it.usedOn(today) },
             metrics = RunMetrics(collected.distinctBy { it.key }.map { MetricSnapshot(it.key, it.rawScore, now) },
                 profileMetrics, classified.scoreClampWarnings, cardRejections),
             tracked = trackedAfter,

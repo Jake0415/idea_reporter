@@ -66,6 +66,73 @@ class CandidatesTest {
     }
 
     @Test
+    fun requestingOlderCandidatesKeepsPaidRepeatWithActualCreationDate() = runBlocking {
+        val fixture = fixture()
+        val candidateDate = fixture.date.minusDays(40).toString()
+        val priorCreationDate = fixture.date.minusDays(2)
+        val priorCreatedAt = fixture.clock.instant().minusSeconds(2 * 86_400L).toString()
+        val run = outputJson.decodeFromString<PipelineResult>(fixture.dailyJson)
+        val source = run.copy(report = run.report.copy(runDate = candidateDate))
+        fixture.paths.outDir.resolve("$candidateDate.json").writeText(outputJson.encodeToString(source))
+        val directory = fixture.paths.outDir.resolve("requested").apply { mkdirs() }
+        directory.resolve("$candidateDate-prior.json").writeText(outputJson.encodeToString(
+            source.copy(report = source.report.copy(startedAt = priorCreatedAt),
+                cards = listOf(fixture.card.copy(id = "prior", runDate = candidateDate,
+                    title = "다른 회의 기록 앱", demandSignals = emptyList())))
+        ))
+        val result = fixture.runtime.runRequestedCards(LocalDate.parse(candidateDate), fixture.keys, false, 0.50)
+        assertEquals(1, fixture.calls)
+        assertEquals(1, result.cardIds.size)
+        val saved = directory.listFiles()!!.map { outputJson.decodeFromString<PipelineResult>(it.readText()) }
+            .single { it.report.startedAt == fixture.clock.instant().toString() }
+        val warning = "최근 카드와 비슷함: 다른 회의 기록 앱 ($priorCreationDate)"
+        assertEquals(listOf(warning), saved.cards.single().caveats)
+        val rendered = HtmlRenderer(emptyList()).render(saved)
+        assertTrue(warning in rendered.html && warning in rendered.text)
+    }
+
+    @Test
+    fun requestingSameCandidatesAgainRejectsMatchingEvidenceOrTitle() = runBlocking {
+        val fixture = fixture()
+        suspend fun request() = fixture.runtime.runRequestedCards(fixture.date, fixture.keys, false, 0.50)
+        assertEquals(1, request().cardIds.size)
+        val original = fixture.card
+        assertTrue(request().cardIds.isEmpty())
+        fixture.card = original.copy(title = "다른 제목")
+        assertTrue(request().cardIds.isEmpty())
+        val run = outputJson.decodeFromString<PipelineResult>(fixture.dailyJson)
+        val demand = run.classified.last()
+        val alternativeItem = demand.item.copy(externalId = "alternative", url = "https://example.invalid/alternative")
+        val alternative = demand.copy(item = alternativeItem)
+        fixture.dayFile.writeText(outputJson.encodeToString(run.copy(classified = run.classified + alternative)))
+        fixture.card = original.copy(demandSignals = listOf(SignalRef(alternativeItem.key, alternativeItem.url, "근거")))
+        assertTrue(request().cardIds.isEmpty())
+        assertEquals(4, fixture.calls)
+        assertEquals(1, fixture.paths.outDir.resolve("requested").listFiles()!!.size)
+    }
+
+    @Test
+    fun quoteRequiresLocalEvidenceEvenWhenResearchIsEnabled() = runBlocking {
+        val fixture = fixture()
+        val run = outputJson.decodeFromString<PipelineResult>(fixture.dailyJson)
+        val tech = run.classified.first()
+        val other = run.classified.last().let { it.copy(classification = it.classification.copy(profile = "tech-signal")) }
+        fun write(signals: List<Signal>) {
+            fixture.dayFile.writeText(outputJson.encodeToString(run.copy(classified = signals)))
+        }
+        write(listOf(tech))
+        for (research in listOf(false, true)) {
+            val quote = fixture.runtime.estimateRequestedCards(fixture.date, fixture.keys.take(1), research)
+            assertFalse(quote.allowed)
+            assertEquals(RequestedCardBlock.INSUFFICIENT_EVIDENCE, quote.block)
+            assertTrue(fixture.runtime.runRequestedCards(fixture.date, fixture.keys.take(1), research, 0.50).cardIds.isEmpty())
+        }
+        write(listOf(tech, other))
+        assertTrue(fixture.runtime.estimateRequestedCards(fixture.date, fixture.keys, false).allowed)
+        assertEquals(0, fixture.calls)
+    }
+
+    @Test
     fun blocksRecoveryAndDoesNotRetryPaidFailures() = runBlocking {
         val fixture = fixture()
         val quote = fixture.runtime.estimateRequestedCards(fixture.date, fixture.keys, false)
@@ -303,7 +370,8 @@ class CandidatesTest {
         private val refs = signals.map { SignalRef(it.item.key, it.item.url, "근거") }
         var card = IdeaCard("fixture", date.toString(), "회의 도구", "회의 요약", "새 사례", "회의 기록",
             refs.take(1), refs.drop(1), emptyList(), emptyList(), "하루", "로컬", "자료 부족", "실험",
-            emptyList(), "dev-tools", tags = listOf("회의"))
+            emptyList(), "dev-tools", tags = listOf("회의"),
+            targetCustomer = "회의 진행자", coreTech = "음성 인식", pain = "회의 기록 누락")
         private val report = RunReport(date.toString(), Instant.now().toString(), emptyList(),
             listOf(StageResult("select", 2, 2, 0)), emptyMap(), 0)
         val dailyJson = outputJson.encodeToString(PipelineResult(signals.map { it.item }, emptyList(), report, classified = signals))
@@ -340,8 +408,8 @@ class CandidatesTest {
         val unrelated = signal("unrelated", "market-signal", "music")
         val evidence = requestedEvidence(listOf(selected), listOf(unrelated, related))
         assertEquals(listOf(related), evidence.added)
-        assertTrue(evidence.sufficient)
-        assertFalse(requestedEvidence(listOf(selected), listOf(unrelated)).sufficient)
+        assertTrue(evidence.sufficient())
+        assertFalse(requestedEvidence(listOf(selected), listOf(unrelated)).sufficient())
     }
 
     @Test

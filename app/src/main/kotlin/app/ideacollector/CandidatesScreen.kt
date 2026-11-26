@@ -182,7 +182,7 @@ private fun RequestedCardDialog(app: CollectorApp, date: String, keys: List<Stri
             failed = true
         }
     }
-    val researchEnabled = estimate?.let { it.researchSupported && !it.researchBudgetBlocked } ?: true
+    val researchEnabled = estimate?.let { it.sufficient && it.researchSupported && !it.researchBudgetBlocked } ?: true
     LaunchedEffect(research, researchEnabled) {
         if (research && !researchEnabled) onResearch(false)
     }
@@ -206,9 +206,7 @@ private fun RequestedCardDialog(app: CollectorApp, date: String, keys: List<Stri
                             quote.added.forEach { Small(it.classification.summary.ifBlank { it.item.title }) }
                         }
                         val reason = when (quote.block) {
-                            RequestedCardBlock.INSUFFICIENT_EVIDENCE -> if (quote.researchSupported) stringResource(
-                                if (research) R.string.request_card_insufficient_research else R.string.request_card_insufficient
-                            ) else null
+                            RequestedCardBlock.INSUFFICIENT_EVIDENCE -> stringResource(R.string.request_card_insufficient)
                             RequestedCardBlock.REQUEST_LIMIT -> stringResource(
                                 if (research) R.string.request_card_budget else R.string.request_card_budget_no_research,
                                 quote.requestLimitUsd, checkNotNull(quote.estimatedUsd))
@@ -227,8 +225,6 @@ private fun RequestedCardDialog(app: CollectorApp, date: String, keys: List<Stri
                         reason?.let { Notice(it, warning = true) }
                         if (!quote.researchSupported)
                             Notice(stringResource(R.string.request_card_research_unsupported), warning = true)
-                        if (research && !quote.sufficient && quote.block == RequestedCardBlock.REQUEST_LIMIT)
-                            Small(R.string.request_card_insufficient_budget)
                     }
                 }
                 if (!recoveryReady && quote?.block != RequestedCardBlock.RECOVERY_PENDING)

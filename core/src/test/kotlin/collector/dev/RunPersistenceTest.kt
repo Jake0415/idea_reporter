@@ -44,7 +44,8 @@ class RunPersistenceTest {
         techSignals = listOf(SignalRef(first.key, first.url, "기술")), demandSignals = emptyList(),
         competitors = listOf(SignalRef(second.key, second.url, "경쟁")), history = emptyList(),
         effort = "2주", differentiation = "차별화", biggestRisk = "위험", validationPlan = "검증",
-        caveats = emptyList(), category = "dev-tools", tags = listOf("ai"))
+        caveats = emptyList(), category = "dev-tools", tags = listOf("ai"),
+        targetCustomer = "개발자", coreTech = "벡터 검색", pain = "검색이 느림")
 
     @Test fun scheduledEntryPointDoesNotMailPreservedCards() = runTest {
         val clock = Clock.fixed(now, java.time.ZoneId.systemDefault())
@@ -285,7 +286,7 @@ class RunPersistenceTest {
         outputJson.decodeFromString<PipelineResult>(it.readText())
     }
 
-    private fun sources() = SourcesFile(listOf(GitHubConfig(minRawScore = 200)))
+    private fun sources() = SourcesFile(listOf(GitHubConfig(minRawScore = 200, profile = listOf("tech-signal", "market-signal"))))
 
     private fun agent(respond: (LlmRequest) -> Pair<String, Double>) = object : LlmProvider {
         override val id = ProviderId.ANTHROPIC
@@ -301,7 +302,8 @@ class RunPersistenceTest {
 
     private fun classify(req: LlmRequest): String {
         val id = idOf(req)
-        val row = ClassifiedItem(id, "tech-signal", 8.0, "이유", "요약", listOf("tag-${id.substringAfter(':')}"),
+        val profile = if (id == second.key) "market-signal" else "tech-signal"
+        val row = ClassifiedItem(id, profile, 8.0, "이유", "요약", listOf("tag-${id.substringAfter(':')}"),
             "topic-${id.substringAfter(':')}", "주제")
         return """{"items":${Json.encodeToJsonElement(listOf(row))}}"""
     }

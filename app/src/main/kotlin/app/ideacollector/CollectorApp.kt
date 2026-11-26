@@ -1,5 +1,6 @@
 package app.ideacollector
 
+import collector.prompt.mergeCriteria
 import android.app.Application
 import androidx.room.Room
 import app.ideacollector.data.*

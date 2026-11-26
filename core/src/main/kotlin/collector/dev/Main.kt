@@ -16,6 +16,7 @@ import collector.data.publicMailJournal
 import collector.data.requestIdPattern
 import collector.data.resultFile
 import collector.data.saveResult
+import collector.config.PipelineConfig
 import collector.llm.*
 import collector.mail.MailDelivery
 import collector.mail.MailKind
@@ -422,9 +423,9 @@ internal fun archiveFailedRun(out: File, result: PipelineResult): File =
 
 internal fun publishOrArchiveFailure(
     out: File, history: FileHistorySearch, renderer: HtmlRenderer, result: PipelineResult, keepUnseen: Boolean,
-    beforePublish: (LocalDate) -> Unit = {}
+    seedHistoryDays: Int = PipelineConfig.defaults.expansion.seedHistoryDays, beforePublish: (LocalDate) -> Unit = {}
 ): HtmlRenderer.Rendered? = try {
-    publishRun(out, history, renderer, result, keepUnseen, beforePublish)
+    publishRun(out, history, renderer, result, keepUnseen, seedHistoryDays, beforePublish)
 } catch (e: Exception) {
     if (e is kotlinx.coroutines.CancellationException) throw e
     val failed = result.copy(report = result.report.copy(issues = result.report.issues + safeFailure(e)))
@@ -439,7 +440,7 @@ internal fun publishOrArchiveFailure(
 
 internal fun publishRun(
     out: File, history: FileHistorySearch, renderer: HtmlRenderer, result: PipelineResult, keepUnseen: Boolean = false,
-    beforePublish: (LocalDate) -> Unit = {}
+    seedHistoryDays: Int = PipelineConfig.defaults.expansion.seedHistoryDays, beforePublish: (LocalDate) -> Unit = {}
 ): HtmlRenderer.Rendered? {
     val day = LocalDate.parse(result.report.runDate)
     val current = out.resolve("$day.json")
@@ -461,6 +462,15 @@ internal fun publishRun(
             put(out.resolve("$day.html"), rendered.html)
             put(out.resolve("$day.txt"), rendered.text)
             put(current, outputJson.encodeToString(output))
+        }
+        val seedFile = out.resolve("expansion-seeds.json")
+        val usedSeeds = if (rendered != null) result.usedExpansionSeeds else emptyList()
+        if (seedFile.isFile || usedSeeds.isNotEmpty()) {
+            val previous = readJson<List<collector.stage.UsedExpansionSeed>>(seedFile).orEmpty().filter { it.parsedDate != null }
+            val newest = maxOf(day.toString(), previous.maxOfOrNull { it.date } ?: day.toString())
+            val oldest = LocalDate.parse(newest).minusDays(seedHistoryDays.toLong()).toString()
+            val retained = (previous + usedSeeds).distinct().filter { it.date >= oldest }
+            if (retained != previous) put(seedFile, outputJson.encodeToString(retained))
         }
         put(out.resolve("metrics.json"), history.metricsContent(result.metrics.snapshots, Instant.parse(result.report.startedAt)))
         put(out.resolve("tracked.json"), outputJson.encodeToString(result.tracked))

@@ -67,7 +67,7 @@ class C1DeviceTest {
             problem = "회의 기록을 확인하기 어렵습니다.", techSignals = refs.take(1), demandSignals = refs.slice(1..1),
             competitors = emptyList(), history = emptyList(), effort = "하루", differentiation = "로컬 처리",
             biggestRisk = "정확도", validationPlan = "회의 기록으로 비교", caveats = emptyList(), category = "dev-tools",
-            tags = listOf("회의"))
+            tags = listOf("회의"), targetCustomer = "회의 진행자", coreTech = "음성 인식", pain = "회의 기록 누락")
         val report = RunReport(date, Instant.now().toString(), emptyList(),
             listOf(StageResult("select", 5, 4, 0)), emptyMap(), 0)
         val run = PipelineResult(signals.map { it.item }, listOf(DroppedItem(signals.last().item, DropReason.OVER_QUOTA)),

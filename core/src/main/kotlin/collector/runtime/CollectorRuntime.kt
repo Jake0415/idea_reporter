@@ -13,6 +13,7 @@ import collector.config.PipelineConfig
 import collector.config.SourcesFile
 import collector.llm.*
 import collector.model.RunReport
+import collector.model.RunMetrics
 import collector.model.DropReason
 import collector.pipeline.FullPipeline
 import collector.pipeline.Pipeline
@@ -36,6 +37,9 @@ import collector.stage.IdeaGenerator
 import collector.stage.CardValidator
 import collector.stage.CitationValidator
 import collector.stage.CommentFetcher
+import collector.stage.RecentCard
+import collector.stage.recentCards
+import collector.pipeline.requestedRecentCards
 import collector.model.Signal
 import collector.model.Item
 import collector.model.ClassifiedItem
@@ -189,7 +193,7 @@ class CollectorRuntime(
         val defaults = pipelineConfig()
         val config = defaults.copy(ideaCount = keys.size, models = defaults.models.copy(fallback = false),
             supplementSearch = defaults.supplementSearch.copy(enabled = research, maxUses = 3))
-        val history = FileHistorySearch(out, config.historyDays)
+        val history = FileHistorySearch(out, config.historyDays, clock.zone)
         val past = history.runs(date, config.historyDays)
         val hits = selected.associate { it.item.key to history.search(it, date) }
         val hitIds = hits.values.flatten().map { it.id }.toSet()
@@ -203,6 +207,7 @@ class CollectorRuntime(
         )
         val evidence = RequestedEvidence(rawEvidence.selected.map(::bound), rawEvidence.added.map(::bound))
         val merged = requestedMergedMembers(listOf(daily) + past, evidence.signals)
+        val sufficient = evidence.sufficient(merged)
         val recent = past.flatMap { it.cards } + daily.cards +
             out.resolve("requested").listFiles().orEmpty().flatMap { readJson<PipelineResult>(it)?.cards.orEmpty() }
         val feedback = history.feedback().distinctBy { it.cardId }.take(config.feedbackExamples).mapNotNull { entry ->
@@ -210,10 +215,12 @@ class CollectorRuntime(
                 listOfNotNull(it.title, it.category, entry.kind.name, entry.reason).joinToString(" · ")
             }
         }
-        val recentTitles = recent.filter { it.runDate >= date.minusDays(config.recentCardDays.toLong()).toString() }
-            .map { it.title }.distinct()
+        val day = approvedDay ?: LocalDate.now(clock)
+        val repetitionHistory = (history.runs(day.plusDays(1), config.recentCardDays + 1).flatMap { it.recentCards() } +
+            history.requestedRecentCards(day, config.recentCardDays))
+            .sortedByDescending { it.card.runDate }.distinctBy { it.card.id }
+        val recentTitles = repetitionHistory.map { it.promptLine() }.distinct()
         val budget = BudgetSettings.load(out) {}
-        val day = LocalDate.now(clock)
         val ledger = requestedCostLedger(out)
         val monthly = MonthlyBudget(out, budget)
         val dailyRemaining = (budget.requestDailyUsd - ledger.total(day)).coerceAtLeast(0.0)
@@ -228,8 +235,7 @@ class CollectorRuntime(
         var researchMaxUsd: Double? = null
         val searchModel = collector.llm.ModelCatalog.defaults.cheapestWebSearchModel(config.models.classify.provider)
             ?.takeIf { supportsRequestedResearch(it.provider) }
-        if (!recoveryPending && selected.size == keys.size &&
-            (if (research) searchModel != null else evidence.sufficient)) {
+        if (!recoveryPending && selected.size == keys.size && sufficient && (!research || searchModel != null)) {
             val researchEstimateSignals = if (!research) emptyList() else (1..3).map { index ->
                 val item = Item("web", UUID.nameUUIDFromBytes(byteArrayOf(index.toByte())).toString(),
                     "\u001f".repeat(requestedResearchTitleChars), "a".repeat(requestedResearchUrlChars), 0,
@@ -263,17 +269,17 @@ class CollectorRuntime(
             recoveryPending -> RequestedCardBlock.RECOVERY_PENDING
             selected.size != keys.size -> RequestedCardBlock.PRIVATE_URL
             monthBlocked -> RequestedCardBlock.MONTHLY_BLOCK
+            !sufficient -> RequestedCardBlock.INSUFFICIENT_EVIDENCE
             research && searchModel == null -> RequestedCardBlock.RESEARCH_UNSUPPORTED
             monthlyRemaining <= 0.0 -> RequestedCardBlock.MONTHLY_LIMIT
             dailyRemaining <= 0.0 -> RequestedCardBlock.DAILY_LIMIT
-            estimate == null -> RequestedCardBlock.INSUFFICIENT_EVIDENCE
-            estimate <= remaining -> null
+            checkNotNull(estimate) <= remaining -> null
             remaining == monthlyRemaining -> RequestedCardBlock.MONTHLY_LIMIT
             remaining == dailyRemaining -> RequestedCardBlock.DAILY_LIMIT
             else -> RequestedCardBlock.REQUEST_LIMIT
         }
         val budgetBlocks = setOf(RequestedCardBlock.DAILY_LIMIT, RequestedCardBlock.MONTHLY_LIMIT, RequestedCardBlock.REQUEST_LIMIT)
-        val plainExceedsBudget = if (research && block in budgetBlocks && evidence.sufficient &&
+        val plainExceedsBudget = if (research && block in budgetBlocks && sufficient &&
             dailyRemaining > 0.0 && monthlyRemaining > 0.0) {
             var plainUsd = 0.0
             val plainConfig = config.copy(supplementSearch = config.supplementSearch.copy(enabled = false))
@@ -283,12 +289,12 @@ class CollectorRuntime(
                 quoteOnly = { plainUsd = router.projectedGeneration(it, config.models.generate, false) })
             plainUsd > remaining
         } else false
-        val quote = RequestedCardEstimate(evidence.added, evidence.sufficient, estimate,
+        val quote = RequestedCardEstimate(evidence.added, sufficient, estimate,
             block == null, remaining, dailyRemaining, budget.requestCardUsd, budget.requestDailyUsd, block, researchMaxUsd,
             searchModel != null, monthBlocked || dailyRemaining <= 0.0 || monthlyRemaining <= 0.0 ||
                 plainExceedsBudget || !research && block in budgetBlocks)
         return RequestedPlan(quote, config, prompts, evidence, hits, recent, ledger, monthly, searchUser,
-            feedback, recentTitles, merged)
+            feedback, recentTitles, merged, repetitionHistory)
     }
 
     private data class RequestedPlan(
@@ -296,7 +302,7 @@ class CollectorRuntime(
         val evidence: RequestedEvidence, val hits: Map<String, List<collector.stage.HistoryHit>>,
         val recent: List<collector.model.IdeaCard>, val ledger: CostLedger, val monthly: MonthlyBudget,
         val searchUser: String, val feedback: List<String>, val recentTitles: List<String>,
-        val merged: Map<String, List<Signal>>
+        val merged: Map<String, List<Signal>>, val repetitionHistory: List<RecentCard>
     )
 
     suspend fun estimateRequestedCards(date: LocalDate, keys: List<String>, research: Boolean): RequestedCardEstimate =
@@ -306,7 +312,8 @@ class CollectorRuntime(
         onLockAcquired: () -> Unit = {}, mailEnabled: () -> Boolean = { false }): RequestedCardResult = locked {
         onLockAcquired()
         require(approvedMaxUsd.isFinite() && approvedMaxUsd >= 0)
-        val approvedDay = LocalDate.now(clock)
+        val requestedStartedAt = clock.instant()
+        val approvedDay = requestedStartedAt.atZone(clock.zone).toLocalDate()
         val plan = prepareRequestedCards(date, keys, research, approvedDay)
         val quote = plan.quote
         check(quote.block != RequestedCardBlock.RECOVERY_PENDING)
@@ -379,24 +386,33 @@ class CollectorRuntime(
                             topicKey = row.topicKey.take(80), topicLabel = row.topicLabel.take(80)))
                     }
             val signals = citableRequestedSignals(localSignals + webSignals, plan.merged)
-            if (!RequestedEvidence(signals, emptyList()).sufficient)
+            if (!RequestedEvidence(signals, emptyList()).sufficient(plan.merged))
                 return@locked RequestedCardResult(failure = "추가 조사 후에도 근거가 부족합니다.", retryAllowed = guard.calls.isEmpty())
             val generator = IdeaGenerator(plan.config, plan.prompts, router)
             val generated = generator.generate(date.toString(), signals, plan.hits, plan.feedback, plan.recentTitles,
                 merged = plan.merged, batchAllowed = false, singleAttempt = true, researchedRefs = researched)
             val selectedKeys = plan.evidence.selected.map { it.item.key }.toSet()
+            val issues = generated.issues.toMutableList()
+            val rejections = mutableMapOf<String, Int>()
             val cards = CardValidator(plan.config, generator.categories.map { it.id }.toSet())
-                .validate(generated.cards, CitationValidator(signals, plan.merged)).filter { card ->
+                .validate(generated.cards, CitationValidator(signals, plan.merged), recent = plan.repetitionHistory,
+                    onRepeatWarning = {}, onRejected = { card, rejection ->
+                        issues += "카드 제외 (${card.title}) · ${rejection.detail}"
+                        val reason = rejection.reason.name
+                        rejections[reason] = rejections.getOrDefault(reason, 0) + 1
+                    }).filter { card ->
                     fun refs(value: collector.model.IdeaCard) =
                         (value.techSignals + value.demandSignals + value.competitors).map { it.itemId }.toSet()
                     val cited = refs(card)
-                    cited.any { it in selectedKeys } && plan.recent.none { refs(it) == cited || it.title == card.title }
+                    cited.any { it in selectedKeys } &&
+                        plan.recent.none { refs(it) == cited || it.title == card.title }
                 }.map { it.copy(badges = it.badges + "내가 고른 카드") }
             if (cards.isEmpty()) return@locked RequestedCardResult(failure = generated.failure ?: "검증을 통과한 카드가 없습니다.",
                 retryAllowed = guard.calls.isEmpty())
-            val report = RunReport(date.toString(), clock.instant().toString(), emptyList(), emptyList(),
-                emptyMap(), 0, llmCalls = guard.calls, cardCount = cards.size)
-            val record = PipelineResult(signals.map { it.item }, emptyList(), report, classified = signals, cards = cards)
+            val report = RunReport(date.toString(), requestedStartedAt.toString(), emptyList(), emptyList(),
+                emptyMap(), 0, llmCalls = guard.calls, cardCount = cards.size, issues = issues)
+            val record = PipelineResult(signals.map { it.item }, emptyList(), report, classified = signals, cards = cards,
+                metrics = RunMetrics(cardRejections = rejections))
             out.resolve("requested/$date-${UUID.randomUUID()}.json").writeAtomically(outputJson.encodeToString(record))
             val mailFailed = if (mailEnabled()) runCatching {
                 val rendered = HtmlRenderer(generator.categories).render(record)
@@ -789,7 +805,7 @@ class CollectorRuntime(
 
     suspend fun maintainPendingBatch(date: LocalDate) = locked {
         val config = pipelineConfig()
-        val history = FileHistorySearch(out, config.historyDays)
+        val history = FileHistorySearch(out, config.historyDays, clock.zone)
         val guard = CostGuard(config.dailyBudgetUsd, clock = clock, ledger = costLedger(out, history))
         withBatchProvider { provider ->
             batchPaths(date).filter(::isPendingBatch).forEach { path ->
@@ -853,7 +869,7 @@ class CollectorRuntime(
             prompts.resolve("profile.$id.match")
             prompts.resolve("profile.$id.analysis")
         }
-        val history = FileHistorySearch(out, defaults.historyDays)
+        val history = FileHistorySearch(out, defaults.historyDays, clock.zone)
         val ledger = if (noLlm) null else costLedger(out, history)
         val startedAt = runStartedAt ?: clock.instant()
         val today = runDate ?: startedAt.atZone(clock.zone).toLocalDate()
@@ -1025,7 +1041,7 @@ class CollectorRuntime(
             }
             val renderer = HtmlRenderer(IdeaGenerator(defaults, prompts, router).categories,
                 includeCandidates = options.includeMailCandidates)
-            val rendered = publishOrArchiveFailure(out, history, renderer, result, keepUnseen, beforePublish)
+            val rendered = publishOrArchiveFailure(out, history, renderer, result, keepUnseen, defaults.expansion.seedHistoryDays, beforePublish)
             router.markAppliedBatchesConsumed()
             if (router.remainingMillis() == 0L) {
                 result = result.copy(report = result.report.copy(issues = result.report.issues + "Publication exceeded the execution deadline"))
@@ -1087,7 +1103,7 @@ class CollectorRuntime(
             val monthlyBudget = MonthlyBudget(out, settings)
             val sources = ConfigLoader.load(paths.sourcesConfig)
             val execute = yes && !dryRun
-            val history = FileHistorySearch(out, defaults.historyDays)
+            val history = FileHistorySearch(out, defaults.historyDays, clock.zone)
             val costs = CostGuard(budgetOverride ?: settings.backfillRunUsd,
                 ledger = if (execute) costLedger(out, history) else null, budgetPerRun = true,
                 allowsReservation = monthlyBudget::allows)

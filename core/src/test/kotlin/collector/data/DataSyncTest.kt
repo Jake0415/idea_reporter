@@ -403,6 +403,16 @@ class DataSyncTest {
         assertEquals(mapOf("daily" to "sent", "trend" to "unknown"), states)
     }
 
+    @Test fun expansionSeedHistoryRestoresInFreshWorkspace() = withWorkspace { out, branch, prompts ->
+        val name = "expansion-seeds.json"
+        val seeds = listOf(collector.stage.UsedExpansionSeed("2026-11-23", "speech", "회계", "invert"))
+        write(out, name, outputJson.encodeToString(seeds))
+        DataSync(out, prompts, clock, pipelineConfig = out.resolve("pipeline.local.json")).push(branch)
+        val fresh = out.resolveSibling("fresh")
+        DataSync(fresh, prompts, clock, pipelineConfig = fresh.resolve("pipeline.local.json")).pull(branch)
+        assertEquals(seeds, outputJson.decodeFromString<List<collector.stage.UsedExpansionSeed>>(fresh.resolve(name).readText()))
+    }
+
     @Test fun batchCheckoutRestoresOnlyPublicCheckpoint() = withWorkspace { out, branch, prompts ->
         val checkpoint = """{"batchId":"msgbatch_test","runId":"test-run","submittedAt":"$now","requests":{
             "classify-2026-11-23-test-1":{"fingerprint":"fingerprint-test","itemKeys":["hn:1"],

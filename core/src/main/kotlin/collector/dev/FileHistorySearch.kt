@@ -18,10 +18,13 @@ import java.io.File
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.time.LocalDate
+import java.time.ZoneId
+import collector.pipeline.requestedCreationDay
 
 internal val outputJson = Json { ignoreUnknownKeys = true; prettyPrint = true; encodeDefaults = true }
 
-class FileHistorySearch(private val out: File, private val historyDays: Int) : RunHistory {
+class FileHistorySearch(private val out: File, private val historyDays: Int,
+                        override val requestedRunZone: ZoneId = ZoneId.systemDefault()) : RunHistory {
     private val runsByDate by lazy {
         out.listFiles().orEmpty().mapNotNull { file ->
             val date = if (file.extension == "json") runCatching { LocalDate.parse(file.nameWithoutExtension) }.getOrNull() else null
@@ -45,6 +48,12 @@ class FileHistorySearch(private val out: File, private val historyDays: Int) : R
 
     private fun archives(directory: String = "runs") =
         out.resolve(directory).listFiles().orEmpty().filter { it.isFile && it.extension == "json" }
+
+    override fun requestedRuns(today: LocalDate, days: Int): List<PipelineResult> =
+        archives("requested").asSequence().mapNotNull { readJson<PipelineResult>(it) }.filter { run ->
+            val day = runCatching { run.requestedCreationDay(requestedRunZone) }.getOrNull()
+            day != null && day in today.minusDays(days.toLong())..today
+        }.sortedByDescending { Instant.parse(it.report.startedAt) }.toList()
 
     override fun cardRun(cardId: String): PipelineResult? =
         runsByDate.values.firstOrNull { run -> run.cards.any { it.id == cardId } }

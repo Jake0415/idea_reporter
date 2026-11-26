@@ -14,6 +14,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -172,10 +173,13 @@ private val secureInputs = mutableMapOf<android.view.Window, Pair<Int, Boolean>>
     }
 }
 
-@Composable internal fun RunOption(label: Int, enabled: Boolean, interactive: Boolean = true, change: (Boolean) -> Unit) {
+@Composable internal fun RunOption(label: Int, enabled: Boolean, interactive: Boolean = true, help: Int? = null, change: (Boolean) -> Unit) {
     Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).toggleable(enabled, enabled = interactive, role = Role.Switch, onValueChange = change),
         horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(stringResource(label), Modifier.weight(1f))
+        Column(Modifier.weight(1f).alpha(if (interactive) 1f else 0.38f)) {
+            Text(stringResource(label))
+            help?.let { Small(it) }
+        }
         Switch(enabled, onCheckedChange = null, enabled = interactive)
     }
 }

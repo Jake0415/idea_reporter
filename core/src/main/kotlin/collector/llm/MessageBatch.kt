@@ -10,7 +10,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.*
 import java.io.File
 import java.nio.file.Files
 import java.util.UUID
@@ -26,11 +26,12 @@ internal data class BatchOutcome(
     val synchronousFallback: Boolean = false,
     val pending: Boolean = false,
     val itemResponses: List<Pair<List<String>, LlmResult>> = emptyList(),
-    val supplementRefs: List<SupplementRef> = emptyList()
+    val supplementRefs: List<SupplementRef> = emptyList(),
+    val generationSchemaVersion: Int? = null
 )
 
 internal data class GenerationBatchResume(val requestWithoutSupplement: LlmRequest, val supplementRefs: List<SupplementRef>,
-                                          val saveInput: Boolean = false)
+                                          val saveInput: Boolean = false, val schemaVersion: Int? = null)
 
 internal const val CLASSIFICATION_BATCH_PENDING = "분류 Batch 대기 — 다음 실행에서 이어서"
 
@@ -53,7 +54,8 @@ private data class BatchCheckpoint(
     val unsettledIds: Set<String>? = null,
     val supplementKeys: Set<String> = emptySet(),
     val supplementRefs: List<SupplementRef> = emptyList(),
-    val generationInput: LlmRequest? = null
+    val generationInput: LlmRequest? = null,
+    val generationSchemaVersion: Int? = null
 )
 
 @Serializable
@@ -174,12 +176,30 @@ private fun File.indexedCheckpoint(): BatchCheckpoint? {
     return entry.checkpoint.takeIf { it.batchId == entry.batchId && savedResults(entry.batchId).isFile }
 }
 
-internal fun savedGenerationInput(out: File, date: String, withoutSupplement: (LlmRequest) -> LlmRequest): LlmRequest? {
+internal const val GENERATION_SCHEMA_VERSION = 2
+
+internal fun savedGenerationInput(out: File, date: String, snapshot: Boolean): LlmRequest? {
     val path = batchPath(out, date, "generate")
     val saved = path.takeIf { it.isFile } ?: path.completed().takeIf { it.isFile } ?: return null
     return runCatching {
         val checkpoint = Json.decodeFromString<BatchCheckpoint>(saved.readText())
-        checkpoint.generationInput ?: checkpoint.requests.values.singleOrNull()?.request?.let(withoutSupplement)
+        if (!snapshot && checkpoint.generationSchemaVersion != null) return null
+        checkpoint.generationInput ?: checkpoint.requests.values.singleOrNull()?.request?.let { request ->
+            val user = Json.parseToJsonElement(request.user).jsonObject
+            val schema = request.jsonSchema
+            val root = schema.getValue("properties").jsonObject
+            val cards = root.getValue("cards").jsonObject
+            val fields = cards.getValue("items").jsonObject
+            val withoutSupplement = JsonObject(fields + mapOf(
+                "properties" to JsonObject(fields.getValue("properties").jsonObject - "supplementRefs"),
+                "required" to JsonArray(fields.getValue("required").jsonArray.filterNot { it.jsonPrimitive.content == "supplementRefs" })
+            ))
+            request.copy(
+                user = JsonObject(user - setOf("보충 자료", "보충 자료 지시")).toString(),
+                jsonSchema = JsonObject(schema + ("properties" to JsonObject(root +
+                    ("cards" to JsonObject(cards + ("items" to withoutSupplement))))))
+            )
+        }
     }.getOrNull()
 }
 
@@ -376,7 +396,8 @@ internal suspend fun runMessageBatch(
             }.toMap()
             val intent = BatchCheckpoint(requests = saved, submittedAt = Instant.now().toString(), call = call,
                 runId = runId, supplementRefs = generationResume?.supplementRefs.orEmpty(),
-                generationInput = generationResume?.takeIf { it.saveInput }?.requestWithoutSupplement)
+                generationInput = generationResume?.takeIf { it.saveInput }?.requestWithoutSupplement,
+                generationSchemaVersion = generationResume?.schemaVersion)
             val params = try {
                 provider.prepareBatch(saved.keys.zip(requests).toMap())
             } catch (e: Exception) {
@@ -619,11 +640,16 @@ internal suspend fun runMessageBatch(
     val byFingerprint = checkpoint.requests.entries.groupBy({ it.value.fingerprint }, { (id, _) ->
         byId[id]?.firstNotNullOfOrNull { it.result }
     }).mapValues { ArrayDeque(it.value) }
+    // Public generation checkpoints keep the custom ID but strip the request and canonical input.
+    val publicGenerationResult = if (resumed && generationResume != null && requests.size == 1 &&
+        checkpoint.generationInput == null && checkpoint.requests.values.singleOrNull()?.let { it.request == null } == true) {
+        byId[checkpoint.requests.keys.single()]?.firstNotNullOfOrNull { it.result }
+    } else null
     val matches = fingerprints.mapIndexedNotNull { index, fingerprint ->
         val key = if (resumed && checkpoint.requests.isNotEmpty()) {
             (generationResume?.requestWithoutSupplement ?: requests[index]).copy(model = checkpoint.call.model).fingerprint()
         } else fingerprint
-        byFingerprint[key]?.removeFirstOrNull()?.let { index to Result.success(it) }
+        (publicGenerationResult ?: byFingerprint[key]?.removeFirstOrNull())?.let { index to Result.success(it) }
     }.toMap()
     val missing = checkpoint.requests.keys - byId.keys
     if (missing.isNotEmpty()) issues += "Batch 결과 누락 · ${missing.size}건"
@@ -636,7 +662,12 @@ internal suspend fun runMessageBatch(
     }
     return BatchOutcome(matches, issues, elapsed(), synchronousFallback = true,
         itemResponses = successful.map { (saved, result) -> saved.itemKeys to result },
-        supplementRefs = checkpoint.supplementRefs)
+        supplementRefs = checkpoint.supplementRefs, generationSchemaVersion = checkpoint.generationSchemaVersion
+            ?: (checkpoint.generationInput ?: checkpoint.requests.values.singleOrNull()?.request)?.jsonSchema?.let { schema ->
+                val fields = schema["properties"]?.jsonObject?.get("cards")?.jsonObject
+                    ?.get("items")?.jsonObject?.get("properties")?.jsonObject
+                GENERATION_SCHEMA_VERSION.takeIf { "targetCustomer" in fields.orEmpty() }
+            })
 }
 
 

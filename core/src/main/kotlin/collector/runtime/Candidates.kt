@@ -4,6 +4,8 @@ import collector.model.DropReason
 import collector.model.Signal
 import collector.model.StageResult
 import collector.pipeline.PipelineResult
+import collector.stage.hasGenerationEvidence
+import collector.stage.verifiedMergedEvidence
 
 data class CandidateEntry(
     val signal: Signal,
@@ -42,8 +44,8 @@ data class RequestedCardResult(
 
 internal data class RequestedEvidence(val selected: List<Signal>, val added: List<Signal>) {
     val signals get() = selected + added
-    val sufficient get() = signals.any { it.classification.profile == "tech-signal" } &&
-        signals.any { it.classification.profile in setOf("demand-signal", "market-signal") }
+    fun sufficient(merged: Map<String, List<Signal>> = emptyMap()) =
+        hasGenerationEvidence(signals + verifiedMergedEvidence(signals, merged).values.flatten())
 }
 
 internal fun requestedEvidence(selected: List<Signal>, available: List<Signal>): RequestedEvidence {

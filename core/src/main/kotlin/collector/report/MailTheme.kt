@@ -45,6 +45,7 @@ object MailTheme {
         HIGHLIGHT(t("info-bg"), t("info-text")),
         /** 분류 이름 같은 중립 토큰 */
         NEUTRAL(t("surface-muted"), t("text-2")),
+        OUTLINE("transparent", t("text-2")),
     }
 
     fun document(title: String, body: String): String = buildString {
@@ -72,6 +73,7 @@ object MailTheme {
     /** 작은 배지(분류·좋은 신호). */
     fun pill(text: String, tone: Tone = Tone.NEUTRAL) =
         "<span style=\"display:inline-block;background:${tone.bg};color:${tone.fg};font-size:12px;line-height:18px;" +
+            (if (tone == Tone.OUTLINE) "border:1px solid ${t("text-3")};" else "") +
             "font-weight:600;padding:0 6px;border-radius:$RADIUS_INNER;white-space:nowrap\">$text</span>"
 
     /** 안내 상자(실패·주의 등). 크기는 본문보다 작게 — 카드보다 먼저 눈에 띄지 않도록. */

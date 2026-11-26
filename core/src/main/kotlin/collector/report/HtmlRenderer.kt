@@ -2,6 +2,9 @@ package collector.report
 
 import collector.pipeline.PipelineResult
 import collector.stage.Category
+import collector.stage.RECENT_CARD_WARNING
+import collector.stage.expansionLenses
+import collector.model.IdeaCard
 import collector.runtime.candidateView
 import collector.model.TrackedIdea
 import collector.model.SignalRef
@@ -18,11 +21,20 @@ import collector.report.MailTheme as T
 class HtmlRenderer(categories: List<Category>, private val appLinks: Boolean = false,
                    private val includeCandidates: Boolean = false) {
     private val names = categories.associate { it.id to it.name }
+    private val lenses = expansionLenses.associate { it.id to it.name }
+
+    private val expansionHelp = "오늘 자료에서 출발해 AI가 다른 고객·시장으로 넓혀 본 아이디어입니다. 추정이 섞여 있습니다."
+    private val speculationHelp = "출처로 확인되지 않은, AI가 넓혀 본 추정입니다."
+
+    private fun expansionLabel(card: IdeaCard): String? =
+        if (card.kind == "expanded") lenses[card.lens]?.let { "AI가 넓힘 · $it" } else null
 
     data class Rendered(val subject: String, val html: String, val text: String)
 
     fun render(result: PipelineResult, monthCost: Double = result.report.costUsd, todayCost: Double = result.report.costUsd): Rendered {
         val report = result.report
+        val cards = result.cards.sortedBy { it.kind == "expanded" }
+        val firstExpanded = cards.indexOfFirst { it.kind == "expanded" }
         val date = LocalDate.parse(report.runDate)
         val candidates = report.stages.firstOrNull { it.stage == "select" }?.output ?: 0
         val subject = "[AI 아이디어] ${date.monthValue}월 ${date.dayOfMonth}일 — 카드 ${result.cards.size}개 (수집 ${report.fetchedTotal} → 카드 후보 $candidates)"
@@ -57,10 +69,15 @@ class HtmlRenderer(categories: List<Category>, private val appLinks: Boolean = f
             if (failures.isNotEmpty()) appendLine("실패 출처 · $failures · 나머지 출처로 만들었습니다")
             report.issues.forEach { appendLine(it) }
             if (result.cards.isNotEmpty()) appendLine("\n목차")
-            result.cards.forEachIndexed { index, card ->
-                appendLine("${index + 1}. ${card.title} · ${names[card.category]} ${card.badges.joinToString(" · ")}".trimEnd())
+            cards.forEachIndexed { index, card ->
+                val labels = (listOfNotNull(names[card.category], expansionLabel(card)) + card.badges).joinToString(" · ")
+                appendLine("${index + 1}. ${card.title} · $labels")
             }
-            for (card in result.cards) {
+            for ((index, card) in cards.withIndex()) {
+                if (index == firstExpanded) {
+                    appendLine("\n넓혀 본 아이디어")
+                    appendLine(expansionHelp)
+                }
                 appendLine("\n${card.title}")
                 appendLine(card.oneLiner)
                 appendLine("오늘 고른 이유 · ${card.whyToday}")
@@ -69,6 +86,12 @@ class HtmlRenderer(categories: List<Category>, private val appLinks: Boolean = f
                     appendLine("보충 자료(웹 검색)")
                     card.supplementRefs.forEach { appendLine("- ${it.title} · ${it.note} · ${it.url}") }
                 }
+                if (card.kind == "expanded") {
+                    appendLine("AI 제안(추정)")
+                    appendLine(speculationHelp)
+                    card.speculation.forEach { appendLine("- $it") }
+                }
+                shownCaveats(card).forEach { appendLine("확인 필요 · $it") }
                 appendLine("가장 큰 위험 · ${card.biggestRisk}")
                 if (appLinks) appendLine("앱에서 보기 · ideacollector://card/${card.id}")
             }
@@ -92,17 +115,21 @@ class HtmlRenderer(categories: List<Category>, private val appLinks: Boolean = f
             report.issues.forEach { appendLine(T.banner(escape(it), T.Tone.INFO)) }
             if (result.cards.isNotEmpty()) {
                 appendLine("<h2 style=\"${T.h2}\">목차</h2><ol style=\"margin:0 0 8px;padding-left:20px\">")
-                result.cards.forEach { card ->
+                cards.forEach { card ->
                     appendLine("<li style=\"margin:0 0 6px\"><a href=\"#${escape(card.id)}\" style=\"${T.link}\">${escape(card.title)}</a> " +
-                        pills(card.category, card.badges) + "</li>")
+                        pills(card) + "</li>")
                 }
                 appendLine("</ol>")
             }
-            for ((index, card) in result.cards.withIndex()) {
+            for ((index, card) in cards.withIndex()) {
+                if (index == firstExpanded) {
+                    appendLine("<h2 style=\"${T.h2}\">넓혀 본 아이디어</h2>")
+                    appendLine("<p style=\"${T.p}\">$expansionHelp</p>")
+                }
                 val inner = buildString {
                     append("<h3 style=\"${T.h3}\">${index + 1}. ${escape(card.title)}</h3>")
                     append("<p style=\"${T.meta}\">${escape(card.oneLiner)}</p>")
-                    append("<p style=\"margin:0 0 12px\">${pills(card.category, card.badges)}</p>")
+                    append("<p style=\"margin:0 0 12px\">${pills(card)}</p>")
                     append("<p style=\"${T.p}\"><strong style=\"${T.strong}\">오늘 고른 이유</strong> · ${escape(card.whyToday)}</p>")
                     append("<ul style=\"margin:0 0 8px;padding-left:20px\">")
                     evidence(card.techSignals, card.demandSignals + card.competitors).forEach {
@@ -122,6 +149,16 @@ class HtmlRenderer(categories: List<Category>, private val appLinks: Boolean = f
                         }
                         append("</ul>")
                     }
+                    if (card.kind == "expanded") {
+                        append("<div style=\"${T.muted}\">")
+                        append("<p style=\"${T.p}\"><strong style=\"${T.strong}\">AI 제안(추정)</strong></p>")
+                        append("<p style=\"${T.meta}\">$speculationHelp</p>")
+                        append("<ul style=\"margin:0 0 8px;padding-left:20px\">")
+                        card.speculation.forEach { append("<li>${escape(it)}</li>") }
+                        append("</ul>")
+                        append("</div>")
+                    }
+                    shownCaveats(card).forEach { append("<p style=\"${T.meta}\">확인 필요 · ${escape(it)}</p>") }
                     append("<p style=\"margin:0\"><strong style=\"${T.strong}\">가장 큰 위험</strong> · ${escape(card.biggestRisk)}</p>")
                     if (appLinks) append("<p style=\"margin:8px 0 0;font-size:12px\"><a href=\"ideacollector://card/${escape(card.id)}\" style=\"${T.link}\">앱에서 보기</a></p>")
                 }
@@ -148,6 +185,9 @@ class HtmlRenderer(categories: List<Category>, private val appLinks: Boolean = f
         return Rendered(subject, T.document(escape(subject), body), text)
     }
 
+    private fun shownCaveats(card: IdeaCard) =
+        if (card.kind == "expanded") card.caveats else card.caveats.filter { it.startsWith(RECENT_CARD_WARNING) }
+
     private fun evidenceNote(ref: SignalRef): String {
         val note = ref.license?.let { "${ref.note} · 라이선스 $it" } ?: ref.note
         return if (ref.itemId.startsWith("github-issues:"))
@@ -156,9 +196,11 @@ class HtmlRenderer(categories: List<Category>, private val appLinks: Boolean = f
 
     private fun <T> evidence(tech: List<T>, other: List<T>) = tech.take(1) + other.take(1)
     /** 분류는 중립(회색), 좋은 신호 배지는 정보색 — 경고 노랑은 실패 안내에만 쓴다. */
-    private fun pills(category: String, badges: List<String>) =
-        (listOfNotNull(names[category]?.takeIf { it.isNotEmpty() }?.let { T.pill(escape(it)) }) +
-            badges.map { T.pill(escape(it), T.Tone.HIGHLIGHT) }).joinToString(" ")
+    private fun pills(card: IdeaCard) =
+        (listOfNotNull(
+            names[card.category]?.takeIf { it.isNotEmpty() }?.let { T.pill(escape(it)) },
+            expansionLabel(card)?.let { T.pill(escape(it), T.Tone.OUTLINE) }
+        ) + card.badges.map { T.pill(escape(it), T.Tone.HIGHLIGHT) }).joinToString(" ")
     private fun escape(text: String) = text.replace("&", "&amp;").replace("<", "&lt;")
         .replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&#39;")
     private fun usd(cost: Double) = String.format(Locale.ROOT, "$%.2f", cost)

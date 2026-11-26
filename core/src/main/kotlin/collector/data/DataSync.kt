@@ -32,7 +32,7 @@ private val datedOutput = Regex(
         "runs/(?:failed/|scheduled/)?$DATE-[0-9TZ.\\-]+\\.json|logs/$DATE\\.log)"
 )
 private val stateOutput = setOf("seen.json", "feedback.json", "tracked.json", "track-classified.json",
-    "metrics.json", "trend/themes.json", "mail/sent.json")
+    "metrics.json", "trend/themes.json", "mail/sent.json", "expansion-seeds.json")
 private val otherOutput = Regex(
     "analysis/[0-9]{8}-[0-9]{9}-[0-9a-f]{8}\\.(?:json|html|txt)|" +
         "cost-ledger-analysis/[0-9]{4}-[0-9]{2}\\.blocked|analysis-queue/$UUID_PATTERN\\.json|" +

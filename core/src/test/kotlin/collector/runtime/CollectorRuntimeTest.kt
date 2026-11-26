@@ -21,11 +21,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.put
+import kotlinx.serialization.json.*
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.QueueDispatcher
@@ -325,8 +321,13 @@ class CollectorRuntimeTest {
     }
 
     @ParameterizedTest
-    @ValueSource(longs = [0, 1])
-    fun classificationContinuationGeneratesAndReusesPaidCard(daysAgo: Long) = runBlocking {
+    @org.junit.jupiter.params.provider.CsvSource("0,current", "1,current", "1,legacy", "1,public-legacy",
+        "1,malformed-legacy")
+    fun classificationContinuationGeneratesAndReusesPaidCard(daysAgo: Long, checkpointKind: String) = runBlocking {
+        val legacySchema = checkpointKind.endsWith("legacy")
+        val malformed = checkpointKind == "malformed-legacy"
+        val publicCurrent = checkpointKind == "public-current"
+        val requestedWhilePending = checkpointKind == "requested-while-pending"
         val paths = paths()
         val date = java.time.LocalDate.now(clock).minusDays(daysAgo)
         paths.sourcesConfig.writeText(ConfigLoader.json.encodeToString(SourcesFile(listOf(
@@ -342,11 +343,12 @@ class CollectorRuntimeTest {
         val refs = items.map { collector.model.SignalRef(it.key, it.url, "Evidence") }
         val card = collector.model.IdeaCard("fixture", date.toString(), "Meeting notes", "One line", "Today", "Problem",
             listOf(refs[0]), listOf(refs[1]), emptyList(), emptyList(), "Two weeks", "Difference",
-            "Risk", "Validation", emptyList(), "dev-tools", tags = listOf("meeting-notes"))
+            "Risk", "Validation", emptyList(), "dev-tools", tags = listOf("meeting-notes"),
+            targetCustomer = "회의 진행자", coreTech = "음성 인식", pain = "회의 기록 누락")
         val older = date.minusDays(1)
         val previous = collector.pipeline.PipelineResult(emptyList(), emptyList(),
             collector.model.RunReport(older.toString(), older.atStartOfDay(ZoneOffset.UTC).toInstant().toString(),
-                emptyList(), emptyList(), emptyMap(), 0), cards = listOf(card.copy(runDate = older.toString())))
+                emptyList(), emptyList(), emptyMap(), 0), cards = listOf(card.copy(runDate = older.toString(), title = "Archived agenda tracker")))
         paths.outDir.mkdirs()
         paths.outDir.resolve("$older.json").writeText(collector.dev.outputJson.encodeToString(previous))
         val submitted = mutableMapOf<String, Map<String, collector.llm.LlmRequest>>()
@@ -356,7 +358,10 @@ class CollectorRuntimeTest {
             override suspend fun listModels() = emptyList<collector.llm.ModelInfo>()
             override suspend fun complete(req: collector.llm.LlmRequest): LlmResult {
                 synchronous++
-                error("Unexpected synchronous call: ${req.schemaName}")
+                check(malformed && req.schemaName == "generate")
+                val missingFields = card.copy(targetCustomer = "", coreTech = "", pain = "")
+                val body = Json.encodeToString(mapOf("cards" to listOf(missingFields)))
+                return LlmResult(body, id, req.model, 10, 4, 0, 0.001)
             }
             override fun prepareBatch(requests: Map<String, collector.llm.LlmRequest>): suspend () -> collector.llm.BatchState = {
                 val stage = requests.values.single().schemaName
@@ -371,7 +376,21 @@ class CollectorRuntimeTest {
                 val json = if (id == "classify") """{"items":[
                     {"itemId":"hf:1","profile":"tech-signal","score":9,"reason":"tech","summary":"Tech","tags":["speech"],"topicKey":"speech","topicLabel":"Speech"},
                     {"itemId":"hf:2","profile":"demand-signal","score":9,"reason":"demand","summary":"Demand","tags":["notes"],"topicKey":"notes","topicLabel":"Notes"}
-                ]}""" else collector.dev.outputJson.encodeToString(mapOf("cards" to listOf(card)))
+                ]}""" else if (malformed) "{}" else {
+                    val generated = when {
+                        legacySchema -> card.copy(targetCustomer = "", coreTech = "", pain = "")
+                        publicCurrent -> {
+                            val seed = Json.parseToJsonElement(req.value.user).jsonObject
+                                .getValue("expansionSeeds").jsonArray.first().jsonObject
+                            card.copy(kind = "expanded", lens = seed.getValue("lens").jsonPrimitive.content,
+                                seedId = seed.getValue("id").jsonPrimitive.content,
+                                targetCustomer = seed.getValue("targetCustomer").jsonPrimitive.content,
+                                speculation = listOf("다른 고객도 사용할 수 있습니다."))
+                        }
+                        else -> card
+                    }
+                    Json.encodeToString(mapOf("cards" to listOf(generated)))
+                }
                 receive(req.key, Result.success(LlmResult(json, this.id, req.value.model, 10, 4, 0, 0.001)))
             }
         }
@@ -382,6 +401,68 @@ class CollectorRuntimeTest {
         val resume = options.copy(resumeBatch = true)
         kotlin.test.assertFailsWith<BatchDeferredException> { runtime.runScheduled(resume) }
         assertEquals(setOf("classify", "generate"), submitted.keys)
+        val generationCheckpoint = paths.outDir.resolve("batch/$date-generate.json")
+        val checkpoint = Json.parseToJsonElement(generationCheckpoint.readText()).jsonObject
+        assertEquals(JsonPrimitive(2), checkpoint["generationSchemaVersion"])
+        if (legacySchema) {
+            val fieldsAddedByX1 = setOf("targetCustomer", "coreTech", "pain", "kind", "lens", "seedId", "speculation")
+            val canonical = checkpoint.getValue("generationInput").jsonObject
+            val schema = canonical.getValue("jsonSchema").jsonObject
+            val root = schema.getValue("properties").jsonObject
+            val cards = root.getValue("cards").jsonObject
+            val items = cards.getValue("items").jsonObject
+            val oldItems = JsonObject(items + mapOf(
+                "properties" to JsonObject(items.getValue("properties").jsonObject - fieldsAddedByX1),
+                "required" to JsonArray(items.getValue("required").jsonArray.filterNot { it.jsonPrimitive.content in fieldsAddedByX1 })
+            ))
+            val oldSchema = JsonObject(schema + ("properties" to JsonObject(root +
+                ("cards" to JsonObject(cards + ("items" to oldItems))))))
+            val (key, request) = checkpoint.getValue("requests").jsonObject.entries.single()
+            val oldRequest = JsonObject(request.jsonObject.getValue("request").jsonObject + ("jsonSchema" to oldSchema))
+            val oldCanonical = JsonObject(canonical + ("jsonSchema" to oldSchema))
+            val requestValue = Json.decodeFromString<collector.llm.LlmRequest>(oldCanonical.toString())
+            val fingerprint = java.security.MessageDigest.getInstance("SHA-256")
+                .digest(requestValue.copy(model = submitted.getValue("generate").values.single().model)
+                    .toString().toByteArray()).joinToString("") { "%02x".format(it) }
+            generationCheckpoint.writeText(JsonObject(checkpoint - setOf("generationSchemaVersion", "generationSeeds") + mapOf(
+                "generationInput" to oldCanonical,
+                "requests" to JsonObject(mapOf(key to JsonObject(request.jsonObject + mapOf(
+                    "request" to oldRequest, "fingerprint" to JsonPrimitive(fingerprint)
+                ))))
+            )).toString())
+            if (checkpointKind == "public-legacy") {
+                generationCheckpoint.writeText(collector.llm.publicBatchCheckpoint(generationCheckpoint.readText()))
+            }
+        }
+        if (publicCurrent) {
+            generationCheckpoint.writeText(collector.llm.publicBatchCheckpoint(generationCheckpoint.readText()))
+            val inputFile = paths.outDir.resolve("batch/$date-generate.input")
+            val input = Json.parseToJsonElement(inputFile.readText()).jsonObject
+            inputFile.writeText(JsonObject(input + ("expansionSeeds" to JsonArray(emptyList()))).toString())
+        }
+        if (requestedWhilePending) {
+            val requested = paths.outDir.resolve("requested").apply { mkdirs() }
+            val requestedRun = previous.copy(report = previous.report.copy(runDate = date.toString(),
+                startedAt = clock.instant().toString()), cards = listOf(card.copy(id = "requested-after-submit")))
+            requested.resolve("$date-requested.json").writeText(collector.dev.outputJson.encodeToString(requestedRun))
+            val result = runtime.runScheduled(resume)
+            assertEquals(0, result.daily?.cards)
+            val failed = paths.outDir.resolve("runs/failed").listFiles().orEmpty().single { it.name.startsWith("$date-") }
+            assertEquals(mapOf("REPEAT" to 1),
+                collector.dev.outputJson.decodeFromString<collector.pipeline.PipelineResult>(failed.readText()).metrics.cardRejections)
+            assertEquals(0, synchronous)
+            return@runBlocking
+        }
+        if (malformed) {
+            val result = runtime.runScheduled(resume)
+            assertEquals(0, result.daily?.cards)
+            assertEquals(false, result.daily?.published)
+            val failed = paths.outDir.resolve("runs/failed").listFiles().orEmpty().single { it.name.startsWith("$date-") }
+            val archived = collector.dev.outputJson.decodeFromString<collector.pipeline.PipelineResult>(failed.readText())
+            assertEquals(mapOf("MISSING_FIELD" to 1), archived.metrics.cardRejections)
+            assertEquals(1, synchronous)
+            return@runBlocking
+        }
         val receiver = CollectorRuntime(paths, SecretProvider { null }, clock, emptyList(), { listOf(provider) })
         receiver.runScheduled(options.copy(runDate = date.plusDays(1)), SourcesFile(emptyList()), clock.instant(), clock)
         assertTrue(!runtime.hasPendingBatch(date))

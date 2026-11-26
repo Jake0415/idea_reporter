@@ -12,17 +12,16 @@ import androidx.compose.ui.unit.dp
 import collector.config.PipelineConfig
 import collector.llm.ModelCatalog
 import collector.llm.ProviderId
+import collector.prompt.criteriaNames
+import collector.prompt.mergeCriteria
+import collector.prompt.parseCriteriaFields
+import collector.stage.expansionLenses
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
 
-private val criteriaNames = listOf("개발 범위", "대상 고객", "관심 분야", "제외 분야", "수익화 방식")
-private val criteriaLine = Regex("""^(- (?:\*\*)?(개발 범위|대상 고객|관심 분야|제외 분야|수익화(?: 방식)?):(?:\*\*)?[ \t]*)([^\r\n]*)""", RegexOption.MULTILINE)
-
-private fun criteriaName(name: String) = if (name == "수익화") "수익화 방식" else name
-
 internal fun criteriaFields(body: String): List<String> {
-    val values = criteriaLine.findAll(body).associate { criteriaName(it.groupValues[2]) to it.groupValues[3] }
+    val values = parseCriteriaFields(body)
     return criteriaNames.map { values[it].orEmpty() }
 }
 
@@ -31,19 +30,19 @@ internal fun effectiveCriteria(body: String, queued: List<app.ideacollector.data
         mergeCriteria(text, Json.decodeFromString<Map<String, String>>(change.json))
     }
 
-internal fun mergeCriteria(body: String, changes: Map<String, String>): String {
-    val remaining = changes.toMutableMap()
-    val merged = criteriaLine.replace(body) { line ->
-        val name = criteriaName(line.groupValues[2])
-        val value = changes[name] ?: return@replace line.value
-        remaining.remove(name)
-        line.groupValues[1] + value
+internal fun parseMyFields(value: String): List<String>? = value.lineSequence().map(String::trim)
+    .filter(String::isNotEmpty).toList().takeIf { fields ->
+        fields.size <= 5 && fields.all { it.codePointCount(0, it.length) <= 30 }
     }
-    if (remaining.isEmpty()) return merged
-    val separator = if ("\r\n" in body) "\r\n" else "\n"
-    val prefix = if (merged.isEmpty() || merged.endsWith("\n")) merged else merged + separator
-    return prefix + remaining.entries.joinToString(separator, postfix = separator) { (name, value) -> "- **$name:** $value" }
-}
+
+internal val lensLabels = mapOf(
+    "other-customer" to (R.string.expansion_other_customer to R.string.expansion_other_customer_help),
+    "korea" to (R.string.expansion_korea to R.string.expansion_korea_help),
+    "b2b-flip" to (R.string.expansion_b2b_flip to R.string.expansion_b2b_flip_help),
+    "unbundle" to (R.string.expansion_unbundle to R.string.expansion_unbundle_help),
+    "invert" to (R.string.expansion_invert to R.string.expansion_invert_help),
+    "second-order" to (R.string.expansion_second_order to R.string.expansion_second_order_help)
+)
 
 @Composable
 internal fun CriteriaFields(app: CollectorApp, operation: (suspend () -> Unit) -> Unit,
@@ -90,6 +89,16 @@ internal fun CriteriaFields(app: CollectorApp, operation: (suspend () -> Unit) -
             singleLine = label !in setOf(R.string.r3_exclusions, R.string.r3_revenue),
             minLines = if (label in setOf(R.string.r3_exclusions, R.string.r3_revenue)) 2 else 1)
     }
+    val lensIds = expansionLenses.map { it.id }
+    var originalMyFields by rememberSaveable { mutableStateOf(pipeline.expansion.myFields.joinToString("\n")) }
+    var myFields by rememberSaveable { mutableStateOf(originalMyFields) }
+    var originalExpansion by rememberSaveable { mutableStateOf(pipeline.expansion.enabled) }
+    var expansion by rememberSaveable { mutableStateOf(originalExpansion) }
+    var originalLenses by rememberSaveable {
+        mutableStateOf(ArrayList(lensIds.filter { pipeline.expansion.lenses[it] == true }))
+    }
+    var enabledLenses by rememberSaveable { mutableStateOf(ArrayList(originalLenses)) }
+    val parsedFields = parseMyFields(myFields)
     var cards by rememberSaveable { mutableStateOf(pipeline.ideaCount.toString()) }
     var category by rememberSaveable { mutableStateOf(pipeline.maxCardsPerCategory.toString()) }
     var tag by rememberSaveable { mutableStateOf(pipeline.maxCandidatesPerTag.toString()) }
@@ -103,6 +112,23 @@ internal fun CriteriaFields(app: CollectorApp, operation: (suspend () -> Unit) -
         Field(tag, { tag = it }, R.string.r3_tag_cap, true, hint = PipelineConfig.defaults.maxCandidatesPerTag.toString(), help = R.string.r3_tag_cap_help)
         Field(feedback, { feedback = it }, R.string.r3_feedback_count, true, hint = PipelineConfig.defaults.feedbackExamples.toString(), help = R.string.r3_feedback_count_help)
     }
+    if (!onboarding) {
+        HorizontalDivider()
+        Text(stringResource(R.string.expansion_settings), style = MaterialTheme.typography.titleMedium)
+        Small(R.string.expansion_description)
+        RunOption(R.string.expansion_enabled, expansion, help = R.string.expansion_enabled_help) { expansion = it }
+        Field(myFields, { myFields = it }, R.string.expansion_my_fields, minLines = 2,
+            error = R.string.expansion_my_fields_error.takeIf { parsedFields == null }, help = R.string.expansion_my_fields_help)
+        Text(stringResource(R.string.expansion_methods), style = MaterialTheme.typography.titleSmall)
+        lensIds.forEach { id ->
+            val (label, help) = lensLabels.getValue(id)
+            RunOption(label, id in enabledLenses, interactive = expansion, help = help) { checked ->
+                enabledLenses = ArrayList(if (checked) enabledLenses + id else enabledLenses - id)
+            }
+        }
+        if (!expansion) Notice(stringResource(R.string.expansion_disabled))
+        else if (enabledLenses.isEmpty()) Notice(stringResource(R.string.expansion_no_lenses))
+    }
     val valid = ((cards.ifBlank { PipelineConfig.defaults.ideaCount.toString() }.toIntOrNull() ?: 0) in 3..7 && (category.ifBlank { PipelineConfig.defaults.maxCardsPerCategory.toString() }.toIntOrNull() ?: 0) > 0 &&
         (tag.ifBlank { PipelineConfig.defaults.maxCandidatesPerTag.toString() }.toIntOrNull() ?: 0) > 0 && (feedback.ifBlank { PipelineConfig.defaults.feedbackExamples.toString() }.toIntOrNull() ?: -1) >= 0)
     if (!valid) Small(R.string.r3_invalid)
@@ -110,11 +136,24 @@ internal fun CriteriaFields(app: CollectorApp, operation: (suspend () -> Unit) -
         if (!saving) {
             val values = fields
             val numbers = arrayListOf(cards, category, tag, feedback)
+            val editedFields = myFields
+            val editedExpansion = expansion
+            val editedLenses = enabledLenses
+            val expansionChanges = buildJsonObject {
+                if (editedFields != originalMyFields) put("myFields", Json.encodeToJsonElement(checkNotNull(parsedFields)))
+                if (editedExpansion != originalExpansion) put("enabled", editedExpansion)
+                val lenses = buildJsonObject {
+                    lensIds.filter { (it in editedLenses) != (it in originalLenses) }
+                        .forEach { put(it, it in editedLenses) }
+                }
+                if (lenses.isNotEmpty()) put("lenses", lenses)
+            }
             val changes = criteriaNames.indices.filter { values[it] != original[it] }.associate {
                 criteriaNames[it] to values[it].lineSequence().joinToString(" ") { line -> line.trim() }.trim()
             }
             val defaults = PipelineConfig.defaults
             val cardChanges = buildJsonObject {
+                if (expansionChanges.isNotEmpty()) put("expansion", expansionChanges)
                 if (numbers[0] != originalNumbers[0]) put("ideaCount", numbers[0].ifBlank { defaults.ideaCount.toString() }.toInt())
                 if (numbers[1] != originalNumbers[1]) put("maxCardsPerCategory", numbers[1].ifBlank { defaults.maxCardsPerCategory.toString() }.toInt())
                 if (numbers[2] != originalNumbers[2]) put("maxCandidatesPerTag", numbers[2].ifBlank { defaults.maxCandidatesPerTag.toString() }.toInt())
@@ -139,6 +178,12 @@ internal fun CriteriaFields(app: CollectorApp, operation: (suspend () -> Unit) -
                     if (category == numbers[1]) category = originalNumbers[1]
                     if (tag == numbers[2]) tag = originalNumbers[2]
                     if (feedback == numbers[3]) feedback = originalNumbers[3]
+                    originalMyFields = savedPipeline.expansion.myFields.joinToString("\n")
+                    originalExpansion = savedPipeline.expansion.enabled
+                    originalLenses = ArrayList(lensIds.filter { savedPipeline.expansion.lenses[it] == true })
+                    if (myFields == editedFields) myFields = originalMyFields
+                    if (expansion == editedExpansion) expansion = originalExpansion
+                    if (enabledLenses == editedLenses) enabledLenses = ArrayList(originalLenses)
                     done()
                 } finally {
                     saving = false
@@ -147,18 +192,26 @@ internal fun CriteriaFields(app: CollectorApp, operation: (suspend () -> Unit) -
         }
     }
     if (onboarding && next != null) WizardNext(valid && !saving, save, next)
-    else Primary(R.string.save, valid && !saving, save)
+    else Primary(R.string.save, valid && parsedFields != null && !saving, save)
 }
 
 internal fun mergePipelinePatch(original: JsonObject, patch: JsonObject): JsonObject {
-    val models = patch["models"] as? JsonObject ?: return JsonObject(original + patch)
-    val previous = (original["models"] as? JsonObject).orEmpty()
-    return JsonObject(original + patch + ("models" to JsonObject(previous + models)))
+    val merged = (original + patch).toMutableMap()
+    for (section in listOf("models", "expansion")) {
+        val changes = patch[section] as? JsonObject ?: continue
+        val previous = (original[section] as? JsonObject).orEmpty()
+        val fields = (previous + changes).toMutableMap()
+        if (section == "expansion") (changes["lenses"] as? JsonObject)?.let { lenses ->
+            fields["lenses"] = JsonObject((previous["lenses"] as? JsonObject).orEmpty() + lenses)
+        }
+        merged[section] = JsonObject(fields)
+    }
+    return JsonObject(merged)
 }
 
 internal fun effectivePipeline(app: CollectorApp, queued: List<app.ideacollector.data.PendingLocalChange>): PipelineConfig {
     val current = PipelineConfig.load(app.paths.pipelineConfig)
-    val base = Json.encodeToJsonElement(PipelineConfig.serializer(), current).jsonObject
+    val base = Json { encodeDefaults = true }.encodeToJsonElement(PipelineConfig.serializer(), current).jsonObject
     val effective = queued.filter { it.configName == "patch:pipeline.local.json" }.fold(base) { values, change ->
         mergePipelinePatch(values, Json.parseToJsonElement(change.json).jsonObject)
     }

@@ -1,5 +1,6 @@
 package app.ideacollector
 
+import collector.prompt.mergeCriteria
 import app.ideacollector.github.contractJson
 import collector.budget.BudgetSettings
 import collector.data.DataBranch.VERSION

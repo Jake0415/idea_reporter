@@ -46,9 +46,30 @@ class BackupTest {
         val summary = Json.decodeFromString<PipelineResult>(target.outDir.resolve(runPath).readText())
         assertEquals(report, summary.report)
         assertEquals(listOf(card), summary.cards)
+        assertEquals("daily", summary.cards.single().kind)
+        assertEquals("", summary.cards.single().targetCustomer)
+        assertTrue(summary.cards.single().speculation.isEmpty())
         assertEquals("criteria", target.promptsDir.resolve("criteria.md").readText())
         assertEquals("[]", target.outDir.resolve("feedback.json").readText())
         assertEquals("{}", target.configDir.resolve("pipeline.local.json").readText())
+    }
+
+    @Test fun expansionHistoryIsBackedUpAndPreservedWhenRestoringAnOldBackup() = runBlocking {
+        val source = paths("source")
+        val target = paths("target")
+        val seeds = """[{"date":"2026-11-26","techTopic":"speech","targetCustomer":"회계","lens":"invert"}]"""
+        source.outDir.resolve("expansion-seeds.json").put(seeds)
+        Backup.restore(target, Backup.read(Backup.create(source).byteInputStream()))
+        val restored = target.outDir.resolve("expansion-seeds.json")
+        assertEquals(Json.parseToJsonElement(seeds), Json.parseToJsonElement(restored.readText()))
+        Backup.restore(target, Backup.read(Backup.create(paths("legacy")).byteInputStream()))
+        assertEquals(Json.parseToJsonElement(seeds), Json.parseToJsonElement(restored.readText()))
+    }
+
+    @Test fun rejectsInvalidExpansionSeedDateOnImport() {
+        val data = """[{"date":"2026-11-31","techTopic":"speech","targetCustomer":"회계","lens":"invert"}]"""
+        val backup = """{"schemaVersion":1,"createdAt":"2026-11-26T00:00:00Z","files":{"out/expansion-seeds.json":${Json.encodeToString(data)}}}"""
+        assertFailsWith<IllegalArgumentException> { Backup.read(backup.byteInputStream()) }
     }
 
     @Test fun excludesCredentialsAndAddresses() {

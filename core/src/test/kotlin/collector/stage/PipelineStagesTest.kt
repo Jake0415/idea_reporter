@@ -40,8 +40,21 @@ class PipelineStagesTest {
         "card", today.toString(), "회의록 <도구>", "한 줄", "오늘", "문제",
         listOf(SignalRef(tech.key, tech.url, "기술")), listOf(SignalRef(demand.key, demand.url, "수요")),
         emptyList(), emptyList(), "1인 2주", "차이", "위험", "검증", emptyList(), "dev-tools",
-        tags = listOf("meeting-notes")
+        tags = listOf("meeting-notes"), targetCustomer = "회의 진행자", coreTech = "음성 인식", pain = "회의 기록 누락"
     )
+
+    @Test fun newCardsRequireCustomerTechnologyAndPain() {
+        val tech = signal(item(1))
+        val demand = signal(item(2), profile = "demand-signal")
+        val rejected = mutableListOf<CardRejection>()
+        val accepted = CardValidator(config, setOf("dev-tools")).validate(
+            listOf(card(tech.item, demand.item).copy(targetCustomer = "", coreTech = "", pain = "")), CitationValidator(listOf(tech, demand)),
+            onRejected = { _, rejection -> rejected += rejection }
+        )
+        assertTrue(accepted.isEmpty())
+        assertEquals(CardRejectionReason.MISSING_FIELD, rejected.single().reason)
+        for (field in listOf("targetCustomer", "coreTech", "pain")) assertContains(rejected.single().detail, field)
+    }
 
     @Test fun demandMinimumOverridesProfileAndTagCaps() {
         val limit = config.copy(maxCandidatesPerTag = 1, profiles = config.profiles +
@@ -273,6 +286,7 @@ class PipelineStagesTest {
             emptyList(), emptyMap(), 0))
         val result = full.run(base, inputs, emptyList(), emptyList(), now, today) {}
         assertEquals(2, tokenLimits.size)
+        assertEquals(config.ideaCount * 1700 + 128, tokenLimits.first())
         assertEquals(if (truncated) tokenLimits[0] * 3 / 2 else tokenLimits[0], tokenLimits[1])
         assertEquals(expected.title, result.cards.single().title)
         assertEquals(2, result.report.stages.single { it.stage == "generate" }.output)
@@ -287,6 +301,7 @@ class PipelineStagesTest {
         assertEquals(JsonPrimitive(2), metrics["scoreClampWarnings"])
         val counts = metrics.getValue("profiles").jsonObject
         assertEquals(Json.parseToJsonElement("""{"classified":4,"thresholdPassed":3,"selected":2}"""), counts["tech-signal"])
+        assertEquals(Json.parseToJsonElement("""{"classified":0,"thresholdPassed":0,"selected":0}"""), counts["market-signal"])
         assertEquals(Json.parseToJsonElement("""{"classified":0,"thresholdPassed":0,"selected":0}"""), counts["demand-signal"])
     }
 

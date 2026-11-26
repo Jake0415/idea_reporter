@@ -53,7 +53,8 @@ data class PipelineResult(
     val metrics: RunMetrics = RunMetrics(),
     val tracked: List<TrackedIdea> = emptyList(),
     val trackingOnlyKeys: Set<String> = emptySet(),
-    val trackClassified: Map<String, TrackClassification> = emptyMap()
+    val trackClassified: Map<String, TrackClassification> = emptyMap(),
+    val usedExpansionSeeds: List<collector.stage.UsedExpansionSeed> = emptyList()
 )
 
 /**

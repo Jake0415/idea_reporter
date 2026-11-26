@@ -16,8 +16,25 @@ import java.util.UUID
 @Serializable data class Category(val id: String, val name: String)
 @Serializable private data class Categories(val categories: List<Category>)
 
+val ideaCategories: List<Category> by lazy {
+    Json.decodeFromString<Categories>(
+        checkNotNull(Category::class.java.getResourceAsStream("/categories.json"))
+            .bufferedReader(Charsets.UTF_8).use { it.readText() }
+    ).categories
+}
+
 data class GeneratedCards(val cards: List<IdeaCard>, val failure: String? = null, val issues: List<String> = emptyList(),
-                          val reusedPaidBatch: Boolean = false)
+                          val reusedPaidBatch: Boolean = false, val requiresExpansionFields: Boolean = true)
+
+internal fun verifiedMergedEvidence(signals: List<Signal>, merged: Map<String, List<Signal>>) =
+    signals.associate { (item) ->
+        item.key to merged[item.key].orEmpty().filter { it.item.url in item.mergedUrls }
+    }
+
+internal fun hasGenerationEvidence(signals: List<Signal>): Boolean {
+    val evidence = signals.filter { it.classification.profile in setOf("tech-signal", "demand-signal", "market-signal") }
+    return evidence.distinctBy { it.item.key }.size >= 2 && evidence.any { it.classification.profile == "tech-signal" }
+}
 
 class IdeaGenerator(
     private val config: PipelineConfig, private val prompts: PromptResolver, private val router: LlmRouter
@@ -27,9 +44,7 @@ class IdeaGenerator(
             UrlNormalizer.normalize(it.url) to it.copy(title = it.title.take(supplementTitleChars), note = it.note.take(supplementNoteChars))
         }
 
-    val categories: List<Category> = Json.decodeFromString<Categories>(
-        checkNotNull(javaClass.getResource("/categories.json")).readText()
-    ).categories
+    val categories: List<Category> get() = ideaCategories
 
     suspend fun generate(today: String, signals: List<Signal>, history: Map<String, List<HistoryHit>>,
                          feedback: List<String>, recentCards: List<String>,
@@ -38,24 +53,19 @@ class IdeaGenerator(
                          snapshotBatchInputs: Boolean = false,
                          quoteOnly: ((LlmRequest) -> Unit)? = null,
                          singleAttempt: Boolean = false,
-                         researchedRefs: List<SupplementRef>? = null): GeneratedCards {
-        val mergedEvidence = signals.associate { (item) ->
-            item.key to merged[item.key].orEmpty().filter { it.item.url in item.mergedUrls }
-        }
-        val evidence = (signals + mergedEvidence.values.flatten()).distinctBy { it.item.key }
-        if (quoteOnly == null && (evidence.size < 2 || evidence.none { it.classification.profile == "tech-signal" })) {
-            return GeneratedCards(emptyList(), "쓸 수 있는 기술 항목을 포함한 카드 후보를 두 건 이상 확보하지 못했습니다.")
-        }
+                         researchedRefs: List<SupplementRef>? = null,
+                         expansionSeeds: List<ExpansionSeed> = emptyList()): GeneratedCards {
+        val mergedEvidence = verifiedMergedEvidence(signals, merged)
+        val resumingBatch = batchAllowed && out != null && hasSavedBatch(out, today, "generate")
+        val sufficient = hasGenerationEvidence(signals + mergedEvidence.values.flatten())
+        val insufficient = "카드 작성에 필요한 기술과 요청·불편 또는 이미 나온 제품 근거가 부족합니다."
+        if (quoteOnly == null && !resumingBatch && !sufficient) return GeneratedCards(emptyList(), insufficient)
         val ideas = prompts.resolve("ideas")
         val criteria = prompts.resolve("criteria")
         val issues = mutableListOf<String>()
-        val resumingBatch = batchAllowed && out != null && hasSavedBatch(out, today, "generate")
-        val savedInput = if (snapshotBatchInputs && resumingBatch) savedGenerationInput(out, today) { request ->
-            val user = Json.parseToJsonElement(request.user).jsonObject
-            request.copy(user = JsonObject(user - setOf("보충 자료", "보충 자료 지시")).toString(),
-                jsonSchema = outputSchema(false))
-        } else null
+        val savedInput = if (resumingBatch) savedGenerationInput(out, today, snapshotBatchInputs) else null
         var reusedPaidBatch = false
+        var requiresExpansionFields = true
         var verifiedRefs = verified(researchedRefs.orEmpty())
         fun user(compact: Boolean, includeSupplement: Boolean = true) = buildJsonObject {
             put("today", today)
@@ -83,6 +93,7 @@ class IdeaGenerator(
                 if (members.isNotEmpty()) put("mergedSignals", JsonArray(members.map { (other, classification, _, otherContext) ->
                     buildJsonObject {
                         put("itemId", item.key)
+                        if (expansionSeeds.isNotEmpty()) put("sourceItemId", other.key)
                         put("url", other.url)
                         put("title", other.title)
                         put("source", other.source)
@@ -97,13 +108,24 @@ class IdeaGenerator(
             put("history", Json.encodeToJsonElement(history))
             put("feedback", Json.encodeToJsonElement(feedback))
             put("recentCards", Json.encodeToJsonElement(recentCards))
+            put("카드 필드 지시", "targetCustomer는 대상 고객, coreTech는 핵심 기술을 짧은 명사구로, pain은 핵심 불편을 한 문장으로 쓴다. " +
+                "매일 카드는 kind=daily, lens와 seedId는 null, speculation은 빈 배열로 쓴다.")
+            if (expansionSeeds.isNotEmpty()) {
+                put("확장 카드 지시", "expansionSeeds에서 씨앗 하나를 골라 ideaCount 안에서 cardsPerDay장까지 쓴다. " +
+                    "kind=expanded, lens와 seedId는 씨앗의 값, targetCustomer는 씨앗의 고객을 쓴다. " +
+                    "씨앗의 기술을 포함해 씨앗 자료만 인용한다. 병합 자료는 씨앗 itemIds와 sourceItemId를 비교하고, 인용에는 itemId와 URL을 쓴다. " +
+                    "근거가 없는 추정은 speculation에 하나 이상 적고, " +
+                    "whyToday에 출발 신호와 넓히는 방법을 적는다. 적합한 씨앗이 없으면 매일 카드로 채운다.")
+                put("expansionSeeds", Json.encodeToJsonElement(expansionSeeds))
+                put("cardsPerDay", config.expansion.cardsPerDay.coerceAtMost(config.ideaCount))
+            }
             if (includeSupplement && verifiedRefs.isNotEmpty()) {
                 put("보충 자료", Json.encodeToJsonElement(verifiedRefs.values.toList()))
                 put("보충 자료 지시", "supplementRefs에 보충 자료 URL, 제목, 관련 설명을 최대 3개 넣는다. " +
                     "해당 자료가 없으면 빈 배열을 쓴다. 쓸 수 있는 기술과 사람들의 요청·불편 또는 이미 나온 제품의 필수 근거는 수집 항목을 인용한다.")
             }
         }
-        val tokens = config.ideaCount * 1400 + 128
+        val tokens = config.ideaCount * 1700 + 128
         if (quoteOnly != null) {
             quoteOnly(LlmRequest("", ideas.text, user(compact = false).toString(),
                 outputSchema(config.supplementSearch.enabled), "generate", tokens, Effort.LOW))
@@ -128,21 +150,26 @@ class IdeaGenerator(
             }
         }
         suspend fun request(compact: Boolean, limit: Int, useBatch: Boolean = false): Response<Output> {
-            val request = savedInput ?: LlmRequest("", ideas.text, user(compact).toString(),
+            val request = LlmRequest("", ideas.text, user(compact).toString(),
                 outputSchema(verifiedRefs.isNotEmpty()), "generate", limit, Effort.LOW)
             val batch = if (useBatch && out != null && (config.batch.generate || resumingBatch)) {
                 router.batch("generate", today, out, config.batch, listOf(request),
                     mapOf(ideas.promptId to ideas.version, criteria.promptId to criteria.version),
                     GenerationBatchResume(savedInput ?: request.copy(user = user(compact, includeSupplement = false).toString(),
-                        jsonSchema = outputSchema(false)), verifiedRefs.values.toList(), snapshotBatchInputs))
+                        jsonSchema = outputSchema(false)), verifiedRefs.values.toList(), snapshotBatchInputs,
+                        GENERATION_SCHEMA_VERSION))
             } else null
             issues += batch?.issues.orEmpty()
             if (batch?.pending == true) return Response.Failed("Batch 결과 대기")
             if (resumingBatch && batch != null) verifiedRefs = verified(batch.supplementRefs)
-            reusedPaidBatch = snapshotBatchInputs && resumingBatch && batch?.responses?.get(0)?.isSuccess == true
-            val current = savedInput ?: request.copy(user = user(compact).toString(), jsonSchema = outputSchema(verifiedRefs.isNotEmpty()))
+            reusedPaidBatch = resumingBatch && batch?.responses?.get(0)?.isSuccess == true
+            requiresExpansionFields = !reusedPaidBatch || batch?.generationSchemaVersion == GENERATION_SCHEMA_VERSION
+            if (!reusedPaidBatch && !sufficient) return Response.Failed(insufficient)
+            val current = request.copy(user = user(compact).toString(), jsonSchema = outputSchema(verifiedRefs.isNotEmpty()))
             return structuredCall(router, "generate", listOf(ideas, criteria), current,
-                initial = batch?.responses?.get(0), allowFallback = !singleAttempt)
+                initial = batch?.responses?.get(0), allowFallback = !singleAttempt,
+                retryInvalid = !requiresExpansionFields && sufficient && !singleAttempt,
+                onAttempt = { requiresExpansionFields = true })
         }
         val first = request(compact = false, limit = if (retryAfterTruncation) tokens * 3 / 2 else tokens, useBatch = batchAllowed)
         val response = if (!singleAttempt && first is Response.Failed && first.reason == BUDGET_LIMIT && !reusedPaidBatch)
@@ -157,19 +184,25 @@ class IdeaGenerator(
                 val removed = card.supplementRefs.size - refs.size
                 if (removed > 0) issues += "보충 근거 링크 ${removed}건 제거"
                 card.copy(id = UUID.randomUUID().toString(), runDate = today, badges = emptyList(), supplementRefs = refs)
-            }, if (response.value.cards.isEmpty()) "작성 모델이 근거 조건을 충족한 아이디어를 찾지 못했습니다." else null, issues, reusedPaidBatch)
+            }, if (response.value.cards.isEmpty()) "작성 모델이 근거 조건을 충족한 아이디어를 찾지 못했습니다." else null, issues, reusedPaidBatch, requiresExpansionFields)
             is Response.Failed -> GeneratedCards(emptyList(), response.reason, issues, reusedPaidBatch)
         }
     }
 
     @Serializable private data class Output(val cards: List<IdeaCard>)
+    private val nullableString = buildJsonObject { put("type", JsonArray(listOf(JsonPrimitive("string"), JsonPrimitive("null")))) }
     private val refs = array(schema("itemId" to string, "url" to string, "note" to string))
     private fun outputSchema(withSearch: Boolean) = schema("cards" to array(schema(*(
         listOf(
             "title" to string, "oneLiner" to string, "whyToday" to string, "problem" to string,
             "techSignals" to refs, "demandSignals" to refs, "competitors" to refs, "history" to strings,
             "effort" to string, "differentiation" to string, "biggestRisk" to string, "validationPlan" to string,
-            "caveats" to strings, "category" to string, "tags" to strings
+            "caveats" to strings, "category" to string, "tags" to strings,
+            "targetCustomer" to string, "coreTech" to string, "pain" to string,
+            "kind" to buildJsonObject {
+                put("type", "string")
+                put("enum", JsonArray(listOf(JsonPrimitive("daily"), JsonPrimitive("expanded"))))
+            }, "lens" to nullableString, "seedId" to nullableString, "speculation" to strings
         ) + if (withSearch) listOf("supplementRefs" to array(schema("url" to string, "title" to string, "note" to string)))
         else emptyList()
     ).toTypedArray())))
@@ -196,9 +229,11 @@ class CitationValidator(signals: List<Signal>, merged: Map<String, List<Signal>>
 
     private fun original(ref: SignalRef): Signal? = originalsByRef[ref.itemId to ref.url]
 
+    internal fun belongsTo(ref: SignalRef, itemIds: List<String>) = original(ref)?.item?.key?.let { it in itemIds } == true
+
     fun validate(card: IdeaCard): IdeaCard? = check(card).card
 
-    internal fun check(card: IdeaCard): CitationCheck {
+    internal fun check(card: IdeaCard, requireDemand: Boolean = true): CitationCheck {
         val used = mutableSetOf<String>()
         fun List<SignalRef>.valid(invalid: MutableMap<String, Int>, vararg profiles: String) = mapNotNull { ref ->
             val signal = original(ref)
@@ -232,7 +267,7 @@ class CitationValidator(signals: List<Signal>, merged: Map<String, List<Signal>>
             else "$block 근거 링크 없음(${invalid.values.sum()}건 무효: ${summary(invalid)})"
         val missingBlocks = listOfNotNull(
             if (tech.isEmpty()) missing("쓸 수 있는 기술", counts("techSignals")) else null,
-            if (demand.isEmpty() && competitors.isEmpty()) missing("요청·불편 또는 이미 나온 제품", counts("demandSignals", "competitors")) else null
+            if (requireDemand && demand.isEmpty() && competitors.isEmpty()) missing("요청·불편 또는 이미 나온 제품", counts("demandSignals", "competitors")) else null
         )
         if (missingBlocks.isNotEmpty()) return CitationCheck(null, missingBlocks.joinToString(" · "), invalidByBlock)
         val invalid = counts("techSignals", "demandSignals", "competitors")
@@ -251,20 +286,27 @@ class CitationValidator(signals: List<Signal>, merged: Map<String, List<Signal>>
 }
 
 enum class CardRejectionReason {
-    MISSING_FIELD, INVALID_CATEGORY, INVALID_TAGS, CITATION, DUPLICATE, CATEGORY_CAP, IDEA_COUNT_CAP
+    MISSING_FIELD, INVALID_CATEGORY, INVALID_TAGS, CITATION, DUPLICATE, REPEAT, SEED_MISMATCH, EXPANSION_CAP, CATEGORY_CAP, IDEA_COUNT_CAP
 }
 
 data class CardRejection(val reason: CardRejectionReason, val detail: String)
 
 class CardValidator(private val config: PipelineConfig, private val categories: Set<String>) {
-    private data class Evidence(val title: String, val itemIds: Set<String>, val demandIds: Set<String>, val techTopics: Set<String>)
+    private data class Evidence(val card: IdeaCard, val itemIds: Set<String>, val demandIds: Set<String>, val techTopics: Set<String>)
 
     fun validate(cards: List<IdeaCard>, citations: CitationValidator,
+                 recent: List<RecentCard> = emptyList(), seeds: List<ExpansionSeed> = emptyList(),
+                 requiresExpansionFields: Boolean = true, onRepeatWarning: ((IdeaCard) -> Unit)? = null,
                  onRejected: (IdeaCard, CardRejection) -> Unit = { _, _ -> },
                  onCitationsTrimmed: (IdeaCard, String) -> Unit = { _, _ -> }): List<IdeaCard> {
         val counts = mutableMapOf<String, Int>()
         val acceptedEvidence = mutableListOf<Evidence>()
-        return cards.mapNotNull { card ->
+        val seedsById = seeds.associateBy { it.id }
+        var expansions = 0
+        return cards.map { card ->
+            if (requiresExpansionFields && card.kind == "expanded" && !card.seedId.isNullOrBlank()) card
+            else card.copy(kind = "daily", lens = null, seedId = null, speculation = emptyList())
+        }.sortedBy { it.kind == "expanded" }.mapNotNull { card ->
             fun reject(reason: CardRejectionReason, detail: String): Nothing? {
                 onRejected(card, CardRejection(reason, detail))
                 return null
@@ -278,26 +320,59 @@ class CardValidator(private val config: PipelineConfig, private val categories: 
                 "title" to card.title, "oneLiner" to card.oneLiner, "whyToday" to card.whyToday,
                 "problem" to card.problem, "effort" to card.effort, "differentiation" to card.differentiation,
                 "biggestRisk" to card.biggestRisk, "validationPlan" to card.validationPlan
-            ).filter { (_, value) -> value.isBlank() }.map { (field, _) -> field }
+            ).plus(if (requiresExpansionFields) listOf(
+                "targetCustomer" to card.targetCustomer, "coreTech" to card.coreTech, "pain" to card.pain
+            ) else emptyList()).filter { (_, value) -> value.isBlank() }.map { (field, _) -> field }
             if (missing.isNotEmpty()) {
                 return@mapNotNull reject(CardRejectionReason.MISSING_FIELD, "필수 항목 비어 있음: ${missing.joinToString()}")
             }
-            val citationCheck = citations.check(card)
-            val validated = citationCheck.card
+            val expanded = card.kind == "expanded"
+            val seed = if (expanded) seedsById[card.seedId] else null
+            if (expanded && (seed == null || seed.lens != card.lens || !config.expansion.enabled ||
+                    config.expansion.lenses[seed.lens] != true || card.speculation.isEmpty() || card.speculation.any(String::isBlank))) {
+                return@mapNotNull reject(CardRejectionReason.MISSING_FIELD, "확장 카드의 씨앗·렌즈 또는 AI 제안 확인 필요")
+            }
+            if (seed != null) {
+                val customer = cardKey(card.targetCustomer)
+                val seedCustomer = cardKey(seed.targetCustomer)
+                if (customer.isEmpty() || seedCustomer.isEmpty() || (customer !in seedCustomer && seedCustomer !in customer)) {
+                    return@mapNotNull reject(CardRejectionReason.SEED_MISMATCH, "확장 씨앗과 대상 고객 불일치")
+                }
+            }
+            if (seed != null && (card.techSignals + card.demandSignals + card.competitors).any { !citations.belongsTo(it, seed.itemIds) }) {
+                return@mapNotNull reject(CardRejectionReason.CITATION, "확장 씨앗에 없는 근거 링크")
+            }
+            val citationCheck = citations.check(card, requireDemand = !expanded)
+            val citedCard = citationCheck.card
                 ?: return@mapNotNull reject(CardRejectionReason.CITATION, checkNotNull(citationCheck.detail))
+            val validated = if (expanded) citedCard.copy(supplementRefs = emptyList()) else citedCard
             val evidence = Evidence(
-                title = card.title,
+                card = validated,
                 itemIds = citations.citedSignals(validated).map { it.item.key }.toSet(),
                 demandIds = citations.citedSignals(validated.demandSignals).map { it.item.key }.toSet(),
                 techTopics = citations.citedSignals(validated.techSignals).map { it.classification.topicKey }.toSet()
             )
+            if (seed != null && validated.techSignals.none { citations.belongsTo(it, seed.itemIds.take(1)) }) {
+                return@mapNotNull reject(CardRejectionReason.CITATION, "확장 씨앗의 기술 근거 링크 없음")
+            }
+            val repeat = recent.firstOrNull { isRepeatedCard(validated, evidence.techTopics, it) }
+            if (repeat != null && onRepeatWarning == null) {
+                return@mapNotNull reject(CardRejectionReason.REPEAT,
+                    "최근 카드와 같음: ${repeat.card.title} (${repeat.card.runDate})")
+            }
+            if (expanded && expansions >= config.expansion.cardsPerDay) {
+                return@mapNotNull reject(CardRejectionReason.EXPANSION_CAP,
+                    "확장 카드 수 상한 초과 (최대 ${config.expansion.cardsPerDay})")
+            }
             val duplicate = acceptedEvidence.firstOrNull { prior ->
                 evidence.itemIds == prior.itemIds ||
                     (evidence.demandIds.isNotEmpty() && evidence.demandIds == prior.demandIds &&
-                        evidence.techTopics.any { it in prior.techTopics })
+                        evidence.techTopics.any { it in prior.techTopics }) ||
+                    (expanded && prior.card.kind == "daily" &&
+                        isRepeatedCard(validated, evidence.techTopics, RecentCard(prior.card, prior.techTopics)))
             }
             if (duplicate != null) {
-                return@mapNotNull reject(CardRejectionReason.DUPLICATE, "중복 카드: ${duplicate.title}")
+                return@mapNotNull reject(CardRejectionReason.DUPLICATE, "중복 카드: ${duplicate.card.title}")
             }
             val count = counts.getOrDefault(card.category, 0)
             if (count >= config.maxCardsPerCategory) {
@@ -310,7 +385,19 @@ class CardValidator(private val config: PipelineConfig, private val categories: 
             counts[card.category] = count + 1
             acceptedEvidence += evidence
             citationCheck.detail?.let { onCitationsTrimmed(card, it) }
-            validated
+            if (expanded) expansions++
+            val caveats = buildList {
+                addAll(validated.caveats)
+                if (repeat != null && onRepeatWarning != null) {
+                    onRepeatWarning(card)
+                    add("$RECENT_CARD_WARNING${repeat.card.title} (${repeat.card.runDate})")
+                }
+                if (expanded && validated.demandSignals.isEmpty() && validated.competitors.isEmpty()) {
+                    remove("직접 수요 신호 없음 — AI 추정")
+                    add("사람들의 요청·불편 자료 없음 — AI 추정")
+                }
+            }.distinct()
+            validated.copy(caveats = caveats)
         }
     }
 }

@@ -19,6 +19,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import collector.data.ScheduleSettings
 import collector.data.files
 import collector.dev.outputJson
+import collector.dev.readJson
 import collector.model.Feedback
 import collector.model.RunReport
 import collector.model.TrackedIdea
@@ -228,8 +229,17 @@ object Backup {
         check(!recoveryPending(paths))
         recover(paths)
         val old = current(paths)
-        val writes = importFiles(paths, backup, old.keys)
-        val deletes = old.keys.filter { recordDate(it) == null && !it.startsWith("out/requested/") } - writes.keys
+        val seedPath = "out/expansion-seeds.json"
+        val writes = importFiles(paths, backup, old.keys).toMutableMap()
+        writes[seedPath]?.let { content ->
+            val incoming = json.decodeFromString<List<collector.stage.UsedExpansionSeed>>(content)
+            val previous = old[seedPath]?.let { readJson<List<collector.stage.UsedExpansionSeed>>(it) }.orEmpty()
+                .filter { it.parsedDate != null }
+            writes[seedPath] = json.encodeToString((previous + incoming).distinct())
+        }
+        val deletes = old.keys.filter {
+            recordDate(it) == null && !it.startsWith("out/requested/") && it != seedPath
+        } - writes.keys
         val targets = writes.keys + deletes
         val parent = transactionRoot(paths).apply { mkdirs() }
         val temporary = Files.createTempDirectory(parent.toPath(), ".backup-").toFile()
@@ -400,7 +410,7 @@ object Backup {
         val name = path.substringAfter('/')
         return when (path.substringBefore('/')) {
             "out" -> daily.matches(name) || requested.matches(name) || (run.matches(name) && !legacyProtected(path)) ||
-                name in setOf("tracked.json", "feedback.json", "settings/schedule.json")
+                name in setOf("tracked.json", "feedback.json", "settings/schedule.json", "expansion-seeds.json")
             "config" -> name in setOf("pipeline.local.json", "sources.local.json", "analysis.local.json") ||
                 PromptCatalog.entries.keys.any { name == "prompts/$it.md" || name == "prompts/$it.versions.json" }
             else -> false
@@ -427,6 +437,12 @@ object Backup {
         return when {
             name == "tracked.json" -> typed<List<TrackedIdea>>(content)
             name == "feedback.json" -> typed<List<Feedback>>(content)
+            name == "expansion-seeds.json" -> {
+                val seeds = (if (exporting) json else Json).decodeFromString<List<collector.stage.UsedExpansionSeed>>(content)
+                val validSeeds = seeds.filter { it.parsedDate != null }
+                require(exporting || validSeeds.size == seeds.size) { "확장 씨앗 기록 날짜가 잘못되었습니다." }
+                json.encodeToJsonElement(validSeeds)
+            }
             name == "settings/schedule.json" -> typed<ScheduleSettings>(content)
             name == "pipeline.local.json" -> {
                 val config = PipelineConfig.parse(content, if (exporting) json else Json)
