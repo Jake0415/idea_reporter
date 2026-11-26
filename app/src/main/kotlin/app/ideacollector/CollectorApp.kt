@@ -77,6 +77,9 @@ class CollectorApp : Application() {
     internal suspend fun backupPrivateValues(): List<String> =
         secrets.getAll(mailKeys + aiKeys.map { it.first } + sourceKeys + settings().tokenName).values.filterNotNull()
 
+    internal suspend fun redditKeysStored() =
+        secrets.getAll(listOf("REDDIT_CLIENT_ID", "REDDIT_CLIENT_SECRET")).values.all { !it.isNullOrBlank() }
+
     internal suspend fun hasMailCredentials() = secrets.getAll(mailKeys).values.all { it != null }
 
     internal var mailEnabled: Boolean

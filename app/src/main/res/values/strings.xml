@@ -377,6 +377,11 @@
     <string name="r3_key_delete">삭제</string>
     <string name="r3_key_missing">없음</string>
     <string name="r3_key_saved">저장됨</string>
+    <string name="reddit_keys">Reddit 키</string>
+    <string name="reddit_keys_help">Reddit API 승인 후 받은 client ID와 secret을 넣습니다. 둘 다 있어야 수집합니다. 넣은 뒤 출처 관리 > 레딧에서 켜고 연결 테스트를 누르세요.</string>
+    <string name="reddit_client_id">client ID</string>
+    <string name="reddit_client_secret">secret</string>
+    <string name="reddit_keys_needed">Reddit 키가 없어 수집할 수 없습니다. 설정 > AI 키 아래 Reddit 키에서 넣으세요.</string>
     <string name="r3_key_failed">확인 실패</string>
     <string name="r3_models">모델</string>
     <string name="r3_classify_model">분류 모델</string>

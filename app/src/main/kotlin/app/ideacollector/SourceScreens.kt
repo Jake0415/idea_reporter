@@ -100,6 +100,11 @@ internal fun SourceSettings(app: CollectorApp, data: ScreenState, id: String, op
             Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 RunOption(R.string.r3_source_enabled, enabled) { enabled = it }
+                if (id == "reddit") {
+                    var redditKeys by remember { mutableStateOf(true) }
+                    LaunchedEffect(app) { redditKeys = app.redditKeysStored() }
+                    if (!redditKeys) Notice(stringResource(R.string.reddit_keys_needed), true)
+                }
                 if (queryKey != null) Field(query, { query = it }, R.string.r3_source_query)
                 if (scoreKey != null) Field(score, { score = it }, R.string.r3_source_min, true)
                 if ("maxItems" in json) Field(max, { max = it }, R.string.r3_source_max, true)

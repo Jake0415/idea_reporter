@@ -235,6 +235,7 @@ internal fun PhoneOperations(app: CollectorApp, settings: AppSettings, data: Scr
         var models by remember { mutableStateOf<Map<String, List<String>>>(emptyMap()) }
         AiKeys(app, {}, onModels = { key, available -> models = models + (key to available) })
         GitHubKey(app, false, operation)
+        RedditKeys(app, operation)
         ModelSettings(app, data, queued, models, operation, onSaved)
     }
     LaunchedEffect(section) {

@@ -291,6 +291,39 @@ internal fun GitHubKey(app: CollectorApp, onboarding: Boolean, operation: (suspe
     } }
 }
 
+/** Reddit 공식 API 키(client ID·secret). 둘 다 있어야 수집한다 — Keystore 저장, 백업 제외(CollectorApp.sourceKeys). */
+@Composable
+internal fun RedditKeys(app: CollectorApp, operation: (suspend () -> Unit) -> Unit) {
+    var editing by rememberSaveable { mutableStateOf(false) }
+    var stored by remember { mutableStateOf(false) }
+    var clientId by remember { mutableStateOf("") }
+    var secret by remember { mutableStateOf("") }
+    LaunchedEffect(app) { stored = app.redditKeysStored() }
+    Text(stringResource(R.string.reddit_keys), style = MaterialTheme.typography.titleMedium)
+    Small(if (stored) R.string.r3_key_saved else R.string.r3_key_missing)
+    Small(R.string.reddit_keys_help)
+    if (editing) {
+        SecureTokenInput()
+        Field(clientId, { clientId = it }, R.string.reddit_client_id, singleLine = true, secret = true)
+        Field(secret, { secret = it }, R.string.reddit_client_secret, singleLine = true, secret = true)
+        Primary(R.string.save, clientId.isNotBlank() && secret.isNotBlank()) { operation {
+            app.requireBackupReady()
+            check(app.secrets.set("REDDIT_CLIENT_ID", clientId.trim()))
+            check(app.secrets.set("REDDIT_CLIENT_SECRET", secret.trim()))
+            clientId = ""
+            secret = ""
+            stored = true
+            editing = false
+        } }
+    } else Secondary(R.string.r3_key_replace, alignStart = true) { editing = true }
+    if (stored) Secondary(R.string.r3_key_delete) { operation {
+        app.requireBackupReady()
+        app.secrets.clear("REDDIT_CLIENT_ID")
+        app.secrets.clear("REDDIT_CLIENT_SECRET")
+        stored = false
+    } }
+}
+
 @Composable
 internal fun MailSettings(app: CollectorApp, operation: (suspend () -> Unit) -> Unit,
     onboarding: Boolean = false, next: (((() -> Unit)?) -> Unit)? = null,
